@@ -10,50 +10,61 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
-    env:
-      APP_VERSION: ${{ steps.semver.outputs.version }}
-      
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 需要完整的提交历史来生成版本号
-      
+          fetch-depth: 0  # 获取完整Git历史以生成版本号
+
       - name: Setup GitVersion
         uses: gittools/actions/gitversion/setup@v0.9.13
         with:
-          versionSpec: '5.x'
-      
+          versionSpec: '5.x'  # 使用GitVersion 5.x版本
+
       - name: Determine Version
-        id: semver
+        id: gitversion  # 步骤ID设为gitversion，用于后续引用
         uses: gittools/actions/gitversion/execute@v0.9.13
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      
+          python-version: '3.12'  # 使用Python 3.12
+
       - name: Install Flet and dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flet pyinstaller
-      
+          pip install flet pyinstaller  # 安装Flet和依赖
+
       - name: Package application with auto version
         run: |
           python -m flet pack src/main.py `
-            --icon src/assets/icon.png `
-            --name SillyTavernLauncher `
-            --product-name "酒馆启动器" `
-            --file-description "SillyTavernLauncher酒馆启动器" `
-            --product-version "${{ env.APP_VERSION }}" `
-            --file-version "${{ env.APP_VERSION }}.0" `
-            --company-name "LingyeSoul" `
-            --copyright "Copyright (c) 2025 LingyeSoul" `
-            --yes
-        shell: powershell
-      
+            --icon src/assets/icon.png `  # 图标路径
+            --name SillyTavernLauncher `  # 可执行文件名
+            --product-name "酒馆启动器" `  # 产品名称（中文）
+            --file-description "SillyTavernLauncher酒馆启动器" `  # 文件描述
+            --product-version "${{ steps.gitversion.outputs.SemVer }}" `  # 自动版本号（如1.2.3）
+            --file-version "${{ steps.gitversion.outputs.Major }}.${{ steps.gitversion.outputs.Minor }}.${{ steps.gitversion.outputs.Patch }}.0" `  # Windows要求的四部分版本号
+            --company-name "LingyeSoul" `  # 公司名称
+            --copyright "Copyright (c) 2025 LingyeSoul" `  # 版权信息
+            --yes  # 非交互模式
+        shell: powershell  # 使用PowerShell作为Shell（Windows环境）
+
+      - name: Create Release (if on tag)
+        if: startsWith(github.ref, 'refs/tags/')  # 仅当推送Tag时创建Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*  # 上传dist目录下的所有文件
+          tag_name: v${{ steps.gitversion.outputs.SemVer }}  # Tag名称带v前缀
+          name: Release v${{ steps.gitversion.outputs.SemVer }}  # Release名称
+          body: |  # Release说明
+            酒馆启动器 v${{ steps.gitversion.outputs.SemVer }} 发布！
+            自动生成的版本，包含最新功能和修复。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 自动获取GitHub Token
+
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SillyTavernLauncher-windows-v${{ env.APP_VERSION }}
-          path: dist/
+          name: SillyTavernLauncher-windows-v${{ steps.gitversion.outputs.SemVer }}  # 带版本号的制品名称
+          path: dist/  # 打包结果目录
