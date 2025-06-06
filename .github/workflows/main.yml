@@ -61,7 +61,7 @@ jobs:
       - name: Package application with auto version
         run: |
           flet pack src/main.py `
-            --icon src/assets/icon.png `
+            --icon src/assets/icon.ico `
             --name SillyTavernLauncher `
             --product-name "酒馆启动器" `
             --file-description "SillyTavernLauncher酒馆启动器" `
