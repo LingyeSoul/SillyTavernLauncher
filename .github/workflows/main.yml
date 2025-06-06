@@ -69,6 +69,7 @@ jobs:
             --file-version "${{ env.MAJOR }}.${{ env.MINOR }}.${{ env.PATCH }}.0" `
             --company-name "LingyeSoul" `
             --copyright "Copyright (c) 2025 LingyeSoul" `
+            --onedir
             --yes
         shell: powershell
       
