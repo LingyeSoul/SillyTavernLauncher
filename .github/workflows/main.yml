@@ -1,0 +1,59 @@
+name: Build Windows Flet App
+
+on:
+  push:
+    branches:
+      - main
+  release:
+    types: [created]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    env:
+      APP_VERSION: ${{ steps.semver.outputs.version }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 需要完整的提交历史来生成版本号
+      
+      - name: Setup GitVersion
+        uses: gittools/actions/gitversion/setup@v0.9.13
+        with:
+          versionSpec: '5.x'
+      
+      - name: Determine Version
+        id: semver
+        uses: gittools/actions/gitversion/execute@v0.9.13
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Install Flet and dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flet pyinstaller
+      
+      - name: Package application with auto version
+        run: |
+          python -m flet pack src/main.py `
+            --icon src/assets/icon.png `
+            --name SillyTavernLauncher `
+            --product-name "酒馆启动器" `
+            --file-description "SillyTavernLauncher酒馆启动器" `
+            --product-version "${{ env.APP_VERSION }}" `
+            --file-version "${{ env.APP_VERSION }}.0" `
+            --company-name "LingyeSoul" `
+            --copyright "Copyright (c) 2025 LingyeSoul" `
+            --yes
+        shell: powershell
+      
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SillyTavernLauncher-windows-v${{ env.APP_VERSION }}
+          path: dist/
