@@ -10,12 +10,26 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      GITHUB_RUNNER_MIN_VERSION: 2.297.0
+      ACTIONS_CORE_MIN_VERSION: 1.10.0
     
     steps:
+      - name: Check runner version
+        if: runner.self_hosted
+        shell: bash
+        run: |
+          RUNNER_VERSION=$(cat /home/runner/.version)
+          if [[ "$(printf '%s\n' "$GITHUB_RUNNER_MIN_VERSION" "$RUNNER_VERSION" | sort -V | head -n1)" != "$GITHUB_RUNNER_MIN_VERSION" ]]; then
+            echo "自托管运行器版本过低，需要 $GITHUB_RUNNER_MIN_VERSION 或更高"
+            exit 1
+          fi
+          echo "自托管运行器版本检查通过: $RUNNER_VERSION"
+      
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # 获取完整的Git历史以确定版本号
+          fetch-depth: 0
       
       - name: Setup GitVersion
         uses: gittools/actions/gitversion/setup@v0.9.13
@@ -26,8 +40,7 @@ jobs:
         id: gitversion
         uses: gittools/actions/gitversion/execute@v0.9.13
       
-    
-      - name: Extract version info
+      - name: Extract version info (using environment files)
         id: extract_version
         shell: bash
         run: |
@@ -48,7 +61,7 @@ jobs:
       
       - name: Package application with auto version
         run: |
-          python -m flet pack src/main.py `
+          flet pack src/main.py `
             --icon src/assets/icon.png `
             --name SillyTavernLauncher `
             --product-name "酒馆启动器" `
