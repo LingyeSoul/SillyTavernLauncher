@@ -40,8 +40,7 @@ jobs:
         id: gitversion
         uses: gittools/actions/gitversion/execute@v0.9.13
       
-      - name: Extract version info (using environment files)
-        id: extract_version
+      - name: Capture version outputs
         shell: bash
         run: |
           echo "SEMVER=${{ steps.gitversion.outputs.SemVer }}" >> $GITHUB_ENV
@@ -61,8 +60,8 @@ jobs:
       
       - name: Package application with auto version
         run: |
-          flet pack src/main.py `
-            --icon src/assets/icon.ico `
+          python -m flet pack src/main.py `
+            --icon src/assets/icon.png `
             --name SillyTavernLauncher `
             --product-name "酒馆启动器" `
             --file-description "SillyTavernLauncher酒馆启动器" `
