@@ -79,11 +79,20 @@ jobs:
           }
         shell: powershell
       
+      - name: Zip the application
+        id: zip_app
+        run: |
+          $zipPath = "SillyTavernLauncher-windows-v${{ env.SEMVER }}.zip"
+          Compress-Archive -Path dist\* -DestinationPath $zipPath -Force
+          echo "ZIP_FILE=$zipPath" >> $env:GITHUB_ENV
+          echo "ZIP_PATH=$PWD" >> $env:GITHUB_ENV
+        shell: powershell
+      
       - name: Create Release (if on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/**/*
+          files: ${{ env.ZIP_PATH }}\SillyTavernLauncher-windows-v${{ env.SEMVER }}.zip
           tag_name: v${{ env.SEMVER }}
           name: Release v${{ env.SEMVER }}
           body: |
@@ -96,4 +105,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: SillyTavernLauncher-windows-v${{ env.SEMVER }}
-          path: dist/
+          path: ${{ env.ZIP_PATH }}\SillyTavernLauncher-windows-v${{ env.SEMVER }}.zip
