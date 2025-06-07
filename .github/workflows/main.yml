@@ -21,16 +21,16 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
+
       - name: Setup GitVersion
         uses: gittools/actions/gitversion/setup@v0.9.13
         with:
           versionSpec: '5.x'
-      
+
       - name: Determine Version
         id: gitversion
         uses: gittools/actions/gitversion/execute@v0.9.13
-      
+
       - name: Capture version outputs
         shell: bash
         run: |
@@ -38,17 +38,17 @@ jobs:
           echo "MAJOR=${{ steps.gitversion.outputs.Major }}" >> $GITHUB_ENV
           echo "MINOR=${{ steps.gitversion.outputs.Minor }}" >> $GITHUB_ENV
           echo "PATCH=${{ steps.gitversion.outputs.Patch }}" >> $GITHUB_ENV
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      
+
       - name: Install Flet and dependencies
         run: |
           python -m pip install --upgrade pip
           pip install flet pyinstaller
-      
+
       - name: Package application with auto version
         run: |
           flet pack src/main.py `
@@ -64,45 +64,36 @@ jobs:
             --distpath dist `
             --yes
         shell: powershell
-      
+
       - name: Check dist directory contents
         run: |
-          echo "检查dist目录内容:"
-          Get-ChildItem -Path dist -Recurse | Select-Object FullName
-          
           $files = Get-ChildItem -Path dist -Recurse
-          if ($files.Count -eq 0) {
-            echo "错误: dist目录为空，打包可能失败!"
-            exit /b 1
-          } else {
-            echo "dist目录包含 $($files.Count) 个文件/目录"
-          }
+          if ($files.Count -eq 0) { exit /b 1 }
         shell: powershell
-      
-      - name: Zip the application
-        id: zip_app
+
+      - name: Compress dist to ZIP
         run: |
-          $zipPath = "SillyTavernLauncher-windows-v${{ env.SEMVER }}.zip"
-          Compress-Archive -Path dist\* -DestinationPath $zipPath -Force
-          echo "ZIP_FILE=$zipPath" >> $env:GITHUB_ENV
-          echo "ZIP_PATH=$PWD" >> $env:GITHUB_ENV
+          $version = $env:SEMVER
+          $zipName = "SillyTavernLauncher-win-v$version.zip"
+          Compress-Archive -Path dist\* -DestinationPath $zipName -Force
+          echo "ZIP_PATH=$zipName" >> $GITHUB_ENV
         shell: powershell
-      
+
       - name: Create Release (if on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ env.ZIP_PATH }}\SillyTavernLauncher-windows-v${{ env.SEMVER }}.zip
+          files: ${{ env.ZIP_PATH }}  # 直接上传ZIP文件
           tag_name: v${{ env.SEMVER }}
           name: Release v${{ env.SEMVER }}
           body: |
             酒馆启动器 v${{ env.SEMVER }} 发布!
-            自动生成的版本说明。
+            包含Windows可执行文件及依赖项。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: SillyTavernLauncher-windows-v${{ env.SEMVER }}
-          path: ${{ env.ZIP_PATH }}\SillyTavernLauncher-windows-v${{ env.SEMVER }}.zip
+          path: ${{ env.ZIP_PATH }}
