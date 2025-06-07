@@ -82,7 +82,7 @@ jobs:
             --yes
         shell: pwsh
 
-      - name: 🗂️ 压缩 dist 到 ZIP
+      - name: 🗂️ 压缩 dist 到 Zip
         id: compress_dist
         run: |
           $zipName = "$env:APP_NAME-win-v${{ env.SEMVER }}.zip"
