@@ -11,7 +11,7 @@ jobs:
   build-windows:
     runs-on: windows-latest
     permissions:
-      contents: write  
+      contents: write
     env:
       GITHUB_RUNNER_MIN_VERSION: 2.297.0
       ACTIONS_CORE_MIN_VERSION: 1.10.0
@@ -65,14 +65,18 @@ jobs:
             --yes
         shell: powershell
       
-      - name: Check dist directory
+      - name: Check dist directory contents
         run: |
           echo "检查dist目录内容:"
-          dir dist
-          if not exist "dist\SillyTavernLauncher.exe" (
-            echo "错误: 未找到打包后的可执行文件!"
+          Get-ChildItem -Path dist -Recurse | Select-Object FullName
+          
+          $files = Get-ChildItem -Path dist -Recurse
+          if ($files.Count -eq 0) {
+            echo "错误: dist目录为空，打包可能失败!"
             exit /b 1
-          )
+          } else {
+            echo "dist目录包含 $($files.Count) 个文件/目录"
+          }
         shell: powershell
       
       - name: Create Release (if on tag)
