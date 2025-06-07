@@ -21,16 +21,16 @@ jobs:
       COPYRIGHT: "Copyright (c) 2025 LingyeSoul"
 
     steps:
+      - name: 🔁 拉取代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: 🧹 清理工作区
         run: |
           if (Test-Path $env:DIST_PATH) { Remove-Item -Recurse -Force $env:DIST_PATH }
           if (Test-Path *.zip) { Remove-Item -Force *.zip }
         shell: pwsh
-
-      - name: 🔁 拉取代码
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: ⏳ 缓存 GitVersion
         uses: actions/cache@v4
@@ -82,18 +82,17 @@ jobs:
             --yes
         shell: pwsh
 
-      - name: 🗂️ 压缩 dist 到 Zip
+      - name: 🗂️ 压缩 dist 到 ZIP
         id: compress_dist
         run: |
           $zipName = "$env:APP_NAME-win-v${{ env.SEMVER }}.zip"
-          $zipPath = Join-Path $env:GITHUB_WORKSPACE $zipName
-          Compress-Archive -Path "$env:DIST_PATH\*" -DestinationPath $zipPath -Force
-          echo "zip_full_path=$zipPath" >> $env:GITHUB_OUTPUT
+          Compress-Archive -Path "$env:DIST_PATH\*" -DestinationPath $zipName -Force
+          echo "zip_name=$zipName" >> $env:GITHUB_OUTPUT
         shell: pwsh
 
       - name: ✅ 验证 ZIP
         run: |
-          $path = "${{ steps.compress_dist.outputs.zip_full_path }}"
+          $path = "${{ steps.compress_dist.outputs.zip_name }}"
           if (-Not (Test-Path $path)) {
               throw "❌ ZIP 文件未生成: $path"
           }
@@ -109,7 +108,7 @@ jobs:
         id: changelog
         run: |
           $log = git log --pretty=format:"* [%h] %s (%an)" -n 5
-          $log = $log -replace "`r`n", "\n"
+          $log = ($log -split "`r`n") -join "`n"
           echo "log=$log" >> $env:GITHUB_OUTPUT
         shell: pwsh
 
@@ -117,7 +116,7 @@ jobs:
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ steps.compress_dist.outputs.zip_full_path }}
+          files: ${{ steps.compress_dist.outputs.zip_name }}
           tag_name: v${{ env.SEMVER }}
           name: Release v${{ env.SEMVER }}
           body: |
@@ -138,5 +137,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APP_NAME }}-windows-v${{ env.SEMVER }}
-          path: ${{ steps.compress_dist.outputs.zip_full_path }}
+          path: ${{ steps.compress_dist.outputs.zip_name }}
           if-no-files-found: error
