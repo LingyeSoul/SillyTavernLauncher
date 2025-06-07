@@ -21,19 +21,10 @@ jobs:
       COPYRIGHT: "Copyright (c) 2025 LingyeSoul"
 
     steps:
-      - name: 🧹 开始清理 & 准备工作区
+      - name: 🧹 清理工作区
         run: |
-          Write-Host "🚀 开始构建流程..."
-
-          if (Test-Path $env:DIST_PATH) {
-              Write-Host "🗑️ 清理旧的 dist 目录..."
-              Remove-Item -Recurse -Force $env:DIST_PATH
-          }
-
-          if (Test-Path *.zip) {
-              Write-Host "🗑️ 清理旧的 ZIP 文件..."
-              Remove-Item -Force *.zip
-          }
+          if (Test-Path $env:DIST_PATH) { Remove-Item -Recurse -Force $env:DIST_PATH }
+          if (Test-Path *.zip) { Remove-Item -Force *.zip }
         shell: pwsh
 
       - name: 🔁 拉取代码
@@ -41,7 +32,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: ⏳ 缓存 GitVersion 工具
+      - name: ⏳ 缓存 GitVersion
         uses: actions/cache@v4
         with:
           path: C:\GitVersion
@@ -57,45 +48,35 @@ jobs:
         id: gitversion
         uses: gittools/actions/gitversion/execute@v0.9.13
 
-      - name: 🧾 提取版本信息到环境变量
-        shell: bash
+      - name: 🧾 提取版本信息
         run: |
           echo "SEMVER=${{ steps.gitversion.outputs.SemVer }}" >> $GITHUB_ENV
           echo "MAJOR=${{ steps.gitversion.outputs.Major }}" >> $GITHUB_ENV
           echo "MINOR=${{ steps.gitversion.outputs.Minor }}" >> $GITHUB_ENV
           echo "PATCH=${{ steps.gitversion.outputs.Patch }}" >> $GITHUB_ENV
+        shell: bash
 
-      - name: 🚀 缓存 Python pip 包
-        uses: actions/cache@v4
-        with:
-          path: ~\AppData\Local\pip\Cache
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: 🐍 设置 Python 环境
+      - name: 🐍 设置 Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: 📦 安装 Flet 和 PyInstaller
+      - name: 📦 安装依赖
         run: |
           python -m pip install --upgrade pip
           pip install flet pyinstaller
 
-      - name: 🧱 打包应用程序
+      - name: 🧱 打包应用
         run: |
-          Write-Host "📦 正在使用 flet pack 打包应用程序..."
-
           flet pack src/main.py `
             --icon "$env:ICON_PATH" `
             --name "$env:APP_NAME" `
             --product-name "$env:PRODUCT_NAME" `
-            --file-description "$env:APP_NAME$env:PRODUCT_NAME" `
+            --file-description "$env:APP_NAME $env:PRODUCT_NAME" `
             --product-version "${{ env.SEMVER }}" `
             --file-version "${{ env.MAJOR }}.${{ env.MINOR }}.${{ env.PATCH }}.0" `
             --company-name "$env:COMPANY_NAME" `
-            --copyright "$env:Copyright" `
+            --copyright "$env:COPYRIGHT" `
             --onedir `
             --distpath "$env:DIST_PATH" `
             --yes
@@ -104,47 +85,52 @@ jobs:
       - name: 🗂️ 压缩 dist 到 ZIP
         id: compress_dist
         run: |
-          $version = "${{ env.SEMVER }}"
-          $zipName = "$env:APP_NAME-win-v$version.zip"
-          $zipPath = Join-Path -Path $env:GITHUB_WORKSPACE -ChildPath $zipName
-          
-          Write-Host "📁 创建 ZIP 文件: $zipName (完整路径: $zipPath)"
-          Compress-Archive -Path "$env:DIST_PATH\*" -DestinationPath "$zipPath" -Force
-          
-          # 强制使用相对路径（仅文件名）
-          $relativeZipPath = Split-Path -Path $zipPath -Leaf
-          Write-Output "ZIP_PATH=$relativeZipPath" | Out-File -FilePath $env:GITHUB_ENV -Append
-          
-          # 输出环境变量供调试
-          Write-Host "ℹ️ 环境变量 GITHUB_WORKSPACE: $env:GITHUB_WORKSPACE"
-          Write-Host "ℹ️ 相对路径 ZIP_PATH: $relativeZipPath"
-          Write-Host "ℹ️ 当前目录文件列表:"
-          Get-ChildItem | Format-Table
+          $zipName = "$env:APP_NAME-win-v${{ env.SEMVER }}.zip"
+          $zipPath = Join-Path $env:GITHUB_WORKSPACE $zipName
+          Compress-Archive -Path "$env:DIST_PATH\*" -DestinationPath $zipPath -Force
+          echo "zip_full_path=$zipPath" >> $env:GITHUB_OUTPUT
         shell: pwsh
 
-      - name: 🧾 验证 ZIP 是否生成成功
+      - name: ✅ 验证 ZIP
         run: |
-          $zipPath = "${{ env.ZIP_PATH }}"
-          $absolutePath = Join-Path -Path $env:GITHUB_WORKSPACE -ChildPath $zipPath
-          
-          Write-Host "ℹ️ 验证相对路径: $zipPath"
-          Write-Host "ℹ️ 对应的绝对路径: $absolutePath"
-          
-          if (-Not (Test-Path $absolutePath)) {
-              throw "❌ 错误：ZIP 文件未生成，请检查打包步骤"
-          } else {
-              Write-Host "✅ ZIP 文件已成功生成: $absolutePath"
-              Write-Host "ℹ️ 文件大小: $(Get-Item $absolutePath | Select-Object -ExpandProperty Length) 字节"
+          $path = "${{ steps.compress_dist.outputs.zip_full_path }}"
+          if (-Not (Test-Path $path)) {
+              throw "❌ ZIP 文件未生成: $path"
           }
+          Write-Host "✅ ZIP 文件存在: $path"
         shell: pwsh
 
-      - name: Create Release (if on tag)
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: ⏱️ 获取当前时间
+        id: timestamp
+        run: echo "now=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: 📜 生成更新日志
+        id: changelog
+        run: |
+          $log = git log --pretty=format:"* [%h] %s (%an)" -n 5
+          $log = $log -replace "`r`n", "\n"
+          echo "log=$log" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: 🚀 创建 Release 并上传 ZIP
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ env.ZIP_PATH }}  # 使用相对路径
+          files: ${{ steps.compress_dist.outputs.zip_full_path }}
           tag_name: v${{ env.SEMVER }}
           name: Release v${{ env.SEMVER }}
+          body: |
+            🚀 ${{ env.PRODUCT_NAME }} v${{ env.SEMVER }} 发布！
+
+            ## 🛠️ 更新内容
+
+            ${{ steps.changelog.outputs.log }}
+
+            ## 📦 构建信息
+
+            - 打包时间：${{ steps.timestamp.outputs.now }}
+            - 版本号：v${{ env.SEMVER }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -152,5 +138,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APP_NAME }}-windows-v${{ env.SEMVER }}
-          path: ${{ env.ZIP_PATH }}
+          path: ${{ steps.compress_dist.outputs.zip_full_path }}
           if-no-files-found: error
