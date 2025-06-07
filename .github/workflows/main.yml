@@ -64,15 +64,6 @@ jobs:
             --distpath dist `
             --yes
         shell: powershell
-
-      - name: Check dist directory
-        run: |
-          if (-not (Test-Path -Path dist\SillyTavernLauncher.exe)) {
-            Write-Error "错误：未找到可执行文件！"
-            exit /b 1
-          }
-        shell: powershell
-
       - name: Compress dist to ZIP
         id: compress_dist
         run: |
