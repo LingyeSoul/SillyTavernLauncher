@@ -108,20 +108,33 @@ jobs:
           $zipName = "$env:APP_NAME-win-v$version.zip"
           $zipPath = Join-Path -Path $env:GITHUB_WORKSPACE -ChildPath $zipName
           
-          Write-Host "📁 创建 ZIP 文件: $zipName"
+          Write-Host "📁 创建 ZIP 文件: $zipName (完整路径: $zipPath)"
           Compress-Archive -Path "$env:DIST_PATH\*" -DestinationPath "$zipPath" -Force
           
-          # 转换为相对路径
+          # 强制使用相对路径（仅文件名）
           $relativeZipPath = Split-Path -Path $zipPath -Leaf
           Write-Output "ZIP_PATH=$relativeZipPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          
+          # 输出环境变量供调试
+          Write-Host "ℹ️ 环境变量 GITHUB_WORKSPACE: $env:GITHUB_WORKSPACE"
+          Write-Host "ℹ️ 相对路径 ZIP_PATH: $relativeZipPath"
+          Write-Host "ℹ️ 当前目录文件列表:"
+          Get-ChildItem | Format-Table
         shell: pwsh
 
       - name: 🧾 验证 ZIP 是否生成成功
         run: |
-          if (-Not (Test-Path ${{ env.ZIP_PATH }})) {
+          $zipPath = "${{ env.ZIP_PATH }}"
+          $absolutePath = Join-Path -Path $env:GITHUB_WORKSPACE -ChildPath $zipPath
+          
+          Write-Host "ℹ️ 验证相对路径: $zipPath"
+          Write-Host "ℹ️ 对应的绝对路径: $absolutePath"
+          
+          if (-Not (Test-Path $absolutePath)) {
               throw "❌ 错误：ZIP 文件未生成，请检查打包步骤"
           } else {
-              Write-Host "✅ ZIP 文件已成功生成: ${{ env.ZIP_PATH }}"
+              Write-Host "✅ ZIP 文件已成功生成: $absolutePath"
+              Write-Host "ℹ️ 文件大小: $(Get-Item $absolutePath | Select-Object -ExpandProperty Length) 字节"
           }
         shell: pwsh
 
@@ -132,7 +145,6 @@ jobs:
           files: ${{ env.ZIP_PATH }}  # 使用相对路径
           tag_name: v${{ env.SEMVER }}
           name: Release v${{ env.SEMVER }}
-          
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
