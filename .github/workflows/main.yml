@@ -29,6 +29,8 @@ jobs:
       - name: 🧹 清理工作区
         run: |
           if (Test-Path $env:DIST_PATH) { Remove-Item -Recurse -Force $env:DIST_PATH }
+          if (Test-Path build) { Remove-Item -Recurse -Force build }
+          Get-ChildItem -Recurse -Include __pycache__ | Remove-Item -Recurse -Force
           if (Test-Path *.zip) { Remove-Item -Force *.zip }
         shell: pwsh
 
@@ -104,12 +106,14 @@ jobs:
         run: echo "now=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" >> $env:GITHUB_OUTPUT
         shell: pwsh
 
-      - name: 📜 生成更新日志
-        id: changelog
+      - name: 📜 生成更新日志到 changelog.txt
         run: |
           $log = git log --pretty=format:"* [%h] %s (%an)" -n 5
-          $log = ($log -split "`r`n") -join "`n"
-          echo "log=$log" >> $env:GITHUB_OUTPUT
+          $log | Out-File -FilePath changelog.txt -Encoding utf8
+          Add-Content -Path changelog.txt -Value ""
+          Add-Content -Path changelog.txt -Value "## 📦 构建信息"
+          Add-Content -Path changelog.txt -Value "打包时间：${{ steps.timestamp.outputs.now }}"
+          Add-Content -Path changelog.txt -Value "版本号：v${{ env.SEMVER }}"
         shell: pwsh
 
       - name: 🚀 创建 Release 并上传 ZIP
@@ -119,17 +123,7 @@ jobs:
           files: ${{ steps.compress_dist.outputs.zip_name }}
           tag_name: v${{ env.SEMVER }}
           name: Release v${{ env.SEMVER }}
-          body: |
-            🚀 ${{ env.PRODUCT_NAME }} v${{ env.SEMVER }} 发布！
-
-            ## 🛠️ 更新内容
-
-            ${{ steps.changelog.outputs.log }}
-
-            ## 📦 构建信息
-
-            - 打包时间：${{ steps.timestamp.outputs.now }}
-            - 版本号：v${{ env.SEMVER }}
+          body_path: changelog.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
