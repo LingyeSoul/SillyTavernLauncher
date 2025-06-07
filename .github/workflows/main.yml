@@ -10,22 +10,9 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
-    env:
-      GITHUB_RUNNER_MIN_VERSION: 2.297.0
-      ACTIONS_CORE_MIN_VERSION: 1.10.0
-    
+    permissions:
+      contents: write
     steps:
-      - name: Check runner version
-        if: runner.self_hosted
-        shell: bash
-        run: |
-          RUNNER_VERSION=$(cat /home/runner/.version)
-          if [[ "$(printf '%s\n' "$GITHUB_RUNNER_MIN_VERSION" "$RUNNER_VERSION" | sort -V | head -n1)" != "$GITHUB_RUNNER_MIN_VERSION" ]]; then
-            echo "自托管运行器版本过低，需要 $GITHUB_RUNNER_MIN_VERSION 或更高"
-            exit 1
-          fi
-          echo "自托管运行器版本检查通过: $RUNNER_VERSION"
-      
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -60,18 +47,17 @@ jobs:
       
       - name: Package application with auto version
         run: |
-          flet pack src/main.py `
-            --icon src/assets/icon.ico `
+          python -m flet pack src/main.py `
+            --icon src/assets/icon.png `
             --name SillyTavernLauncher `
+            --distpath dist `
             --product-name "酒馆启动器" `
             --file-description "SillyTavernLauncher酒馆启动器" `
             --product-version "${{ env.SEMVER }}" `
             --file-version "${{ env.MAJOR }}.${{ env.MINOR }}.${{ env.PATCH }}.0" `
             --company-name "LingyeSoul" `
             --copyright "Copyright (c) 2025 LingyeSoul" `
-            --onedir `
             --yes
-            
         shell: powershell
       
       - name: Create Release (if on tag)
@@ -83,7 +69,6 @@ jobs:
           name: Release v${{ env.SEMVER }}
           body: |
             酒馆启动器 v${{ env.SEMVER }} 发布!
-            自动生成的版本说明。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
