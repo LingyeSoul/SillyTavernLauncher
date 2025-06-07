@@ -61,7 +61,7 @@ jobs:
             --company-name "LingyeSoul" `
             --copyright "Copyright (c) 2025 LingyeSoul" `
             --onedir `
-            --distpath dist `  
+            --distpath dist `
             --yes
         shell: powershell
       
