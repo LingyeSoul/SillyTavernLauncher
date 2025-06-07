@@ -64,13 +64,16 @@ jobs:
             --distpath dist `
             --yes
         shell: powershell
+
       - name: Compress dist to ZIP
         id: compress_dist
         run: |
-          $version = $env:SEMVER
-          $zipPath = "$env:GITHUB_WORKSPACE/SillyTavernLauncher-win-v$version.zip"
+          $version = "${{ env.SEMVER }}"
+          $zipName = "SillyTavernLauncher-win-v$version.zip"
+          $zipPath = Join-Path -Path $env:GITHUB_WORKSPACE -ChildPath $zipName
           Compress-Archive -Path dist\* -DestinationPath $zipPath -Force
-          Write-Host "ZIP_PATH=$zipPath" >> $env:GITHUB_ENV
+          echo "ZIP_PATH=$zipPath" >> $GITHUB_ENV
+          echo "创建ZIP文件: $zipPath"
         shell: powershell
 
       - name: Create Release (if on tag)
@@ -92,3 +95,4 @@ jobs:
         with:
           name: SillyTavernLauncher-windows-v${{ env.SEMVER }}
           path: ${{ env.ZIP_PATH }}
+          if-no-files-found: error
