@@ -11,7 +11,11 @@ jobs:
   build-windows:
     runs-on: windows-latest
     permissions:
-      contents: write
+      contents: write  
+    env:
+      GITHUB_RUNNER_MIN_VERSION: 2.297.0
+      ACTIONS_CORE_MIN_VERSION: 1.10.0
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -47,28 +51,40 @@ jobs:
       
       - name: Package application with auto version
         run: |
-          python -m flet pack src/main.py `
-            --icon src/assets/icon.png `
+          flet pack src/main.py `
+            --icon src/assets/icon.ico `
             --name SillyTavernLauncher `
-            --distpath dist `
             --product-name "酒馆启动器" `
             --file-description "SillyTavernLauncher酒馆启动器" `
             --product-version "${{ env.SEMVER }}" `
             --file-version "${{ env.MAJOR }}.${{ env.MINOR }}.${{ env.PATCH }}.0" `
             --company-name "LingyeSoul" `
             --copyright "Copyright (c) 2025 LingyeSoul" `
+            --onedir `
+            --distpath dist `  
             --yes
+        shell: powershell
+      
+      - name: Check dist directory
+        run: |
+          echo "检查dist目录内容:"
+          dir dist
+          if not exist "dist\SillyTavernLauncher.exe" (
+            echo "错误: 未找到打包后的可执行文件!"
+            exit /b 1
+          )
         shell: powershell
       
       - name: Create Release (if on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/*
+          files: dist/**/*
           tag_name: v${{ env.SEMVER }}
           name: Release v${{ env.SEMVER }}
           body: |
             酒馆启动器 v${{ env.SEMVER }} 发布!
+            自动生成的版本说明。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
