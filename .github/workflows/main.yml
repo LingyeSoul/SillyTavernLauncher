@@ -107,10 +107,13 @@ jobs:
           $version = "${{ env.SEMVER }}"
           $zipName = "$env:APP_NAME-win-v$version.zip"
           $zipPath = Join-Path -Path $env:GITHUB_WORKSPACE -ChildPath $zipName
+          
           Write-Host "📁 创建 ZIP 文件: $zipName"
-
           Compress-Archive -Path "$env:DIST_PATH\*" -DestinationPath "$zipPath" -Force
-          Write-Output "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+          
+          # 转换为相对路径
+          $relativeZipPath = Split-Path -Path $zipPath -Leaf
+          Write-Output "ZIP_PATH=$relativeZipPath" | Out-File -FilePath $env:GITHUB_ENV -Append
         shell: pwsh
 
       - name: 🧾 验证 ZIP 是否生成成功
@@ -126,7 +129,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: ${{ env.ZIP_PATH }}  # 关键修复：正确引用环境变量
+          files: ${{ env.ZIP_PATH }}  # 使用相对路径
           tag_name: v${{ env.SEMVER }}
           name: Release v${{ env.SEMVER }}
           
