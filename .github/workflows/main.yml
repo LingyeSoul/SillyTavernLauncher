@@ -13,25 +13,51 @@ jobs:
     permissions:
       contents: write
     env:
-      GITHUB_RUNNER_MIN_VERSION: 2.297.0
-      ACTIONS_CORE_MIN_VERSION: 1.10.0
+      APP_NAME: SillyTavernLauncher
+      PRODUCT_NAME: "酒馆启动器"
+      COMPANY_NAME: LingyeSoul
+      ICON_PATH: src/assets/icon.ico
+      DIST_PATH: dist
+      COPYRIGHT: "Copyright (c) 2025 LingyeSoul"
 
     steps:
-      - name: Checkout code
+      - name: 🧹 开始清理 & 准备工作区
+        run: |
+          Write-Host "🚀 开始构建流程..."
+
+          if (Test-Path $env:DIST_PATH) {
+              Write-Host "🗑️ 清理旧的 dist 目录..."
+              Remove-Item -Recurse -Force $env:DIST_PATH
+          }
+
+          if (Test-Path *.zip) {
+              Write-Host "🗑️ 清理旧的 ZIP 文件..."
+              Remove-Item -Force *.zip
+          }
+        shell: pwsh
+
+      - name: 🔁 拉取代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup GitVersion
+      - name: ⏳ 缓存 GitVersion 工具
+        uses: actions/cache@v4
+        with:
+          path: C:\GitVersion
+          key: gitversion-5.x
+          restore-keys: gitversion-
+
+      - name: 🛠️ 安装 GitVersion
         uses: gittools/actions/gitversion/setup@v0.9.13
         with:
           versionSpec: '5.x'
 
-      - name: Determine Version
+      - name: 📊 获取版本号
         id: gitversion
         uses: gittools/actions/gitversion/execute@v0.9.13
 
-      - name: Capture version outputs
+      - name: 🧾 提取版本信息到环境变量
         shell: bash
         run: |
           echo "SEMVER=${{ steps.gitversion.outputs.SemVer }}" >> $GITHUB_ENV
@@ -39,48 +65,71 @@ jobs:
           echo "MINOR=${{ steps.gitversion.outputs.Minor }}" >> $GITHUB_ENV
           echo "PATCH=${{ steps.gitversion.outputs.Patch }}" >> $GITHUB_ENV
 
-      - name: Set up Python
+      - name: 🚀 缓存 Python pip 包
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: 🐍 设置 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: Install Flet and dependencies
+      - name: 📦 安装 Flet 和 PyInstaller
         run: |
           python -m pip install --upgrade pip
           pip install flet pyinstaller
 
-      - name: Package application with auto version
+      - name: 🧱 打包应用程序
         run: |
+          Write-Host "📦 正在使用 flet pack 打包应用程序..."
+
           flet pack src/main.py `
-            --icon src/assets/icon.ico `
-            --name SillyTavernLauncher `
-            --product-name "酒馆启动器" `
-            --file-description "SillyTavernLauncher酒馆启动器" `
+            --icon "$env:ICON_PATH" `
+            --name "$env:APP_NAME" `
+            --product-name "$env:PRODUCT_NAME" `
+            --file-description "$env:APP_NAME$env:PRODUCT_NAME" `
             --product-version "${{ env.SEMVER }}" `
             --file-version "${{ env.MAJOR }}.${{ env.MINOR }}.${{ env.PATCH }}.0" `
-            --company-name "LingyeSoul" `
-            --copyright "Copyright (c) 2025 LingyeSoul" `
+            --company-name "$env:COMPANY_NAME" `
+            --copyright "$env:Copyright" `
             --onedir `
-            --distpath dist `
+            --distpath "$env:DIST_PATH" `
             --yes
-        shell: powershell
+        shell: pwsh
 
-      - name: Compress dist to ZIP
+      - name: 🗂️ 压缩 dist 到 ZIP
         id: compress_dist
         run: |
           $version = "${{ env.SEMVER }}"
-          $zipName = "SillyTavernLauncher-win-v$version.zip"
+          $zipName = "$env:APP_NAME-win-v$version.zip"
           $zipPath = Join-Path -Path $env:GITHUB_WORKSPACE -ChildPath $zipName
-          Compress-Archive -Path dist\* -DestinationPath $zipPath -Force
-          echo "ZIP_PATH=$zipPath" >> $GITHUB_ENV
-          echo "创建ZIP文件: $zipPath"
-        shell: powershell
+          Write-Host "📁 创建 ZIP 文件: $zipName"
 
-      - name: Debug ZIP path
+          Compress-Archive -Path "$env:DIST_PATH\*" -DestinationPath "$zipPath" -Force
+          Write-Output "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+        shell: pwsh
+
+      - name: 🧾 验证 ZIP 是否生成成功
         run: |
-          echo "ZIP路径为: ${{ env.ZIP_PATH }}"
+          if (-Not (Test-Path ${{ env.ZIP_PATH }})) {
+              throw "❌ 错误：ZIP 文件未生成，请检查打包步骤"
+          } else {
+              Write-Host "✅ ZIP 文件已成功生成: ${{ env.ZIP_PATH }}"
+          }
+        shell: pwsh
 
-      - name: Create Release (if on tag)
+      - name: 📜 生成 CHANGELOG
+        id: changelog
+        uses: tj-actions/auto-changelog@v1
+        with:
+          show-authors: false
+          max-commits: 20
+
+      - name: 📤 发布 GitHub Release（仅当打 tag 时）
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
@@ -88,15 +137,16 @@ jobs:
           tag_name: v${{ env.SEMVER }}
           name: Release v${{ env.SEMVER }}
           body: |
-            🚀 酒馆启动器 v${{ env.SEMVER }} 发布！
-            - 包含Windows可执行文件及依赖项的ZIP包
-            - 版本号：${{ env.SEMVER }}
+            🚀 $env:PRODUCT_NAME v${{ env.SEMVER }} 发布！
+
+            ## 更新内容
+            ${{ steps.changelog.outputs.changelog }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Windows artifact
+      - name: 📁 上传 Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SillyTavernLauncher-windows-v${{ env.SEMVER }}
+          name: ${{ env.APP_NAME }}-windows-v${{ env.SEMVER }}
           path: ${{ env.ZIP_PATH }}
           if-no-files-found: error
