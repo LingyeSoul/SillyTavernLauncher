@@ -122,14 +122,7 @@ jobs:
           }
         shell: pwsh
 
-      - name: 📜 生成 CHANGELOG
-        id: changelog
-        uses: tj-actions/auto-changelog@v1
-        with:
-          show-authors: false
-          max-commits: 20
-
-      - name: 📤 发布 GitHub Release（仅当打 tag 时）
+      - name: Create Release (if on tag)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
@@ -139,8 +132,14 @@ jobs:
           body: |
             🚀 $env:PRODUCT_NAME v${{ env.SEMVER }} 发布！
 
-            ## 更新内容
-            ${{ steps.changelog.outputs.changelog }}
+            ## 🛠️ 更新内容
+
+            $(git log --pretty=format:"* [%h] %s (%an)" HEAD~5..HEAD)
+
+            ## 📦 构建信息
+
+            - 打包时间：$(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+            - 版本号：v${{ env.SEMVER }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
