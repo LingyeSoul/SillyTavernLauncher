@@ -72,9 +72,13 @@ jobs:
           $zipName = "SillyTavernLauncher-win-v$version.zip"
           $zipPath = Join-Path -Path $env:GITHUB_WORKSPACE -ChildPath $zipName
           Compress-Archive -Path dist\* -DestinationPath $zipPath -Force
-          echo "ZIP_PATH=$zipName" >> $GITHUB_ENV
+          echo "ZIP_PATH=$zipPath" >> $GITHUB_ENV
           echo "创建ZIP文件: $zipPath"
         shell: powershell
+
+      - name: Debug ZIP path
+        run: |
+          echo "ZIP路径为: ${{ env.ZIP_PATH }}"
 
       - name: Create Release (if on tag)
         if: startsWith(github.ref, 'refs/tags/')
