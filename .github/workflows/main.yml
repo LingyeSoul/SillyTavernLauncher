@@ -91,11 +91,11 @@ jobs:
             --icon "$env:ICON_PATH" `
             --name "$env:APP_NAME" `
             --product-name "$env:PRODUCT_NAME" `
-            --file-description "$env:APP_NAME $env:PRODUCT_NAME" `
+            --file-description "$env:APP_NAME$env:PRODUCT_NAME" `
             --product-version "${{ env.SEMVER }}" `
             --file-version "${{ env.MAJOR }}.${{ env.MINOR }}.${{ env.PATCH }}.0" `
             --company-name "$env:COMPANY_NAME" `
-            --copyright "$env:COPYRIGHT" `
+            --copyright "$env:Copyright" `
             --onedir `
             --distpath "$env:DIST_PATH" `
             --yes
@@ -113,15 +113,25 @@ jobs:
           Write-Output "ZIP_PATH=$zipPath" | Out-File -FilePath $env:GITHUB_ENV -Append
         shell: pwsh
 
-      - name: 调试：检查 ZIP 文件是否存在
+      - name: 🧾 验证 ZIP 是否生成成功
         run: |
-          if (Test-Path "${{ env.ZIP_PATH }}") {
-              Write-Host "✅ ZIP 文件已找到: ${env:ZIP_PATH}"
+          if (-Not (Test-Path ${{ env.ZIP_PATH }})) {
+              throw "❌ 错误：ZIP 文件未生成，请检查打包步骤"
           } else {
-              Write-Host "❌ 错误：ZIP 文件未找到: ${env:ZIP_PATH}"
-              exit 1
+              Write-Host "✅ ZIP 文件已成功生成: ${{ env.ZIP_PATH }}"
           }
         shell: pwsh
+
+      - name: Create Release (if on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ env.ZIP_PATH }}  # 关键修复：正确引用环境变量
+          tag_name: v${{ env.SEMVER }}
+          name: Release v${{ env.SEMVER }}
+          
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 📁 上传 Artifact
         uses: actions/upload-artifact@v4
@@ -129,39 +139,3 @@ jobs:
           name: ${{ env.APP_NAME }}-windows-v${{ env.SEMVER }}
           path: ${{ env.ZIP_PATH }}
           if-no-files-found: error
-
-      - name: Create Release (if on tag)
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          # 获取提交日志
-          $commits = git log --pretty=format:"* [%h] %s (%an)" HEAD~5..HEAD
-
-          # 获取当前日期
-          $buildTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-
-          # 构造发布说明内容
-          $body = @"
-          🚀 $env:PRODUCT_NAME v$env:SEMVER 发布！
-
-          ## 🛠️ 更新内容
-          $commits
-
-          ## 📦 构建信息
-          - 打包时间：$buildTime
-          - 版本号：v$env:SEMVER
-          "@
-
-          # 将 body 写入环境变量供后续使用
-          [Environment]::SetEnvironmentVariable("RELEASE_BODY", $body, "Process")
-        shell: pwsh
-
-      - name: Create GitHub Release with Body
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
-        with:
-          files: ${{ env.ZIP_PATH }}
-          tag_name: v${{ env.SEMVER }}
-          name: Release v${{ env.SEMVER }}
-          body: ${{ env.RELEASE_BODY }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
