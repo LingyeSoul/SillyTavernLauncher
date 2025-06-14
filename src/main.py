@@ -30,6 +30,7 @@ class Terminal:
         self.is_running = False  # 添加运行状态标志
         self._output_threads = []  # 存储输出处理线程
 
+    
     def stop_processes(self):
         """停止所有由execute_command启动的进程"""
         self.add_log("正在终止所有进程...")
@@ -162,13 +163,9 @@ def main(page: ft.Page):
     page.window.min_width=800
     page.window.maximizable = False
     page.window.title_bar_hidden = True
-<<<<<<< HEAD
     
     def showMsg(v):
         page.open(ft.SnackBar(ft.Text(v),show_close_icon=True,duration=3000))
-=======
-    page.window.icon= f"{os.getcwd()}\\assets\\icon.ico"
->>>>>>> parent of 1cdd16b (一部分修改)
 
     BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
 
@@ -269,7 +266,7 @@ def main(page: ft.Page):
                         # 优先尝试UTF-8解码
                         text = decoder.decode(chunk)
                         if text:
-                            terminal.add_log(f"[ERROR] {text}" if is_stderr else text)
+                            terminal.add_log(f"{text}" if is_stderr else text)
 
                     except UnicodeDecodeError:
                         # 重置解码器
@@ -325,11 +322,27 @@ def main(page: ft.Page):
         git_path = env.get_git_path()
         if env.checkST():
             terminal.add_log("SillyTavern已安装")
-            if env.get_node_path:
+            if env.get_node_path():
                 if env.check_nodemodules():
                     terminal.add_log("依赖项已安装")
                 else:
-                    execute_command(f"{env.get_node_path()}npm install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", "SillyTavern")
+                    terminal.add_log("正在安装依赖...")
+                    def on_npm_complete(process):
+                        if process.returncode == 0:
+                            terminal.add_log("依赖安装成功")
+                        else:
+                            terminal.add_log("依赖安装失败")
+                    
+                    process = execute_command(
+                        f"{env.get_node_path()}npm install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
+                        "SillyTavern"
+                    )
+                    
+                    if process:
+                        threading.Thread(
+                            target=lambda: (process.wait(), on_npm_complete(process)),
+                            daemon=True
+                        ).start()
             else:
                 terminal.add_log("未找到nodejs")
         else:
@@ -340,7 +353,44 @@ def main(page: ft.Page):
                     repo_url = "https://github.moeyy.xyz/https://github.com/SillyTavern/SillyTavern"
                 else:
                     repo_url = "https://github.com/SillyTavern/SillyTavern"
-                execute_command(f'{git_path}git clone {repo_url} -b release', ".")
+                
+                terminal.add_log("正在安装SillyTavern...")
+                def on_git_complete(process):
+                    if process.returncode == 0:
+                        terminal.add_log("安装成功")
+                        if env.get_node_path():
+                            terminal.add_log("正在安装依赖...")
+                            def on_npm_complete(process):
+                                if process.returncode == 0:
+                                    terminal.add_log("依赖安装成功")
+                                else:
+                                    terminal.add_log("依赖安装失败")
+                            
+                            process = execute_command(
+                                f"{env.get_node_path()}npm install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
+                                "SillyTavern"
+                            )
+                            
+                            if process:
+                                threading.Thread(
+                                    target=lambda: (process.wait(), on_npm_complete(process)),
+                                    daemon=True
+                                ).start()
+                        else:
+                            terminal.add_log("未找到nodejs")
+                    else:
+                        terminal.add_log("安装失败")
+                
+                process = execute_command(
+                    f'{git_path}git clone {repo_url} -b release', 
+                    "."
+                )
+                
+                if process:
+                    threading.Thread(
+                        target=lambda: (process.wait(), on_git_complete(process)),
+                        daemon=True
+                    ).start()
             else:
                 terminal.add_log("Error: Git路径未正确配置")
 
@@ -364,29 +414,138 @@ def main(page: ft.Page):
                         on_process_exit()
                     
                     threading.Thread(target=wait_for_exit, daemon=True).start()
+                    terminal.add_log("SillyTavern已启动")
+                else:
+                    terminal.add_log("启动失败")
+            else:
+                terminal.add_log("依赖项未安装")
+        else:
+            terminal.add_log("SillyTavern未安装")
 
     def stop_sillytavern(e):
         terminal.add_log("正在停止SillyTavern进程...")
         terminal.stop_processes()
         terminal.add_log("所有进程已停止")
 
+    def check_for_updates_in_thread():
+        import requests
+        import json
+        from urllib.parse import urlparse
+        
+        # 多个GitHub API镜像源
+        MIRRORS = [
+            "https://api.github.com",
+            "https://gh.llkk.cc/https://api.github.com",
+        ]
+        
+        # 本地版本(硬编码，实际项目中应该从配置或文件中读取)
+        local_version = "0.0.0"
+        
+        latest_version = None
+        release_url = None
+        last_error = None
+        
+        # 尝试多个镜像源
+        for mirror in MIRRORS:
+            api_url = f"{mirror}/repos/LingyeSoul/SillyTavernLauncher/releases/latest"
+            try:
+                terminal.add_log(f"正在尝试从 {urlparse(mirror).netloc} 检查更新...")
+                
+                # 获取最新发布版本
+                headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+}
+
+                response = requests.get(api_url, timeout=15,headers=headers)
+                response.raise_for_status()
+                
+                latest_release = response.json()
+                latest_version = latest_release["tag_name"]
+                release_url = latest_release["html_url"]
+                last_error = None
+                break
+                
+            except requests.exceptions.RequestException as ex:
+                last_error = str(ex)
+                terminal.add_log(f"镜像 {urlparse(mirror).netloc} 检查失败: {str(ex)}")
+                continue
+                
+        if latest_version is None:
+            terminal.add_log(f"所有镜像源检查更新失败，最后错误: {last_error}")
+            return
+            
+        try:
+            if latest_version != local_version:
+                # 在主线程中显示更新提示对话框
+                def show_update_dialog():
+                    def open_github(e):
+                        page.launch_url(release_url, web_window_name="github_release")
+                    dig= ft.AlertDialog(
+                        title=ft.Text("发现新版本"),
+                        content=ft.Text(f"最新版本: {latest_version}\n当前版本: {local_version}"),
+                        actions=[
+                            ft.TextButton("前往下载", on_click=open_github),
+                            ft.TextButton("取消", on_click=lambda e: page.close(dig))
+                        ],
+                        actions_alignment=ft.MainAxisAlignment.END
+                    )
+                    page.open(dig)
+                    terminal.add_log(f"发现新版本 {latest_version} (当前: {local_version})")
+                
+            else:
+                terminal.add_log(f"当前已是最新版本 ({local_version})")
+                
+        except Exception as ex:
+            terminal.add_log(f"显示更新对话框失败: {str(ex)}")
+
+    def check_for_updates(e):
+        check_for_updates_in_thread()
+    
+    
     def update_sillytavern(e):
         git_path = env.get_git_path()
         if env.checkST():
             terminal.add_log("正在更新SillyTavern...")
             if git_path:
-                # 链式执行更新命令
-                def on_git_complete():
-                    if env.get_node_path:
-                        terminal.add_log("Git更新完成，正在安装依赖...")
-                        execute_command(f"{env.get_node_path()}npm install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", "SillyTavern")
+                # 执行git pull
+                def on_git_complete(process):
+                    if process.returncode == 0:
+                        terminal.add_log("Git更新成功")
+                        if env.get_node_path():
+                            terminal.add_log("正在安装依赖...")
+                            def on_npm_complete(process):
+                                if process.returncode == 0:
+                                    terminal.add_log("依赖安装成功")
+                                else:
+                                    terminal.add_log("依赖安装失败")
+                            
+                            process = execute_command(
+                                f"{env.get_node_path()}npm install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
+                                "SillyTavern"
+                            )
+                            
+                            if process:
+                                threading.Thread(
+                                    target=lambda: (process.wait(), on_npm_complete(process)),
+                                    daemon=True
+                                ).start()
+                        else:
+                            terminal.add_log("未找到nodejs")
                     else:
-                        terminal.add_log("未找到nodejs")
+                        terminal.add_log("Git更新失败，跳过依赖安装")
                 
-                execute_command(
+                process = execute_command(
                     f'{git_path}git pull --rebase --autostash', 
-                    "SillyTavern",
+                    "SillyTavern"
                 )
+                
+                # 添加git操作完成后的回调
+                if process:
+                    def wait_and_callback():
+                        process.wait()
+                        on_git_complete(process)
+                    
+                    threading.Thread(target=wait_and_callback, daemon=True).start()
             else:
                 terminal.add_log("未找到Git路径，请手动更新SillyTavern")
 
@@ -470,16 +629,12 @@ def main(page: ft.Page):
         ft.Text("关于", size=24, weight=ft.FontWeight.BOLD),
         ft.Divider(),
         ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
-<<<<<<< HEAD
         ft.Text("版本: 0.1.3测试版", size=16),
-=======
-        ft.Text("版本: 1.0.0", size=16),
->>>>>>> parent of 1cdd16b (一部分修改)
         ft.Text("作者: 泠夜Soul", size=16),
         ft.ElevatedButton(
             "访问GitHub仓库",
             icon=ft.Icons.OPEN_IN_BROWSER,
-            on_click=lambda e: e.page.launch_url("https://github.com/SillyTavern/SillyTavern", web_window_name="github"),
+            on_click=lambda e: e.page.launch_url("https://github.com/LingyeSoul/SillyTavernLauncher", web_window_name="github"),
             style=BSytle,
             height=40
         ),
@@ -488,6 +643,14 @@ def main(page: ft.Page):
             icon=ft.Icons.OPEN_IN_BROWSER,
             on_click=lambda e: e.page.launch_url("https://space.bilibili.com/298721157", web_window_name="bilibili"),
             style=BSytle,
+            height=40
+        ),
+        ft.ElevatedButton(
+            "检查更新",
+            icon=ft.Icons.UPDATE,
+            tooltip="检查GitHub Release是否有新版本",
+            style=BSytle,
+            on_click=lambda e: check_for_updates(e),
             height=40
         )
     ], spacing=15, expand=True)
@@ -555,7 +718,7 @@ def main(page: ft.Page):
                             on_click=lambda e: update_sillytavern(e),
                             height=50,
                         ),
-                    ],
+                        ],
             alignment=ft.MainAxisAlignment.CENTER,
             expand=True 
         ),
@@ -585,12 +748,8 @@ def main(page: ft.Page):
             vertical_alignment=ft.CrossAxisAlignment.STRETCH  # 垂直方向拉伸
         )
     )
-<<<<<<< HEAD
     #check_for_updates(None)
 
-=======
-    
->>>>>>> parent of 1cdd16b (一部分修改)
 
 
 ft.app(target=main, view=ft.AppView.FLET_APP_HIDDEN)
