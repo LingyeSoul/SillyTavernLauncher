@@ -629,7 +629,7 @@ def main(page: ft.Page):
         ft.Text("关于", size=24, weight=ft.FontWeight.BOLD),
         ft.Divider(),
         ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
-        ft.Text("版本: 0.1.3测试版", size=16),
+        ft.Text("版本: 0.1.3", size=16),
         ft.Text("作者: 泠夜Soul", size=16),
         ft.ElevatedButton(
             "访问GitHub仓库",
@@ -645,14 +645,14 @@ def main(page: ft.Page):
             style=BSytle,
             height=40
         ),
-        ft.ElevatedButton(
-            "检查更新",
-            icon=ft.Icons.UPDATE,
-            tooltip="检查GitHub Release是否有新版本",
-            style=BSytle,
-            on_click=lambda e: check_for_updates(e),
-            height=40
-        )
+       #ft.ElevatedButton(
+        #    "检查更新",
+       #     icon=ft.Icons.UPDATE,
+        #    tooltip="检查GitHub Release是否有新版本",
+         #   style=BSytle,
+        #    on_click=lambda e: check_for_updates(e),
+        #    height=40
+      #  )
     ], spacing=15, expand=True)
 
     # 导航栏
