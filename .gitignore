@@ -1,0 +1,9 @@
+storage
+node_modules
+SillyTavern
+env
+__pycache__
+dist
+SillyTavernLauncher.spec
+build
+main.spec

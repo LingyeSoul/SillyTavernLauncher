@@ -1,0 +1,147 @@
+name: Build Windows Flet App
+
+on:
+  push:
+    branches:
+      - main
+  release:
+    types: [created]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    env:
+      APP_NAME: SillyTavernLauncher
+      PRODUCT_NAME: "酒馆启动器"
+      COMPANY_NAME: LingyeSoul
+      ICON_PATH: src/assets/icon.ico
+      DIST_PATH: dist
+      COPYRIGHT: "Copyright (c) 2025 LingyeSoul"
+
+    steps:
+      - name: 🔁 拉取代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🧹 清理工作区
+        run: |
+          if (Test-Path $env:DIST_PATH) { Remove-Item -Recurse -Force $env:DIST_PATH }
+          if (Test-Path *.zip) { Remove-Item -Force *.zip }
+        shell: pwsh
+
+      - name: ⏳ 缓存 GitVersion
+        uses: actions/cache@v4
+        with:
+          path: C:\GitVersion
+          key: gitversion-5.x
+          restore-keys: gitversion-
+
+      - name: 🛠️ 安装 GitVersion
+        uses: gittools/actions/gitversion/setup@v0.9.13
+        with:
+          versionSpec: '5.x'
+
+      - name: 📊 获取版本号
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v0.9.13
+
+      - name: 🧾 提取版本信息
+        run: |
+          echo "SEMVER=${{ steps.gitversion.outputs.SemVer }}" >> $GITHUB_ENV
+          echo "MAJOR=${{ steps.gitversion.outputs.Major }}" >> $GITHUB_ENV
+          echo "MINOR=${{ steps.gitversion.outputs.Minor }}" >> $GITHUB_ENV
+          echo "PATCH=${{ steps.gitversion.outputs.Patch }}" >> $GITHUB_ENV
+        shell: bash
+
+      - name: 🐍 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 📦 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install flet pyinstaller
+
+      - name: 🧱 打包应用
+        run: |
+          flet pack src/main.py `
+            --icon "$env:ICON_PATH" `
+            --name "$env:APP_NAME" `
+            --product-name "$env:PRODUCT_NAME" `
+            --file-description "$env:APP_NAME $env:PRODUCT_NAME" `
+            --product-version "${{ env.SEMVER }}" `
+            --file-version "${{ env.MAJOR }}.${{ env.MINOR }}.${{ env.PATCH }}.0" `
+            --company-name "$env:COMPANY_NAME" `
+            --copyright "$env:COPYRIGHT" `
+            --onedir `
+            --distpath "$env:DIST_PATH" `
+            --yes
+        shell: pwsh
+
+      - name: 🗂️ 压缩 dist 到 ZIP
+        id: compress_dist
+        run: |
+          $zipName = "$env:APP_NAME-win-v${{ env.SEMVER }}.zip"
+          Compress-Archive -Path "$env:DIST_PATH\*" -DestinationPath $zipName -Force
+          echo "zip_name=$zipName" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: ✅ 验证 ZIP
+        run: |
+          $path = "${{ steps.compress_dist.outputs.zip_name }}"
+          if (-Not (Test-Path $path)) {
+              throw "❌ ZIP 文件未生成: $path"
+          }
+          Write-Host "✅ ZIP 文件存在: $path"
+        shell: pwsh
+
+      - name: ⏱️ 获取当前时间（上海时区，中文格式）
+        id: timestamp
+        run: |
+          $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("China Standard Time")
+          $now = [System.TimeZoneInfo]::ConvertTimeFromUtc((Get-Date).ToUniversalTime(), $tz)
+          $formatted = $now.ToString("yyyy年MM月dd日 HH时mm分ss秒")
+          "now=$formatted" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        shell: pwsh
+
+      - name: 📜 生成更新日志
+        id: changelog
+        run: |
+          $log = git log --pretty=format:"* [%h] %s (%an)" -n 5
+          $logPath = "$env:GITHUB_OUTPUT"
+          Add-Content -Path $logPath -Value "log<<EOF"
+          Add-Content -Path $logPath -Value "$log"
+          Add-Content -Path $logPath -Value "EOF"
+        shell: pwsh
+
+      - name: 🚀 创建 Release 并上传 ZIP
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ steps.compress_dist.outputs.zip_name }}
+          tag_name: v${{ env.SEMVER }}
+          name: Release v${{ env.SEMVER }}
+          body: |
+            🚀 ${{ env.PRODUCT_NAME }} v${{ env.SEMVER }} 发布！
+
+            ## 🛠️ 更新内容
+
+            ${{ steps.changelog.outputs.log }}
+
+            ## 📦 构建信息
+
+            - 打包时间：${{ steps.timestamp.outputs.now }}
+            - 版本号：v${{ env.SEMVER }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 📁 上传 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-windows-v${{ env.SEMVER }}
+          path: ${{ steps.compress_dist.outputs.zip_name }}
+          if-no-files-found: error
