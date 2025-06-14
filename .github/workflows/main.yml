@@ -126,7 +126,7 @@ jobs:
           tag_name: v${{ env.SEMVER }}
           name: Release v${{ env.SEMVER }}
           body: |
-            🚀 ${{ env.PRODUCT_NAME }} v${{ env.SEMVER }} 发布！
+            # 🚀 ${{ env.PRODUCT_NAME }} v${{ env.SEMVER }} 发布！
 
             ## 🛠️ 更新内容
 
