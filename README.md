@@ -8,5 +8,6 @@
 - 启动/停止SillyTavern服务
 - 自动检查并安装依赖项
 - 支持从GitHub更新SillyTavern
+- 支持使用内置Git安装扩展
 - 内置终端输出显示
 - 支持GitHub镜像源切换
