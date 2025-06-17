@@ -1,6 +1,7 @@
 import flet as ft
 from time import sleep
 from env import Env
+from sysenv import SysEnv
 from stconfig import stcfg
 import subprocess
 import threading
@@ -170,6 +171,9 @@ def main(page: ft.Page):
     BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
 
     env=Env()
+    if not os.path.exists(env.base_dir):
+        page.client_storage.set("use_sys_env", True)
+
     stCfg=stcfg()
     terminal = Terminal()
 
@@ -178,7 +182,11 @@ def main(page: ft.Page):
             terminal.stop_processes()
         page.window.visible=False
         page.window.destroy()
-    
+    if not page.client_storage.get("use_sys_env"):
+        page.client_storage.set("use_sys_env", False)
+    use_sys_env = page.client_storage.get("use_sys_env")
+    if use_sys_env:
+        env=SysEnv()
     if not page.client_storage.get("theme"):
         page.client_storage.set("theme", "dark")
     page.theme_mode = page.client_storage.get("theme")
@@ -313,10 +321,14 @@ def main(page: ft.Page):
         except Exception as e:
             terminal.add_log(f"Error: {str(e)}")
             return None
-    
-    tmp=env.checkEnv()
-    if not tmp==True:
-        terminal.add_log("内置环境检查失败")
+    if use_sys_env:
+        tmp=env.checkSysEnv()
+        if not tmp==True:
+            terminal.add_log(tmp)
+    else:    
+        tmp=env.checkEnv()
+        if not tmp==True:
+            terminal.add_log(tmp)
         
     def install_sillytavern(e):
         git_path = env.get_git_path()
@@ -554,15 +566,25 @@ def main(page: ft.Page):
         stCfg.port= e.control.value
         stCfg.save_config()
         showMsg('配置文件已保存')
-    def license_changed(e):
+    def listen_changed(e):
         stCfg.listen = e.control.value 
         stCfg.save_config()
         showMsg('配置文件已保存')
-
+    def env_changed(e):
+        page.client_storage.set('use_sys_env', e.control.value)
+        if e.control.value:
+            env=SysEnv()
+        else:
+            env=Env()
+        showMsg('环境设置已保存')
+    def sys_env_check(e):
+        tmp=env.checkSysEnv()
+        showMsg(f'{tmp} Git：{env.get_git_path()} NodeJS：{env.get_node_path()}')
     # 创建设置页面
     settings_view = ft.Column([
         ft.Text("设置", size=24, weight=ft.FontWeight.BOLD),
         ft.Divider(),
+    ft.Column([
         ft.Text("GitHub镜像源选择", size=18, weight=ft.FontWeight.BOLD),
         ft.Text("推荐使用镜像站获得更好的下载速度", size=14, color=ft.Colors.GREY_600),
         ft.RadioGroup(
@@ -576,17 +598,35 @@ def main(page: ft.Page):
         ft.Text("切换后新任务将立即生效", size=14, color=ft.Colors.BLUE_400),
         ft.Divider(),
         ft.Switch(
+            label="使用系统环境",
+            value=page.client_storage.get("use_sys_env"),
+            on_change=env_changed,
+              ),
+        ft.Text("懒人包请勿修改此选项，除非你清楚你正在做什么！", size=14, color=ft.Colors.BLUE_400),
+        ft.Divider(),
+        ft.Switch(
             label="启用局域网访问",
             value=stCfg.listen,
-            on_change=license_changed,
+            on_change=listen_changed,
               ),
+        ft.Text("开启后自动生成whitelist.txt(如有，则不会生成)，放行192.168.*.*，关闭后不会删除", size=14, color=ft.Colors.BLUE_400),
         ft.Divider(),
         ft.TextField(
         label="监听端口",
         value=stCfg.port,
         hint_text="默认端口: 8000",
         on_change=port_changed,
-    )
+    ),
+    ft.Divider(),
+    ft.Text("辅助功能", size=18, weight=ft.FontWeight.BOLD),
+    ft.ElevatedButton(
+            "检查系统环境",
+            icon=ft.Icons.SETTINGS,
+            style=BSytle,
+            on_click=sys_env_check,
+            height=40
+        ),
+    ], spacing=15, expand=True,scroll=ft.ScrollMode.AUTO)
     ], spacing=15, expand=True)
 
     def update_mirror_setting(mirror_type):
@@ -629,7 +669,7 @@ def main(page: ft.Page):
         ft.Text("关于", size=24, weight=ft.FontWeight.BOLD),
         ft.Divider(),
         ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
-        ft.Text("版本: 0.1.3", size=16),
+        ft.Text("版本: 0.1.4测试版", size=16),
         ft.Text("作者: 泠夜Soul", size=16),
         ft.ElevatedButton(
             "访问GitHub仓库",
