@@ -180,6 +180,9 @@ def main(page: ft.Page):
         page.window.visible=False
         page.window.destroy()
 
+    if not page.client_storage.get("patchgit"):
+        page.client_storage.set("patchgit", False)
+    patchgit = page.client_storage.get("patchgit")
     if not page.client_storage.get("use_sys_env"):
         if not os.path.exists(env.base_dir):
             page.client_storage.set("use_sys_env", True)
@@ -571,10 +574,15 @@ def main(page: ft.Page):
     def env_changed(e):
         page.client_storage.set('use_sys_env', e.control.value)
         if e.control.value:
+            use_sys_env=True
             env=SysEnv()
         else:
+            use_sys_env=False
             env=Env()
         showMsg('环境设置已保存')
+    def patchgit_changed(e):
+        page.client_storage.set('patchgit', e.control.value)
+        showMsg('设置已保存')
     def sys_env_check(e):
         sysenv=SysEnv()
         tmp=sysenv.checkSysEnv()
@@ -606,12 +614,19 @@ def main(page: ft.Page):
         ),
         ft.Text("切换后新任务将立即生效", size=14, color=ft.Colors.BLUE_400),
         ft.Divider(),
+        ft.Row(
+        controls=[
         ft.Switch(
             label="使用系统环境",
             value=page.client_storage.get("use_sys_env"),
             on_change=env_changed,
               ),
-        ft.Text("懒人包请勿修改此选项，除非你清楚你正在做什么！ 重启后生效", size=14, color=ft.Colors.BLUE_400),
+         ft.Switch(
+            label="启用修改Git配置文件",
+            value=patchgit,
+            on_change=patchgit_changed,
+              )],spacing=5,scroll=ft.ScrollMode.AUTO),
+        ft.Text("懒人包请勿修改，如需修改则重启后生效 | 开启后修改系统环境的Git配置文件", size=14, color=ft.Colors.BLUE_400),
         ft.Divider(),
         ft.Switch(
             label="启用局域网访问",
@@ -649,44 +664,44 @@ def main(page: ft.Page):
     def update_mirror_setting(mirror_type):
         # 保存设置到客户端存储
         page.client_storage.set("github.mirror", mirror_type)
-        
+        if (use_sys_env and patchgit) or not use_sys_env:
         # 处理gitconfig文件
-        gitconfig_path = os.path.join(env.base_dir, "etc\\gitconfig")
-        try:
-            import configparser
+            gitconfig_path = os.path.join(env.base_dir, "etc\\gitconfig")
+            try:
+                import configparser
 
-            config = configparser.ConfigParser()
-            if os.path.exists(gitconfig_path):
-                config.read(gitconfig_path)
-            
-            # 定义要添加或删除的配置
-            mirror_section = 'url "https://github.moeyy.xyz/https://github.com/"'
-            mirror_option = 'insteadof'
-            mirror_value = 'https://github.com/'
-            
-            if mirror_type == "github_mirror":
-                # 添加镜像配置
-                if not config.has_section(mirror_section):
-                    config.add_section(mirror_section)
-                config.set(mirror_section, mirror_option, mirror_value)
-            else:
-                # 删除镜像配置
-                if config.has_section(mirror_section):
-                    config.remove_section(mirror_section)
-            
-            # 写入修改后的配置
-            with open(gitconfig_path, 'w') as configfile:
-                config.write(configfile)
+                config = configparser.ConfigParser()
+                if os.path.exists(gitconfig_path):
+                    config.read(gitconfig_path)
                 
-        except Exception as e:
-            terminal.add_log(f"更新gitconfig失败: {str(e)}")
+                # 定义要添加或删除的配置
+                mirror_section = 'url "https://github.moeyy.xyz/https://github.com/"'
+                mirror_option = 'insteadof'
+                mirror_value = 'https://github.com/'
+                
+                if mirror_type == "github_mirror":
+                    # 添加镜像配置
+                    if not config.has_section(mirror_section):
+                        config.add_section(mirror_section)
+                    config.set(mirror_section, mirror_option, mirror_value)
+                else:
+                    # 删除镜像配置
+                    if config.has_section(mirror_section):
+                        config.remove_section(mirror_section)
+                
+                # 写入修改后的配置
+                with open(gitconfig_path, 'w') as configfile:
+                    config.write(configfile)
+                    
+            except Exception as e:
+                terminal.add_log(f"更新gitconfig失败: {str(e)}")
 
     # 创建关于页面
     about_view = ft.Column([
         ft.Text("关于", size=24, weight=ft.FontWeight.BOLD),
         ft.Divider(),
         ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
-        ft.Text("版本: 0.1.4测试版3", size=16),
+        ft.Text("版本: 0.1.4", size=16),
         ft.Text("作者: 泠夜Soul", size=16),
         ft.ElevatedButton(
             "访问GitHub仓库",
