@@ -25,12 +25,12 @@ class SysEnv:
             if version_result.returncode != 0:
                 return 'Git is not installed on system'
             
-            # On Windows, use 'where' command to find git executable path
-            path_result = subprocess.run(['where', 'git'], capture_output=True, text=True, shell=True)
-            if path_result.returncode == 0:
-                git_path = path_result.stdout.split('\n')[0].strip()
-                self.system_git_path = f'\"{os.path.dirname(git_path)}\\\"'
-                return True
+            # Search for git executable in PATH
+            for path in os.environ['PATH'].split(os.pathsep):
+                git_path = os.path.join(path, 'git.exe')
+                if os.path.isfile(git_path):
+                    self.system_git_path = path.rstrip('\\') + '\\'
+                    return True
             return 'Git is not installed on system'
         except FileNotFoundError:
             return 'Git is not installed on system'
@@ -44,11 +44,13 @@ class SysEnv:
             node_version = version_result.stdout.strip().lstrip('v')
             if version.parse(node_version) < version.parse('18.0.0'):
                 return f'Node.js version {node_version} is too old, requires 18.x LTS or higher'
-            path_result = subprocess.run(['where', 'node'], capture_output=True, text=True, shell=True)
-            if path_result.returncode == 0:
-                node_path = path_result.stdout.split('\n')[0].strip()
-                self.system_node_path = f'\"{os.path.dirname(node_path)}\\\"'
-                return True
+            
+            # Search for node executable in PATH
+            for path in os.environ['PATH'].split(os.pathsep):
+                node_path = os.path.join(path, 'node.exe')
+                if os.path.isfile(node_path):
+                    self.system_node_path = path.rstrip('\\') + '\\'
+                    return True
             return 'Node.js is not installed on system'
         except FileNotFoundError:
             return 'Node.js is not installed on system'
