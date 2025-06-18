@@ -171,9 +171,6 @@ def main(page: ft.Page):
     BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
 
     env=Env()
-    if not os.path.exists(env.base_dir):
-        page.client_storage.set("use_sys_env", True)
-
     stCfg=stcfg()
     terminal = Terminal()
 
@@ -182,8 +179,12 @@ def main(page: ft.Page):
             terminal.stop_processes()
         page.window.visible=False
         page.window.destroy()
+
     if not page.client_storage.get("use_sys_env"):
-        page.client_storage.set("use_sys_env", False)
+        if not os.path.exists(env.base_dir):
+            page.client_storage.set("use_sys_env", True)
+        else:
+            page.client_storage.set("use_sys_env", False)
     use_sys_env = page.client_storage.get("use_sys_env")
     if use_sys_env:
         env=SysEnv()
@@ -231,7 +232,10 @@ def main(page: ft.Page):
         
         # 根据操作系统设置环境变量
         if platform.system() == "Windows":
-            full_command = f"set NODE_ENV=production && set PATH={env.get_git_path()};%PATH% && {command}"
+            if use_sys_env:
+                full_command = f"set NODE_ENV=production && {command}"
+            else:
+                full_command = f"set NODE_ENV=production && set PATH={env.get_git_path()};%PATH% && {command}"
             
         terminal.add_log(f"{workdir} $ {full_command}")
         try:
@@ -321,14 +325,8 @@ def main(page: ft.Page):
         except Exception as e:
             terminal.add_log(f"Error: {str(e)}")
             return None
-    if use_sys_env:
-        tmp=env.checkSysEnv()
-        if not tmp==True:
-            terminal.add_log(tmp)
-    else:    
-        tmp=env.checkEnv()
-        if not tmp==True:
-            terminal.add_log(tmp)
+    
+    
         
     def install_sillytavern(e):
         git_path = env.get_git_path()
@@ -346,7 +344,7 @@ def main(page: ft.Page):
                             terminal.add_log("依赖安装失败")
                     
                     process = execute_command(
-                        f"{env.get_node_path()}npm install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
+                        f"\"{env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
                         "SillyTavern"
                     )
                     
@@ -379,7 +377,7 @@ def main(page: ft.Page):
                                     terminal.add_log("依赖安装失败")
                             
                             process = execute_command(
-                                f"{env.get_node_path()}npm install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
+                                f"\"{env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
                                 "SillyTavern"
                             )
                             
@@ -394,7 +392,7 @@ def main(page: ft.Page):
                         terminal.add_log("安装失败")
                 
                 process = execute_command(
-                    f'{git_path}git clone {repo_url} -b release', 
+                    f'\"{git_path}git\" clone {repo_url} -b release', 
                     "."
                 )
                 
@@ -419,7 +417,7 @@ def main(page: ft.Page):
                     terminal.add_log("SillyTavern进程已退出")
                 
                 # 启动进程并设置退出回调
-                process = execute_command(f"{env.get_node_path()}node server.js %*", "SillyTavern")
+                process = execute_command(f"\"{env.get_node_path()}node\" server.js %*", "SillyTavern")
                 if process:
                     def wait_for_exit():
                         process.wait()
@@ -532,7 +530,7 @@ def main(page: ft.Page):
                                     terminal.add_log("依赖安装失败")
                             
                             process = execute_command(
-                                f"{env.get_node_path()}npm install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
+                                f"\"{env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
                                 "SillyTavern"
                             )
                             
@@ -547,7 +545,7 @@ def main(page: ft.Page):
                         terminal.add_log("Git更新失败，跳过依赖安装")
                 
                 process = execute_command(
-                    f'{git_path}git pull --rebase --autostash', 
+                    f'\"{git_path}git\" pull --rebase --autostash', 
                     "SillyTavern"
                 )
                 
@@ -578,8 +576,13 @@ def main(page: ft.Page):
             env=Env()
         showMsg('环境设置已保存')
     def sys_env_check(e):
-        tmp=env.checkSysEnv()
-        showMsg(f'{tmp} Git：{env.get_git_path()} NodeJS：{env.get_node_path()}')
+        sysenv=SysEnv()
+        tmp=sysenv.checkSysEnv()
+        showMsg(f'{tmp} Git：{sysenv.get_git_path()} NodeJS：{sysenv.get_node_path()}')
+    def in_env_check(e):
+        inenv=Env()
+        tmp=inenv.checkEnv()
+        showMsg(f'{tmp} Git：{inenv.get_git_path()} NodeJS：{inenv.get_node_path()}')
     # 创建设置页面
     settings_view = ft.Column([
         ft.Text("设置", size=24, weight=ft.FontWeight.BOLD),
@@ -602,7 +605,7 @@ def main(page: ft.Page):
             value=page.client_storage.get("use_sys_env"),
             on_change=env_changed,
               ),
-        ft.Text("懒人包请勿修改此选项，除非你清楚你正在做什么！", size=14, color=ft.Colors.BLUE_400),
+        ft.Text("懒人包请勿修改此选项，除非你清楚你正在做什么！ 重启后生效", size=14, color=ft.Colors.BLUE_400),
         ft.Divider(),
         ft.Switch(
             label="启用局域网访问",
@@ -619,13 +622,21 @@ def main(page: ft.Page):
     ),
     ft.Divider(),
     ft.Text("辅助功能", size=18, weight=ft.FontWeight.BOLD),
-    ft.ElevatedButton(
-            "检查系统环境",
-            icon=ft.Icons.SETTINGS,
-            style=BSytle,
-            on_click=sys_env_check,
-            height=40
-        ),
+    ft.Row(
+        controls=[ft.ElevatedButton(
+                "检查系统环境",
+                icon=ft.Icons.SETTINGS,
+                style=BSytle,
+                on_click=sys_env_check,
+                height=40
+            ),
+        ft.ElevatedButton(
+                "检查内置环境",
+                icon=ft.Icons.SETTINGS,
+                style=BSytle,
+                on_click=in_env_check,
+                height=40
+            )],spacing=5,scroll=ft.ScrollMode.AUTO),
     ], spacing=15, expand=True,scroll=ft.ScrollMode.AUTO)
     ], spacing=15, expand=True)
 
@@ -669,7 +680,7 @@ def main(page: ft.Page):
         ft.Text("关于", size=24, weight=ft.FontWeight.BOLD),
         ft.Divider(),
         ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
-        ft.Text("版本: 0.1.4测试版", size=16),
+        ft.Text("版本: 0.1.4测试版3", size=16),
         ft.Text("作者: 泠夜Soul", size=16),
         ft.ElevatedButton(
             "访问GitHub仓库",
@@ -789,7 +800,14 @@ def main(page: ft.Page):
         )
     )
     #check_for_updates(None)
-
+    if use_sys_env:
+        tmp=env.checkSysEnv()
+        if not tmp==True:
+            terminal.add_log(tmp)
+    else:    
+        tmp=env.checkEnv()
+        if not tmp==True:
+            terminal.add_log(tmp)
 
 
 ft.app(target=main, view=ft.AppView.FLET_APP_HIDDEN)
