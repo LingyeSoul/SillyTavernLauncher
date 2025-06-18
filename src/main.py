@@ -578,11 +578,17 @@ def main(page: ft.Page):
     def sys_env_check(e):
         sysenv=SysEnv()
         tmp=sysenv.checkSysEnv()
-        showMsg(f'{tmp} Git：{sysenv.get_git_path()} NodeJS：{sysenv.get_node_path()}')
+        if tmp==True:
+            showMsg(f'{tmp} Git：{sysenv.get_git_path()} NodeJS：{sysenv.get_node_path()}')
+        else:
+            showMsg(f'{tmp}')
     def in_env_check(e):
         inenv=Env()
         tmp=inenv.checkEnv()
-        showMsg(f'{tmp} Git：{inenv.get_git_path()} NodeJS：{inenv.get_node_path()}')
+        if tmp==True:
+            showMsg(f'{tmp} Git：{inenv.get_git_path()} NodeJS：{inenv.get_node_path()}')
+        else:
+            showMsg(f'{tmp}')
     # 创建设置页面
     settings_view = ft.Column([
         ft.Text("设置", size=24, weight=ft.FontWeight.BOLD),
