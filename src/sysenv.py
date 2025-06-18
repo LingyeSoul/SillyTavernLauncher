@@ -21,7 +21,7 @@ class SysEnv:
     def check_system_git(self):
         try:
             # First check if git is available
-            version_result = subprocess.run(['git', '--version'], capture_output=True, text=True)
+            version_result = subprocess.run(['git', '--version'], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
             if version_result.returncode != 0:
                 return 'Git is not installed on system'
             
@@ -37,7 +37,7 @@ class SysEnv:
 
     def check_system_node(self):
         try:
-            version_result = subprocess.run(['node', '--version'], capture_output=True, text=True)
+            version_result = subprocess.run(['node', '--version'], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
             if version_result.returncode != 0:
                 return 'Node.js is not installed on system'
             
