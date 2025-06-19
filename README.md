@@ -6,6 +6,8 @@
 
 - 一键安装SillyTavern
 - 启动/停止SillyTavern服务
+- 支持系统内安装的Git和Node.js环境
+- 支持懒人包模式，需配置env文件夹：直接将git和nodejs解压到env下即可
 - 自动检查并安装依赖项
 - 支持从GitHub更新SillyTavern
 - 支持使用内置Git安装扩展

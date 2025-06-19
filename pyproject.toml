@@ -1,15 +1,16 @@
 [project]
 name = "sillytavernlauncher"
-version = "0.1.0"
+version = "0.1.5"
 description = ""
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [
-    { name = "Flet developer", email = "you@example.com" }
+    { name = "LingyeSoul", email = "lingyesoul@qq.com" }
 ]
 dependencies = [
   "flet==0.28.3",
   "packaging>=21.0"
+  "ruamel.yaml>=0.18.13"
 ]
 
 [tool.flet]

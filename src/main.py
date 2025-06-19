@@ -7,6 +7,7 @@ import subprocess
 import threading
 import os
 import codecs
+import json
 
 
 class Terminal:
@@ -180,21 +181,28 @@ def main(page: ft.Page):
         page.window.visible=False
         page.window.destroy()
 
-    if not page.client_storage.get("patchgit"):
-        page.client_storage.set("patchgit", False)
-    patchgit = page.client_storage.get("patchgit")
-    if not page.client_storage.get("use_sys_env"):
+    # 读取配置文件
+    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+    with open(config_path, "r") as f:
+        config = json.load(f)
+    
+    if "patchgit" not in config:
+        config["patchgit"] = False
+    patchgit = config["patchgit"]
+    
+    if "use_sys_env" not in config:
         if not os.path.exists(env.base_dir):
-            page.client_storage.set("use_sys_env", True)
+            config["use_sys_env"] = True
         else:
-            page.client_storage.set("use_sys_env", False)
-    use_sys_env = page.client_storage.get("use_sys_env")
+            config["use_sys_env"] = False
+    use_sys_env = config["use_sys_env"]
     if use_sys_env:
         env=SysEnv()
-    if not page.client_storage.get("theme"):
-        page.client_storage.set("theme", "dark")
-    page.theme_mode = page.client_storage.get("theme")
-    if not page.client_storage.get("theme") == "light":
+    
+    if "theme" not in config:
+        config["theme"] = "dark"
+    page.theme_mode = config["theme"]
+    if not config["theme"] == "light":
         themeIcon=ft.Icons.SUNNY
     else:
         themeIcon=ft.Icons.MODE_NIGHT
@@ -202,11 +210,15 @@ def main(page: ft.Page):
         if page.theme_mode == "light":
             e.control.icon = "SUNNY"
             page.theme_mode = "dark"
-            page.client_storage.set("theme","dark")
+            config["theme"] = "dark"
         else:
             e.control.icon = "MODE_NIGHT"
             page.theme_mode = "light"
-            page.client_storage.set("theme","light")
+            config["theme"] = "light"
+        
+        # 保存配置
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=4)
         page.update()
 
     page.appbar = ft.AppBar(
@@ -361,7 +373,7 @@ def main(page: ft.Page):
         else:
             if git_path:
                 # 从客户端存储获取镜像设置
-                mirror_type = page.client_storage.get("github.mirror") or "github"
+                mirror_type = config.get("github", {}).get("mirror", "github")
                 if mirror_type == "github_mirror":
                     repo_url = "https://github.moeyy.xyz/https://github.com/SillyTavern/SillyTavern"
                 else:
@@ -440,80 +452,6 @@ def main(page: ft.Page):
         terminal.stop_processes()
         terminal.add_log("所有进程已停止")
 
-    def check_for_updates_in_thread():
-        import requests
-        import json
-        from urllib.parse import urlparse
-        
-        # 多个GitHub API镜像源
-        MIRRORS = [
-            "https://api.github.com",
-            "https://gh.llkk.cc/https://api.github.com",
-        ]
-        
-        # 本地版本(硬编码，实际项目中应该从配置或文件中读取)
-        local_version = "0.0.0"
-        
-        latest_version = None
-        release_url = None
-        last_error = None
-        
-        # 尝试多个镜像源
-        for mirror in MIRRORS:
-            api_url = f"{mirror}/repos/LingyeSoul/SillyTavernLauncher/releases/latest"
-            try:
-                terminal.add_log(f"正在尝试从 {urlparse(mirror).netloc} 检查更新...")
-                
-                # 获取最新发布版本
-                headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
-}
-
-                response = requests.get(api_url, timeout=15,headers=headers)
-                response.raise_for_status()
-                
-                latest_release = response.json()
-                latest_version = latest_release["tag_name"]
-                release_url = latest_release["html_url"]
-                last_error = None
-                break
-                
-            except requests.exceptions.RequestException as ex:
-                last_error = str(ex)
-                terminal.add_log(f"镜像 {urlparse(mirror).netloc} 检查失败: {str(ex)}")
-                continue
-                
-        if latest_version is None:
-            terminal.add_log(f"所有镜像源检查更新失败，最后错误: {last_error}")
-            return
-            
-        try:
-            if latest_version != local_version:
-                # 在主线程中显示更新提示对话框
-                def show_update_dialog():
-                    def open_github(e):
-                        page.launch_url(release_url, web_window_name="github_release")
-                    dig= ft.AlertDialog(
-                        title=ft.Text("发现新版本"),
-                        content=ft.Text(f"最新版本: {latest_version}\n当前版本: {local_version}"),
-                        actions=[
-                            ft.TextButton("前往下载", on_click=open_github),
-                            ft.TextButton("取消", on_click=lambda e: page.close(dig))
-                        ],
-                        actions_alignment=ft.MainAxisAlignment.END
-                    )
-                    page.open(dig)
-                    terminal.add_log(f"发现新版本 {latest_version} (当前: {local_version})")
-                
-            else:
-                terminal.add_log(f"当前已是最新版本 ({local_version})")
-                
-        except Exception as ex:
-            terminal.add_log(f"显示更新对话框失败: {str(ex)}")
-
-    def check_for_updates(e):
-        check_for_updates_in_thread()
-    
     
     def update_sillytavern(e):
         git_path = env.get_git_path()
@@ -572,16 +510,24 @@ def main(page: ft.Page):
         stCfg.save_config()
         showMsg('配置文件已保存')
     def env_changed(e):
-        page.client_storage.set('use_sys_env', e.control.value)
+        config["use_sys_env"] = e.control.value
         if e.control.value:
             use_sys_env=True
             env=SysEnv()
         else:
             use_sys_env=False
             env=Env()
+        
+        # 保存配置
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=4)
         showMsg('环境设置已保存')
+    
     def patchgit_changed(e):
-        page.client_storage.set('patchgit', e.control.value)
+        config["patchgit"] = e.control.value
+        # 保存配置
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=4)
         showMsg('设置已保存')
     def sys_env_check(e):
         sysenv=SysEnv()
@@ -609,7 +555,7 @@ def main(page: ft.Page):
                 ft.Radio(value="github", label="官方源 (github.com) - 可能较慢", ),
                 ft.Radio(value="github_mirror", label="推荐镜像 (github.moeyy.xyz) - 速度更快",),
             ], spacing=10),
-            value=page.client_storage.get("github.mirror") or "github_mirror",
+            value=config.get("github", {}).get("mirror", "github_mirror"),
             on_change=lambda e: update_mirror_setting(e.control.value)
         ),
         ft.Text("切换后新任务将立即生效", size=14, color=ft.Colors.BLUE_400),
@@ -618,7 +564,7 @@ def main(page: ft.Page):
         controls=[
         ft.Switch(
             label="使用系统环境",
-            value=page.client_storage.get("use_sys_env"),
+            value=config.get("use_sys_env", False),
             on_change=env_changed,
               ),
          ft.Switch(
@@ -662,17 +608,24 @@ def main(page: ft.Page):
     ], spacing=15, expand=True)
 
     def update_mirror_setting(mirror_type):
-        # 保存设置到客户端存储
-        page.client_storage.set("github.mirror", mirror_type)
+        # 保存设置到配置文件
+        if "github" not in config:
+            config["github"] = {}
+        config["github"]["mirror"] = mirror_type
+        
+        # 保存配置
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=4)
+            
         if (use_sys_env and patchgit) or not use_sys_env:
         # 处理gitconfig文件
             gitconfig_path = os.path.join(env.base_dir, "etc\\gitconfig")
             try:
                 import configparser
 
-                config = configparser.ConfigParser()
+                gitconfig = configparser.ConfigParser()
                 if os.path.exists(gitconfig_path):
-                    config.read(gitconfig_path)
+                    gitconfig.read(gitconfig_path)
                 
                 # 定义要添加或删除的配置
                 mirror_section = 'url "https://github.moeyy.xyz/https://github.com/"'
@@ -681,17 +634,17 @@ def main(page: ft.Page):
                 
                 if mirror_type == "github_mirror":
                     # 添加镜像配置
-                    if not config.has_section(mirror_section):
-                        config.add_section(mirror_section)
-                    config.set(mirror_section, mirror_option, mirror_value)
+                    if not gitconfig.has_section(mirror_section):
+                        gitconfig.add_section(mirror_section)
+                    gitconfig.set(mirror_section, mirror_option, mirror_value)
                 else:
                     # 删除镜像配置
-                    if config.has_section(mirror_section):
-                        config.remove_section(mirror_section)
+                    if gitconfig.has_section(mirror_section):
+                        gitconfig.remove_section(mirror_section)
                 
                 # 写入修改后的配置
                 with open(gitconfig_path, 'w') as configfile:
-                    config.write(configfile)
+                    gitconfig.write(configfile)
                     
             except Exception as e:
                 terminal.add_log(f"更新gitconfig失败: {str(e)}")
@@ -701,7 +654,7 @@ def main(page: ft.Page):
         ft.Text("关于", size=24, weight=ft.FontWeight.BOLD),
         ft.Divider(),
         ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
-        ft.Text("版本: 0.1.4", size=16),
+        ft.Text("版本: 0.1.5", size=16),
         ft.Text("作者: 泠夜Soul", size=16),
         ft.ElevatedButton(
             "访问GitHub仓库",
@@ -717,14 +670,6 @@ def main(page: ft.Page):
             style=BSytle,
             height=40
         ),
-       #ft.ElevatedButton(
-        #    "检查更新",
-       #     icon=ft.Icons.UPDATE,
-        #    tooltip="检查GitHub Release是否有新版本",
-         #   style=BSytle,
-        #    on_click=lambda e: check_for_updates(e),
-        #    height=40
-      #  )
     ], spacing=15, expand=True)
 
     # 导航栏
