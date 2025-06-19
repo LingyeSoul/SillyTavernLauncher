@@ -7,3 +7,4 @@ dist
 SillyTavernLauncher.spec
 build
 main.spec
+config.json
