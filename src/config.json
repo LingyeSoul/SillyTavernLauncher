@@ -1,8 +1,0 @@
-{
-    "patchgit": false,
-    "use_sys_env": false,
-    "theme": "dark",
-    "github": {
-        "mirror": "github_mirror"
-    }
-}

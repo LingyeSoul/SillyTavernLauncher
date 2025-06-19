@@ -182,29 +182,31 @@ def main(page: ft.Page):
         page.window.destroy()
 
     # 读取配置文件
-    if not os.path.exists(os.path.join(os.path.dirname(__file__), "config.json")):
-        with open(os.path.join(os.path.dirname(__file__), "config.json"), "w") as f:
-            default_config = {"patchgit": False,"use_sys_env": False,"theme":"dark","github":{"mirror":"github_mirror"}}
+    config_path = os.path.join(os.getcwd(),"config.json")
+    if not os.path.exists(config_path):
+    # 如果文件不存在，则创建文件并写入默认配置
+        with open(config_path, "w") as f:
+            default_config = {
+            "patchgit": False,
+            "use_sys_env": False,
+            "theme": "dark",
+            "github": {"mirror": "github_mirror"}
+        }
             json.dump(default_config, f, indent=4)
-    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+
+    # 读取config.json文件的内容
     with open(config_path, "r") as f:
         config = json.load(f)
-    
-    if "patchgit" not in config:
-        config["patchgit"] = False
+
     patchgit = config["patchgit"]
-    
-    if "use_sys_env" not in config:
-        if not os.path.exists(env.base_dir):
-            config["use_sys_env"] = True
-        else:
-            config["use_sys_env"] = False
+    if not os.path.exists(env.base_dir):
+        config["use_sys_env"] = True
+    else:
+        config["use_sys_env"] = False
     use_sys_env = config["use_sys_env"]
     if use_sys_env:
         env=SysEnv()
     
-    if "theme" not in config:
-        config["theme"] = "dark"
     page.theme_mode = config["theme"]
     if not config["theme"] == "light":
         themeIcon=ft.Icons.SUNNY
