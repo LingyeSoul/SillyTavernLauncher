@@ -182,6 +182,10 @@ def main(page: ft.Page):
         page.window.destroy()
 
     # 读取配置文件
+    if not os.path.exists(os.path.join(os.path.dirname(__file__), "config.json")):
+        with open(os.path.join(os.path.dirname(__file__), "config.json"), "w") as f:
+            default_config = {"patchgit": False,"use_sys_env": False,"theme":"dark","github":{"mirror":"github_mirror"}}
+            json.dump(default_config, f, indent=4)
     config_path = os.path.join(os.path.dirname(__file__), "config.json")
     with open(config_path, "r") as f:
         config = json.load(f)
