@@ -1,49 +1,41 @@
 # SillyTavern Launcher
 
-[![License](https://img.shields.io/github/license/LingyeSoul/SillyTavernLauncher)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/LingyeSoul/SillyTavernLauncher)](https://github.com/LingyeSoul/SillyTavernLauncher/releases)
+[![License](https://img.shields.io/github/license/LingyeSoul/SillyTavernLauncher)](LICENSE)
+[![GitHub release](https://img.shields.io/github/v/release/LingyeSoul/SillyTavernLauncher)](https://github.com/LingyeSoul/SillyTavernLauncher/releases)
 
-> 🧠 **智能启动管理器** | [SillyTavern](https://github.com/SillyTavern/SillyTavern) 的现代化GUI解决方案
+一个现代化的GUI启动器，用于管理[SillyTavern](https://github.com/SillyTavern/SillyTavern)的安装、配置和运行。
 
-## 核心优势 💎
 
-✅ 一键安装部署
-✅ 智能环境检测
-✅ 实时终端监控
-✅ 国内镜像加速
+## 功能特性
 
-## 界面预览 🖼️
+- **一键安装**：从GitHub克隆仓库并自动安装依赖项
+- **环境管理**：
+  - 支持使用系统已安装的Git/Node.js
+  - 提供懒人包模式（可直接将git和nodejs解压到env目录）
+- **服务控制**：启动/停止SillyTavern服务并实时查看终端输出
+- **智能更新**：支持从GitHub更新核心程序和依赖项
+- **扩展支持**：通过内置Git工具安装扩展插件
+- **镜像加速**：提供国内GitHub镜像源切换功能提升下载速度
+- **网络配置**：支持局域网访问设置和端口自定义
 
-<div align="center">
-  <img src="https://github.com/LingyeSoul/SillyTavernLauncher/raw/main/doc/main.png" alt="主界面" width="800"/>
-</div>
+## 技术栈
 
-## 技术栈 🧰
+- **Python 3.9+** - 核心编程语言
+- **Flet框架** - GUI开发
+- **Git** - 版本控制与仓库管理
+- **Node.js 18+** - 运行SillyTavern服务端
 
-- 🐍 Python 3.9+ - 核心编程语言
-- 🎨 Flet框架 - GUI开发
-- 📦 Git - 版本控制
-- 🌐 Node.js 18+ - 服务运行
-
-## 快速开始 🚀
+## 打包要求
 
 ```bash
-# 安装依赖
+# 安装Flet依赖
 pip install flet ruamel.yaml packaging pyinstaller
 
-# 打包命令
-build.bat
+# 运行build.bat打包
 ```
 
-## 功能特性 🌟
+## 快速开始
 
-### 环境管理
-- 自动检测系统环境变量
-- 支持内置环境模式（env目录）
-
-### 服务控制
-- 优雅启动/停止服务
-- 实时终端日志输出
-
-### 一键更新
-- GitHub检测更新
-- 支持镜像源切换
+1. 下载release中的压缩包解压
+2. 安装Git和Node.js
+3. 双击运行sillytavernlauncher.exe

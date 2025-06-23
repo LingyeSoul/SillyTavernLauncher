@@ -9,7 +9,7 @@ authors = [
 ]
 dependencies = [
   "flet==0.28.3",
-  "packaging>=21.0"
+  "packaging>=21.0",
   "ruamel.yaml>=0.18.13"
 ]
 
