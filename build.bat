@@ -1,6 +1,6 @@
 @echo off
 chcp 65001
-set /p SEMVER=请输 版本号（例如 1.0.0）: 
+set /p SEMVER=请输入版本号（例如 1.0.0）: 
 for /f "tokens=1,2,3 delims=." %%a in ("%SEMVER%") do (
     set MAJOR=%%a
     set MINOR=%%b
