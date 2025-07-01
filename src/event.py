@@ -259,13 +259,13 @@ class UiEvent():
         self.page.open(ft.SnackBar(ft.Text(msg), show_close_icon=True, duration=3000))
 
     def update_mirror_setting(self, e):
-        mirror_type = e.control.value
+        mirror_type = e.data  # DropdownM2使用data属性获取选中值
         # 保存设置到配置文件
         if "github" not in self.config:
             self.config["github"] = {}
         self.config["github"]["mirror"] = mirror_type
         
-        # 保存配置
+        # 保存配置文件
         with open(self.config_path, "w") as f:
             json.dump(self.config, f, indent=4)
             
@@ -279,27 +279,32 @@ class UiEvent():
                 if os.path.exists(gitconfig_path):
                     gitconfig.read(gitconfig_path)
                 
-                # 定义要添加或删除的配置
-                mirror_section = 'url "https://github.moeyy.xyz/https://github.com/"'
-                mirror_option = 'insteadof'
-                mirror_value = 'https://github.com/'
+                # 读取当前所有insteadof配置
+                current_mirrors = {}
+                for section in gitconfig.sections():
+                    if 'insteadof' in gitconfig[section]:
+                        target = gitconfig.get(section, 'insteadof')
+                        current_mirrors[section] = target
                 
-                if mirror_type == "github_mirror":
-                    # 添加镜像配置
+                # 精准删除旧的GitHub镜像配置
+                for section, target in current_mirrors.items():
+                    if target == "https://github.com/":
+                        gitconfig.remove_section(section)
+                
+                # 添加新镜像配置（如果需要）
+                if mirror_type != "github":
+                    mirror_url = f"https://{mirror_type}/https://github.com/"
+                    mirror_section = f'url "{mirror_url}"'
                     if not gitconfig.has_section(mirror_section):
                         gitconfig.add_section(mirror_section)
-                    gitconfig.set(mirror_section, mirror_option, mirror_value)
-                else:
-                    # 删除镜像配置
-                    if gitconfig.has_section(mirror_section):
-                        gitconfig.remove_section(mirror_section)
+                    gitconfig.set(mirror_section, "insteadof", "https://github.com/")
                 
                 # 写入修改后的配置
                 with open(gitconfig_path, 'w') as configfile:
                     gitconfig.write(configfile)
                     
-            except Exception as e:
-                self.terminal.add_log(f"更新gitconfig失败: {str(e)}")
+            except Exception as ex:
+                self.terminal.add_log(f"更新gitconfig失败: {str(ex)}")
     def execute_command(self, command: str, workdir: str = "SillyTavern"):
         import os
         import platform
