@@ -131,15 +131,34 @@ class UniUI():
                 ft.Column([
                     ft.Text("GitHub镜像源选择", size=18, weight=ft.FontWeight.BOLD),
                     ft.Text("推荐使用镜像站获得更好的下载速度", size=14, color=ft.Colors.GREY_600),
-                    ft.RadioGroup(
-                        content=ft.Column([
-                            ft.Radio(value="github", label="官方源 (github.com) - 可能较慢"),
-                            ft.Radio(value="github_mirror", label="推荐镜像 (github.moeyy.xyz) - 速度更快"),
-                        ], spacing=10),
-                        value=self.config.get("github", {}).get("mirror", "github_mirror"),
+                    ft.DropdownM2(
+                        options=[
+                            ft.dropdown.Option("github", "官方源 (github.com) - 可能较慢"),
+                            ft.dropdown.Option("github.tbedu.top", "镜像站点1 (github.tbedu.top)"),
+                            ft.dropdown.Option("github.acmsz.top", "镜像站点2 (github.acmsz.top)"),
+                            ft.dropdown.Option("gh-proxy.net", "镜像站点3 (gh-proxy.net)"),
+                            ft.dropdown.Option("tvv.tw", "镜像站点4 (tvv.tw)"),
+                            ft.dropdown.Option("gp-us.fyan.top", "镜像站点5 (gp-us.fyan.top)"),
+                            ft.dropdown.Option("hub.gitmirror.com", "镜像站点6 (hub.gitmirror.com)"),
+                            ft.dropdown.Option("gh.catmak.name", "镜像站点7 (gh.catmak.name)"),
+                            ft.dropdown.Option("github.cmsz.dpdns.org", "镜像站点8 (github.cmsz.dpdns.org)"),
+                            ft.dropdown.Option("gh.llkk.cc", "镜像站点9 (gh.llkk.cc)"),
+                            ft.dropdown.Option("ghfile.geekertao.top", "镜像站点10 (ghfile.geekertao.top)"),
+                            ft.dropdown.Option("github-whrstudio.top", "镜像站点11 (github.whrstudio.top)"),
+                            ft.dropdown.Option("github.kkproxy.dpdns.org", "镜像站点12 (github.kkproxy.dpdns.org)"),
+                            ft.dropdown.Option("gh.monlor.com", "镜像站点13 (gh.monlor.com)"),
+                            ft.dropdown.Option("goppx.com", "镜像站点14 (goppx.com)"),
+                            ft.dropdown.Option("github-proxy.lixxing.top", "镜像站点15 (github-proxy.lixxing.top)"),
+                            ft.dropdown.Option("jiashu.1win.eu.org", "镜像站点16 (jiashu.1win.eu.org)"),
+                            ft.dropdown.Option("j.1win.ggff.net", "镜像站点17 (j.1win.ggff.net)"),
+                            ft.dropdown.Option("git.yylx.win", "镜像站点18 (git.yylx.win)"),
+                            ft.dropdown.Option("j.1lin.dpdns.org", "镜像站点19 (j.1lin.dpdns.org)"),
+                            ft.dropdown.Option("gh.qninq.cn", "镜像站点20 (gh.qninq.cn)")
+                        ],
+                        value=self.config.get("github", {}).get("mirror"),
                         on_change=self.ui_event.update_mirror_setting
                     ),
-                    ft.Text("切换后新任务将立即生效", size=14, color=ft.Colors.BLUE_400),
+                    ft.Text("切换后新任务将立即生效，特别感谢Github镜像提供者", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
                     ft.Row(
                         controls=[
@@ -196,51 +215,7 @@ class UniUI():
                     ),
                 ], spacing=15, expand=True, scroll=ft.ScrollMode.AUTO)
             ], spacing=15, expand=True)
-        elif self.platform == "Android":
-            return ft.Column([
-                ft.Column([
-                    ft.Text("GitHub镜像源选择", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Text("推荐使用镜像站获得更好的下载速度", size=14, color=ft.Colors.GREY_600),
-                    ft.RadioGroup(
-                        content=ft.Column([
-                            ft.Radio(value="github", label="官方源 (github.com) - 可能较慢"),
-                            ft.Radio(value="github_mirror", label="推荐镜像 (github.moeyy.xyz) - 速度更快"),
-                        ], spacing=10),
-                        value=self.config.get("github", {}).get("mirror", "github_mirror"),
-                        on_change=self.ui_event.update_mirror_setting
-                    ),
-                    ft.Text("切换后新任务将立即生效", size=14, color=ft.Colors.BLUE_400),
-                    ft.Divider(),
-                    ft.Switch(
-                        label="启用局域网访问",
-                        value=self.stcfg.listen,
-                        on_change=self.ui_event.listen_changed,
-                    ),
-                    ft.Text("开启后自动生成whitelist.txt(如有，则不会生成)，放行192.168.*.*，关闭后不会删除", size=14, color=ft.Colors.BLUE_400),
-                    ft.Divider(),
-                    ft.TextField(
-                        label="监听端口",
-                        value=str(self.stcfg.port),
-                        hint_text="默认端口: 8000",
-                        on_change=self.ui_event.port_changed,
-                    ),
-                    ft.Divider(),
-                    ft.Text("辅助功能", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Row(
-                        controls=[
-                            ft.ElevatedButton(
-                                "检查环境",
-                                icon=ft.Icons.SETTINGS,
-                                style=self.BSytle,
-                                on_click=self.ui_event.in_env_check,
-                                height=40
-                            )
-                        ],
-                        spacing=5,
-                        scroll=ft.ScrollMode.AUTO
-                    ),
-                ], spacing=15, expand=True, scroll=ft.ScrollMode.AUTO)
-            ], spacing=15, expand=True)
+        
     def getTerminalView(self):
         if self.platform == "Windows":
             return[self.terminal.view,
@@ -283,47 +258,7 @@ class UniUI():
             expand=True 
         ),
         ]
-        elif self.platform == "Android":
-            return [self.terminal.view,
-                   ft.Row(
-            [ 
-                        ft.ElevatedButton(
-                            "安装",
-                            icon=ft.Icons.DOWNLOAD,
-                            tooltip="从仓库拉取最新版本并安装依赖",
-                            style=self.BSytle,
-                            on_click=self.ui_event.install_sillytavern,
-                            height=50,
-                        ),
-                        ft.ElevatedButton(
-                            "启动",
-                            icon=ft.Icons.PLAY_ARROW,
-                            tooltip="启动SillyTavern",
-                            style=self.BSytle,
-                            on_click=self.ui_event.start_sillytavern,
-                            height=50,
-                        ),
-                        ft.ElevatedButton(
-                            "停止",
-                            icon=ft.Icons.CANCEL,
-                            tooltip="停止SillyTavern",
-                            style=self.BSytle,
-                            on_click=self.ui_event.stop_sillytavern,
-                            height=50,
-                        ),
-                        ft.ElevatedButton(
-                            "更新",
-                            icon=ft.Icons.UPDATE,
-                            tooltip="更新到最新版本并更新依赖",
-                            style=self.BSytle,
-                            on_click=self.ui_event.update_sillytavern,
-                            height=50,
-                        ),
-                        ],
-            alignment=ft.MainAxisAlignment.CENTER,
-            expand=True 
-        ),
-        ]
+        
 
 
     def getAboutView(self):
@@ -332,7 +267,7 @@ class UniUI():
         ft.Text("关于", size=24, weight=ft.FontWeight.BOLD),
         ft.Divider(),
         ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
-        ft.Text("版本: 0.1.5", size=16),
+        ft.Text("版本: 1.0.0", size=16),
         ft.Text("作者: 泠夜Soul", size=16),
         ft.ElevatedButton(
             "访问GitHub仓库",
@@ -342,9 +277,23 @@ class UniUI():
             height=40
         ),
         ft.ElevatedButton(
+            "访问启动器官网",
+            icon=ft.Icons.OPEN_IN_BROWSER,
+            on_click=lambda e: e.page.launch_url("https://sillytavern.lingyesoul.top", web_window_name="bilibili"),
+            style=self.BSytle,
+            height=40
+        ),
+        ft.ElevatedButton(
             "访问作者B站",
             icon=ft.Icons.OPEN_IN_BROWSER,
             on_click=lambda e: e.page.launch_url("https://space.bilibili.com/298721157", web_window_name="bilibili"),
+            style=self.BSytle,
+            height=40
+        ),
+        ft.ElevatedButton(
+            "检查更新",
+            icon=ft.Icons.OPEN_IN_BROWSER,
+            on_click=lambda e: e.page.launch_url("https://sillytavern.lingyesoul.top/update.html", web_window_name="bilibili"),
             style=self.BSytle,
             height=40
         ),
@@ -407,7 +356,10 @@ class UniUI():
         if not self.ui_event.config["theme"] == "light":
             themeIcon=ft.Icons.SUNNY
         else:
-            themeIcon=ft.Icons.MODE_NIGHT
+            themeIcon=ft.Icons.MODE_NIGHT        
+        def minisize(e):
+            page.window.minimized = True
+            page.update()
         page.theme_mode = self.ui_event.config["theme"]
         page.appbar = ft.AppBar(
         #leading=ft.Icon(ft.Icons.PALETTE),
@@ -416,6 +368,7 @@ class UniUI():
         center_title=False,
         bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
         actions=[
+            ft.IconButton(ft.Icons.MINIMIZE,on_click=minisize,icon_size=30),
             ft.IconButton(icon=themeIcon,on_click=self.ui_event.switch_theme,icon_size=30),
             ft.IconButton(ft.Icons.CANCEL_OUTLINED,on_click=self.ui_event.exit_app,icon_size=30),
         ],
