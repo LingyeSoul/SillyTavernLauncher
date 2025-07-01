@@ -24,7 +24,7 @@ class UiEvent():
                     "patchgit": False,
                     "use_sys_env": False,
                     "theme": "dark",
-                    "github": {"mirror": "github_mirror"}
+                    "github": {"mirror": "gh.llkk.cc"}
                 }, f, indent=4)
         
         with open(self.config_path, "r") as f:
