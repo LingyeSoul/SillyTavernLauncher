@@ -81,13 +81,7 @@ class UiEvent():
                 self.terminal.add_log("未找到nodejs")
         else:
             if git_path:
-                # 从客户端存储获取镜像设置
-                mirror_type = self.config.get("github", {}).get("mirror", "github")
-                if mirror_type == "github_mirror":
-                    repo_url = "https://github.moeyy.xyz/https://github.com/SillyTavern/SillyTavern"
-                else:
-                    repo_url = "https://github.com/SillyTavern/SillyTavern"
-                
+                repo_url = "https://github.com/SillyTavern/SillyTavern"
                 self.terminal.add_log("正在安装SillyTavern...")
                 def on_git_complete(process):
                     if process.returncode == 0:
