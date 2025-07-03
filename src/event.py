@@ -14,22 +14,37 @@ class UiEvent():
         self.page = page
         self.terminal = terminal
         self.config_path = os.path.join(os.getcwd(),"config.json")
-        self.env = Env()
-        self.stCfg = stcfg()
-        
         # 读取配置文件
         if not os.path.exists(self.config_path):
             with open(self.config_path, "w") as f:
                 json.dump({
                     "patchgit": False,
-                    "use_sys_env": False,
+                    "use_sys_env": self.envCheck(),
                     "theme": "dark",
                     "github": {"mirror": "gh.llkk.cc"}
                 }, f, indent=4)
         
         with open(self.config_path, "r") as f:
             self.config = json.load(f)
+        use_sys_env=self.config["use_sys_env"]
+        if use_sys_env:
+            self.env=SysEnv()
+            tmp=self.env.checkSysEnv()
+            if not tmp==True:
+                self.terminal.add_log(tmp)
+        else:
+            self.env = Env()
+            tmp=self.env.checkEnv()
+            if not tmp==True:
+                self.terminal.add_log(tmp)
+        self.stCfg = stcfg()
 
+    def envCheck(self):
+        if os.path.exists(os.path.join(os.getcwd(), "env\\")):
+            return False
+        else:
+            return True
+        
     def exit_app(self, e):
         if self.terminal.is_running:
             self.terminal.stop_processes()
