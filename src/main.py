@@ -5,8 +5,7 @@ from sysenv import SysEnv
 from stconfig import stcfg
 from ui import UniUI, Terminal
 from event import UiEvent
-import os
-import json
+
 
 def main(page: ft.Page):
     page.window.center()
@@ -27,25 +26,13 @@ def main(page: ft.Page):
 
     BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
 
-    env=Env()
-    stCfg=stcfg()
-    
+   
+
     # 读取配置文件
     uniUI=UniUI(page)
     uniUI.setMainView(page)
     ui_event = UiEvent(page, uniUI.terminal)
 
-
-    
-    use_sys_env=ui_event.config["use_sys_env"]
-    if use_sys_env:
-        tmp=env.checkSysEnv()
-        if not tmp==True:
-            uniUI.terminal.add_log(tmp)
-    else:    
-        tmp=env.checkEnv()
-        if not tmp==True:
-            uniUI.terminal.add_log(tmp)
     page.window.center()
 
 
