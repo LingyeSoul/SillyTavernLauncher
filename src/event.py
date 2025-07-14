@@ -225,7 +225,9 @@ class UiEvent():
         self.showMsg('配置文件已保存')
         
     def listen_changed(self,e):
-        self.stCfg.listen = e.control.value 
+        self.stCfg.listen = e.control.value
+        if self.stCfg.listen:
+            self.stCfg.create_whitelist()
         self.stCfg.save_config()
         self.showMsg('配置文件已保存')
         
