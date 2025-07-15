@@ -81,7 +81,7 @@ class UiEvent():
                             self.terminal.add_log("依赖安装成功")
                         else:
                             self.terminal.add_log("依赖安装失败")
-                    
+                    os.remove(self.env.st_dir+"package-lock.json")
                     process = self.execute_command(
                         f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
                         "SillyTavern"
@@ -108,7 +108,7 @@ class UiEvent():
                                     self.terminal.add_log("依赖安装成功")
                                 else:
                                     self.terminal.add_log("依赖安装失败")
-                            
+                            os.remove(self.env.st_dir+"package-lock.json")
                             process = self.execute_command(
                                 f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
                                 "SillyTavern"
@@ -164,6 +164,7 @@ class UiEvent():
                 self.terminal.add_log("依赖项未安装")
         else:
             self.terminal.add_log("SillyTavern未安装")
+        
 
     def stop_sillytavern(self,e):
         self.terminal.add_log("正在停止SillyTavern进程...")
@@ -187,7 +188,7 @@ class UiEvent():
                                     self.terminal.add_log("依赖安装成功")
                                 else:
                                     self.terminal.add_log("依赖安装失败")
-                            
+                            os.remove(self.env.st_dir+"package-lock.json")
                             process = self.execute_command(
                                 f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
                                 "SillyTavern"

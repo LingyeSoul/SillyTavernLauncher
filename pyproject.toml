@@ -1,6 +1,6 @@
 [project]
 name = "sillytavernlauncher"
-version = "0.1.5"
+version = "1.0.2"
 description = ""
 readme = "README.md"
 requires-python = ">=3.9"
@@ -12,6 +12,10 @@ dependencies = [
   "packaging>=21.0",
   "ruamel.yaml>=0.18.13"
 ]
+
+[tool.flet.app.boot_screen]
+show = true
+message = "正在进行初始化"
 
 [tool.flet]
 # org name in reverse domain name notation, e.g. "com.mycompany".
