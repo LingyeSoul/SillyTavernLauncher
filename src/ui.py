@@ -88,27 +88,45 @@ class Terminal:
 
     def add_log(self, text: str):
         """线程安全的日志添加方法"""
+        import re
+        LOG_MAX_LENGTH = 1000
         try:
+            # 优先处理空值情况
+            if not text:
+                return
+            
+            # 预编译正则表达式
+            self._empty_line_pattern = re.compile(r'(\r?\n){3,}')
+            
             # 限制单条日志长度并清理多余换行
-            text = str(text)[:1000] if text else ""
-            # 使用正则合并连续空行
-            import re
-            text = re.sub(r'(\r?\n){3,}', '\n\n', text.strip())
-            new_text = ft.Text(text, selectable=True)
+            processed_text = text[:LOG_MAX_LENGTH]
+            processed_text = self._empty_line_pattern.sub('\n\n', processed_text.strip())
+            
+            # 超长日志特殊处理
+            if len(processed_text) >= LOG_MAX_LENGTH:
+                self.logs.controls.clear()
+            
+            new_text = ft.Text(processed_text, selectable=True)
             
             async def update_ui():
-                self.logs.controls.append(new_text)
-                # 更严格的日志数量限制
-                if len(self.logs.controls) > 800:
-                    self.logs.controls = self.logs.controls[-400:]
-                self.logs.scroll_to(offset=float("inf"), duration=100)
-                self.logs.update()
-            
+                try:
+                    self.logs.controls.append(new_text)
+                    # 更严格的日志数量限制
+                    MAX_LOG_ENTRIES = 800
+                    if len(self.logs.controls) > MAX_LOG_ENTRIES:
+                        self.logs.controls = self.logs.controls[-int(MAX_LOG_ENTRIES/2):]
+                    self.logs.scroll_to(offset=float("inf"), duration=100)
+                    self.logs.update()
+                except Exception as ui_error:
+                    print(f"UI更新失败: {str(ui_error)}")
+
             # 确保在主线程中更新UI
             if hasattr(self, 'view') and self.view.page is not None:
                 self.view.page.run_task(update_ui)
+        except (TypeError, IndexError, AttributeError) as e:
+            print(f"日志处理异常: {str(e)}")
         except Exception as e:
-            print(f"日志添加失败: {str(e)}")
+            print(f"未知错误: {str(e)}")
 
 class UniUI():
     def __init__(self,page):
@@ -267,7 +285,7 @@ class UniUI():
         ft.Text("关于", size=24, weight=ft.FontWeight.BOLD),
         ft.Divider(),
         ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
-        ft.Text("版本: 1.0.2", size=16),
+        ft.Text("版本: 1.0.3测试版2", size=16),
         ft.Text("作者: 泠夜Soul", size=16),
         ft.ElevatedButton(
             "访问GitHub仓库",
