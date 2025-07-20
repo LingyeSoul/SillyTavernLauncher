@@ -5,6 +5,7 @@ class Env:
     def __init__(self):
         self.base_dir = os.path.join(os.getcwd(), "env\\")
         self.git_dir = os.path.join(self.base_dir, "cmd\\")
+        self.gitroot_dir = self.base_dir
         self.node_path = self.base_dir
         self.st_dir = os.path.join(os.getcwd(), "SillyTavern\\")
     def checkEnv(self):

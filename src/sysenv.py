@@ -5,9 +5,26 @@ from packaging import version
 
 class SysEnv:
     def __init__(self):
-        self.st_dir = os.path.join(os.getcwd(), "SillyTavern\\")
+        self.base_dir = os.getcwd()
+        self.st_dir = os.path.join(self.base_dir, "SillyTavern\\")
         self.system_git_path = None
         self.system_node_path = None
+        self.gitroot_dir = self.get_git_root_dir() if self.system_git_path else None
+
+    def get_git_root_dir(self):
+        """从git.exe路径获取Git安装根目录"""
+        if self.system_git_path:
+            # 如果git.exe在cmd子目录中，返回上级目录
+            if os.path.basename(os.path.dirname(self.system_git_path)) == 'cmd':
+                return os.path.dirname(os.path.dirname(self.system_git_path))
+            # 如果git.exe在bin子目录中，返回上级目录
+            elif os.path.basename(os.path.dirname(self.system_git_path)) == 'bin':
+                return os.path.dirname(os.path.dirname(self.system_git_path))
+            # 其他情况直接返回system_git_path
+            else:
+                return self.system_git_path
+        return None
+
     def checkSysEnv(self):
         git_check = self.check_system_git()
         node_check = self.check_system_node()

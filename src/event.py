@@ -79,9 +79,40 @@ class UiEvent():
                     def on_npm_complete(process):
                         if process.returncode == 0:
                             self.terminal.add_log("依赖安装成功")
+                            self.stCfg=stcfg()
                         else:
-                            self.terminal.add_log("依赖安装失败")
-                    os.remove(self.env.st_dir+"package-lock.json")
+                            self.terminal.add_log("依赖安装失败，正在重试...")
+                            # 清理npm缓存
+                            cache_process = self.execute_command(
+                                f"\"{self.env.get_node_path()}npm\" cache clean --force",
+                                "SillyTavern"
+                            )
+                            if cache_process:
+                                cache_process.wait()
+                            # 删除node_modules
+                            node_modules_path = os.path.join(self.env.st_dir, "node_modules")
+                            if os.path.exists(node_modules_path):
+                                try:
+                                    import shutil
+                                    shutil.rmtree(node_modules_path)
+                                except Exception as ex:
+                                    self.terminal.add_log(f"删除node_modules失败: {str(ex)}")
+                            # 重新安装依赖
+                            retry_process = self.execute_command(
+                                f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
+                                "SillyTavern"
+                            )
+                            if retry_process:
+                                def on_retry_complete(p):
+                                    if p.returncode == 0:
+                                        self.terminal.add_log("依赖安装成功")
+                                    else:
+                                        self.terminal.add_log("依赖安装失败")
+                                threading.Thread(
+                                    target=lambda: (retry_process.wait(), on_retry_complete(retry_process)),
+                                    daemon=True
+                                ).start()
+                    
                     process = self.execute_command(
                         f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
                         "SillyTavern"
@@ -101,14 +132,44 @@ class UiEvent():
                 def on_git_complete(process):
                     if process.returncode == 0:
                         self.terminal.add_log("安装成功")
+                        self.stCfg=stcfg()
                         if self.env.get_node_path():
                             self.terminal.add_log("正在安装依赖...")
                             def on_npm_complete(process):
                                 if process.returncode == 0:
                                     self.terminal.add_log("依赖安装成功")
                                 else:
-                                    self.terminal.add_log("依赖安装失败")
-                            os.remove(self.env.st_dir+"package-lock.json")
+                                    self.terminal.add_log("依赖安装失败，正在重试...")
+                                    # 清理npm缓存
+                                    cache_process = self.execute_command(
+                                        f"\"{self.env.get_node_path()}npm\" cache clean --force",
+                                        "SillyTavern"
+                                    )
+                                    if cache_process:
+                                        cache_process.wait()
+                                    # 删除node_modules
+                                    node_modules_path = os.path.join(self.env.st_dir, "node_modules")
+                                    if os.path.exists(node_modules_path):
+                                        try:
+                                            import shutil
+                                            shutil.rmtree(node_modules_path)
+                                        except Exception as ex:
+                                            self.terminal.add_log(f"删除node_modules失败: {str(ex)}")
+                                    # 重新安装依赖
+                                    retry_process = self.execute_command(
+                                        f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
+                                        "SillyTavern"
+                                    )
+                                    if retry_process:
+                                        def on_retry_complete(p):
+                                            if p.returncode == 0:
+                                                self.terminal.add_log("依赖安装成功")
+                                            else:
+                                                self.terminal.add_log("依赖安装失败")
+                                        threading.Thread(
+                                            target=lambda: (retry_process.wait(), on_retry_complete(retry_process)),
+                                            daemon=True
+                                        ).start()
                             process = self.execute_command(
                                 f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
                                 "SillyTavern"
@@ -178,17 +239,50 @@ class UiEvent():
             self.terminal.add_log("正在更新SillyTavern...")
             if git_path:
                 # 执行git pull
-                def on_git_complete(process):
+                def on_git_complete(process, retry_count=0):
                     if process.returncode == 0:
                         self.terminal.add_log("Git更新成功")
                         if self.env.get_node_path():
                             self.terminal.add_log("正在安装依赖...")
-                            def on_npm_complete(process):
+                            def on_npm_complete(process, npm_retry_count=0):
                                 if process.returncode == 0:
                                     self.terminal.add_log("依赖安装成功")
                                 else:
-                                    self.terminal.add_log("依赖安装失败")
-                            os.remove(self.env.st_dir+"package-lock.json")
+                                    if npm_retry_count < 2:
+                                        self.terminal.add_log(f"依赖安装失败，正在重试... (尝试次数: {npm_retry_count + 1}/2)")
+                                        # 清理npm缓存
+                                        cache_process = self.execute_command(
+                                            f"\"{self.env.get_node_path()}npm\" cache clean --force",
+                                            "SillyTavern"
+                                        )
+                                        if cache_process:
+                                            cache_process.wait()
+                                        # 删除node_modules
+                                        node_modules_path = os.path.join(self.env.st_dir, "node_modules")
+                                        if os.path.exists(node_modules_path):
+                                            try:
+                                                import shutil
+                                                shutil.rmtree(node_modules_path)
+                                            except Exception as ex:
+                                                self.terminal.add_log(f"删除node_modules失败: {str(ex)}")
+                                        # 重新安装依赖
+                                        retry_process = self.execute_command(
+                                            f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
+                                            "SillyTavern"
+                                        )
+                                        if retry_process:
+                                            def on_retry_complete(p):
+                                                if p.returncode == 0:
+                                                    self.terminal.add_log("依赖安装成功")
+                                                else:
+                                                    self.terminal.add_log("依赖安装失败")
+                                            threading.Thread(
+                                                target=lambda: (retry_process.wait(), on_retry_complete(retry_process)),
+                                                daemon=True
+                                            ).start()
+                                    else:
+                                        self.terminal.add_log("依赖安装失败")
+                            
                             process = self.execute_command(
                                 f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
                                 "SillyTavern"
@@ -202,7 +296,22 @@ class UiEvent():
                         else:
                             self.terminal.add_log("未找到nodejs")
                     else:
-                        self.terminal.add_log("Git更新失败，跳过依赖安装")
+                        if retry_count < 2:
+                            self.terminal.add_log(f"Git更新失败，正在重试... (尝试次数: {retry_count + 1}/2)")
+                            # 重新执行git pull
+                            retry_process = self.execute_command(
+                                f'\"{git_path}git\" pull --rebase --autostash', 
+                                "SillyTavern"
+                            )
+                            if retry_process:
+                                def on_retry_complete(p):
+                                    on_git_complete(p, retry_count + 1)
+                                threading.Thread(
+                                    target=lambda: (retry_process.wait(), on_retry_complete(retry_process)),
+                                    daemon=True
+                                ).start()
+                        else:
+                            self.terminal.add_log("Git更新失败，跳过依赖安装")
                 
                 process = self.execute_command(
                     f'\"{git_path}git\" pull --rebase --autostash', 
@@ -283,73 +392,77 @@ class UiEvent():
             
         if (self.config.get("use_sys_env", False) and self.config.get("patchgit", False)) or not self.config.get("use_sys_env", False):
             # 处理gitconfig文件
-            gitconfig_path = os.path.join(self.env.base_dir, "etc\\gitconfig")
-            try:
-                import configparser
+            if self.env.git_dir and os.path.exists(self.env.git_dir):
+                gitconfig_path = os.path.join(self.env.gitroot_dir, "etc", "gitconfig")
+                try:
+                    import configparser
 
-                gitconfig = configparser.ConfigParser()
-                if os.path.exists(gitconfig_path):
-                    gitconfig.read(gitconfig_path)
-                
-                # 读取当前所有insteadof配置
-                current_mirrors = {}
-                for section in gitconfig.sections():
-                    if 'insteadof' in gitconfig[section]:
-                        target = gitconfig.get(section, 'insteadof')
-                        current_mirrors[section] = target
-                
-                # 精准删除旧的GitHub镜像配置
-                for section, target in current_mirrors.items():
-                    if target == "https://github.com/":
-                        gitconfig.remove_section(section)
-                
-                # 添加新镜像配置（如果需要）
-                if mirror_type != "github":
-                    mirror_url = f"https://{mirror_type}/https://github.com/"
-                    mirror_section = f'url "{mirror_url}"'
-                    if not gitconfig.has_section(mirror_section):
-                        gitconfig.add_section(mirror_section)
-                    gitconfig.set(mirror_section, "insteadof", "https://github.com/")
-                
-                # 写入修改后的配置
-                with open(gitconfig_path, 'w') as configfile:
-                    gitconfig.write(configfile)
+                    gitconfig = configparser.ConfigParser()
+                    if os.path.exists(gitconfig_path):
+                        gitconfig.read(gitconfig_path)
                     
-            except Exception as ex:
-                self.terminal.add_log(f"更新gitconfig失败: {str(ex)}")
+                    # 读取当前所有insteadof配置
+                    current_mirrors = {}
+                    for section in gitconfig.sections():
+                        if 'insteadof' in gitconfig[section]:
+                            target = gitconfig.get(section, 'insteadof')
+                            current_mirrors[section] = target
+                    
+                    # 精准删除旧的GitHub镜像配置
+                    for section, target in current_mirrors.items():
+                        if target == "https://github.com/":
+                            gitconfig.remove_section(section)
+                    
+                    # 添加新镜像配置（如果需要）
+                    if mirror_type != "github":
+                        mirror_url = f"https://{mirror_type}/https://github.com/"
+                        mirror_section = f'url "{mirror_url}"'
+                        if not gitconfig.has_section(mirror_section):
+                            gitconfig.add_section(mirror_section)
+                        gitconfig.set(mirror_section, "insteadof", "https://github.com/")
+                    
+                    # 写入修改后的配置
+                    with open(gitconfig_path, 'w') as configfile:
+                        gitconfig.write(configfile)
+                        
+                except Exception as ex:
+                    self.terminal.add_log(f"更新gitconfig失败: {str(ex)}")
     def execute_command(self, command: str, workdir: str = "SillyTavern"):
         import os
         import platform
-        
-        # 根据操作系统设置环境变量
-        if platform.system() == "Windows":
-            if self.config.get("use_sys_env", False):
-                full_command = f"set NODE_ENV=production && {command}"
-            else:
-                full_command = f"set NODE_ENV=production && set PATH={self.env.get_git_path()};%PATH% && {command}"
-            
-        self.terminal.add_log(f"{workdir} $ {full_command}")
         try:
-            # 确保工作目录存在
-            if not os.path.exists(workdir):
-                os.makedirs(workdir)
-            
-            # 启动进程并记录(使用进程组)
-            process = subprocess.Popen(
-                full_command,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd=workdir,
-                encoding='utf-8',
-                start_new_session=True,  # 创建新进程组
-                universal_newlines=False  # 确保返回字节流
-            )
-            self.terminal.active_processes.append({
-                'process': process,
-                'pid': process.pid,
-                'command': full_command
-            })
+        # 根据操作系统设置环境变量
+            if platform.system() == "Windows":
+                # 确保工作目录存在
+                if not os.path.exists(workdir):
+                    os.makedirs(workdir)
+                
+                # 构建环境变量字典
+                env = os.environ.copy()
+                env['NODE_ENV'] = 'production'
+                if not self.config.get("use_sys_env", False):
+                    node_path = self.env.get_node_path().replace('\\', '/')
+                    git_path = self.env.get_git_path().replace('\\', '/')
+                    env['PATH'] = f"{node_path};{git_path};{env.get('PATH', '')}"
+
+                self.terminal.add_log(f"{workdir} $ {command}")
+                # 启动进程并记录(优化Windows参数)
+                process = subprocess.Popen(
+                    command,  # 直接执行原始命令
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    cwd=workdir,
+                    encoding='utf-8',
+                    env=env,  # 使用自定义环境变量
+                    creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
+                    universal_newlines=False
+                )
+                self.terminal.active_processes.append({
+                    'process': process,
+                    'pid': process.pid,
+                    'command': command
+                })
             
             # 读取输出
             def read_output(pipe, is_stderr=False):
@@ -371,16 +484,20 @@ class UiEvent():
                         if text:
                             self.terminal.add_log(f"{text}" if is_stderr else text)
 
-                    except UnicodeDecodeError:
+                    except UnicodeDecodeError as e:
+                        # 添加空值检查
+                        if 'chunk' not in locals():
+                            continue
+                            
                         # 重置解码器
                         decoder = codecs.getincrementaldecoder('utf-8')()
                         try:
-                            # 尝试GBK解码
-                            text = chunk.decode('gbk')
+                            # 尝试GBK解码并处理可能的截断
+                            text = chunk.decode('gbk', errors='ignore')
                             self.terminal.add_log(f"[GBK解码] {text}")
                         except UnicodeDecodeError:
-                            # 最终尝试latin1解码
-                            text = chunk.decode('latin1')
+                            # 最终尝试latin1解码并处理可能的截断
+                            text = chunk.decode('latin1', errors='ignore')
                             self.terminal.add_log(f"[LATIN1解码] {text}")
 
                     except Exception as ex:
@@ -416,4 +533,3 @@ class UiEvent():
         except Exception as e:
             self.terminal.add_log(f"Error: {str(e)}")
             return None
-        

@@ -24,14 +24,11 @@ def main(page: ft.Page):
     def showMsg(v):
         page.open(ft.SnackBar(ft.Text(v),show_close_icon=True,duration=3000))
 
-    BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
+    #BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
 
-   
-
-    # 读取配置文件
     uniUI=UniUI(page)
     uniUI.setMainView(page)
-    ui_event = UiEvent(page, uniUI.terminal)
+    #ui_event = UiEvent(page, uniUI.terminal)
 
     page.window.center()
 
