@@ -48,7 +48,7 @@ class Terminal:
                 thread.join(timeout=1.0)
         
         self._output_threads = []
-        env=Env()
+        env = Env()
         # 使用平台特定方式终止进程
         for proc_info in self.active_processes[:]:  # 使用副本避免遍历时修改
             try:
@@ -56,26 +56,33 @@ class Terminal:
                 if process.poll() is None:  # 检查进程是否仍在运行
                     self.add_log(f"终止进程 {proc_info['pid']}: {proc_info['command']}")
                     
-                        # 使用PowerShell递归终止进程树
+                    # 首先使用PowerShell递归终止整个进程树
                     subprocess.run(
-                            f"powershell.exe -Command \"Get-CimInstance Win32_Process -Filter 'ParentProcessId={proc_info['pid']}' | Select-Object -ExpandProperty Handle | ForEach-Object {{ Stop-Process -Id $_ -Force }}\"",
-                            shell=True,
-                            stderr=subprocess.PIPE,
-                        )
-                        # 最终强制终止主进程
+                        f"powershell.exe -Command \"Get-CimInstance Win32_Process -Filter 'ParentProcessId={proc_info['pid']}' | Select-Object -ExpandProperty Handle | ForEach-Object {{ Stop-Process -Id $_ -Force }}\"",
+                        shell=True,
+                        stderr=subprocess.PIPE,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                    
+                    # 使用taskkill递归终止进程树
                     subprocess.run(
-                            f"taskkill /F /PID {proc_info['pid']}",
-                            shell=True,
-                            stderr=subprocess.PIPE
-                        )
+                        f"taskkill /F /T /PID {proc_info['pid']}",
+                        shell=True,
+                        stderr=subprocess.PIPE,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                    
+                    # 额外使用PowerShell按名称终止node.exe
                     subprocess.run(
-                            f"powershell.exe -Command \"Get-Process | Where-Object {{ $_.Path -eq '{env.get_node_path}\\node.exe'}} | Stop-Process -Force",
-                            shell=True,
-                            stderr=subprocess.PIPE
-                        )
+                        f"powershell.exe -Command \"Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force\"",
+                        shell=True,
+                        stderr=subprocess.PIPE,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                    
                     # 等待进程终止
                     try:
-                        process.wait(timeout=2.0)
+                        process.wait(timeout=3.0)
                     except subprocess.TimeoutExpired:
                         self.add_log(f"进程 {proc_info['pid']} 未能及时终止")
             except Exception as ex:
@@ -85,7 +92,7 @@ class Terminal:
         self.active_processes = []
         self.add_log("所有进程已终止")
         return True
-
+    
     def add_log(self, text: str):
         """线程安全的日志添加方法"""
         import re
@@ -285,7 +292,7 @@ class UniUI():
         ft.Text("关于", size=24, weight=ft.FontWeight.BOLD),
         ft.Divider(),
         ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
-        ft.Text("版本: 1.0.3", size=16),
+        ft.Text("版本: 1.0.4", size=16),
         ft.Text("作者: 泠夜Soul", size=16),
         ft.ElevatedButton(
             "访问GitHub仓库",
@@ -297,7 +304,7 @@ class UniUI():
         ft.ElevatedButton(
             "访问启动器官网",
             icon=ft.Icons.OPEN_IN_BROWSER,
-            on_click=lambda e: e.page.launch_url("https://sillytavern.lingyesoul.top", web_window_name="bilibili"),
+            on_click=lambda e: e.page.launch_url("https://sillytavern.lingyesoul.top", web_window_name="sillytavernlanuncher"),
             style=self.BSytle,
             height=40
         ),
@@ -309,9 +316,16 @@ class UniUI():
             height=40
         ),
         ft.ElevatedButton(
+            "打赏作者",
+            icon=ft.Icons.ATTACH_MONEY,
+            on_click=lambda e: e.page.launch_url("https://ifdian.net/order/create?user_id=8a03ea64ebc211ebad0e52540025c377", web_window_name="afdian"),
+            style=self.BSytle,
+            height=40
+        ),
+        ft.ElevatedButton(
             "检查更新",
-            icon=ft.Icons.OPEN_IN_BROWSER,
-            on_click=lambda e: e.page.launch_url("https://sillytavern.lingyesoul.top/update.html", web_window_name="bilibili"),
+            icon=ft.Icons.UPDATE,
+            on_click=lambda e: e.page.launch_url("https://sillytavern.lingyesoul.top/update.html", web_window_name="update"),
             style=self.BSytle,
             height=40
         ),
