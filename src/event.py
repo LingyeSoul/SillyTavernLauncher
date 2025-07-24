@@ -9,7 +9,7 @@ import subprocess
 import codecs
 
 
-class UiEvent():
+class UiEvent:
     def __init__(self, page, terminal):
         self.page = page
         self.terminal = terminal
@@ -340,6 +340,16 @@ class UiEvent():
             self.stCfg.create_whitelist()
         self.stCfg.save_config()
         self.showMsg('配置文件已保存')
+
+    def proxy_url_changed(self,e):
+        self.stCfg.proxy_url = e.control.value
+        self.stCfg.save_config()
+        self.showMsg('配置文件已保存')
+        
+    def proxy_changed(self,e):
+        self.stCfg.proxy_enabled = e.control.value
+        self.stCfg.save_config()
+        self.showMsg('配置文件已保存')
         
     def env_changed(self,e):
         self.config["use_sys_env"] = e.control.value
@@ -427,6 +437,35 @@ class UiEvent():
                         
                 except Exception as ex:
                     self.terminal.add_log(f"更新gitconfig失败: {str(ex)}")
+
+    def save_port(self, value):
+        """保存监听端口设置"""
+        try:
+            port = int(value)
+            if port < 1 or port > 65535:
+                self.showMsg("端口号必须在1-65535之间")
+                return
+            
+            self.stCfg.port = port
+            self.stCfg.save_config()
+            self.showMsg("端口设置已保存")
+        except ValueError:
+            self.showMsg("请输入有效的端口号")
+
+    def save_proxy_url(self, value):
+        """保存代理URL设置"""
+        try:
+            # 保留原有requestProxy配置结构
+            if 'requestProxy' not in self.stCfg.config_data:
+                self.stCfg.config_data['requestProxy'] = {}
+            
+            self.stCfg.proxy_url = value
+            self.stCfg.config_data['requestProxy']['url'] = value
+            self.stCfg.save_config()
+            self.showMsg("代理设置已保存")
+        except Exception as e:
+            self.showMsg(f"保存代理设置失败: {str(e)}")
+
     def execute_command(self, command: str, workdir: str = "SillyTavern"):
         import os
         import platform
