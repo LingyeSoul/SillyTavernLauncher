@@ -148,6 +148,19 @@ class UniUI():
         self.BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
         with open(config_path, "r") as f:
             self.config = json.load(f)
+        self.port_field = ft.TextField(
+            label="监听端口",
+            width= 610,
+            value=str(self.stcfg.port),
+            hint_text="默认端口: 8000",
+        )
+        self.proxy_url_field = ft.TextField(
+            label="代理URL",
+            width= 610,
+            value=str(self.stcfg.proxy_url),
+            hint_text="有效的代理URL，支持http, https, socks, socks5, socks4, pac",
+        )
+
     def getSettingView(self):
         if self.platform == "Windows":
             return ft.Column([
@@ -185,6 +198,8 @@ class UniUI():
                     ),
                     ft.Text("切换后新任务将立即生效，特别感谢Github镜像提供者", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
+                    ft.Text("环境设置", size=18, weight=ft.FontWeight.BOLD),
+                    ft.Text("懒人包请勿修改，如需修改则重启后生效", size=14, color=ft.Colors.GREY_600),
                     ft.Row(
                         controls=[
                             ft.Switch(
@@ -203,6 +218,8 @@ class UniUI():
                     ),
                     ft.Text("懒人包请勿修改，如需修改则重启后生效 | 开启后修改系统环境的Git配置文件", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
+                    ft.Text("酒馆网络设置", size=18, weight=ft.FontWeight.BOLD),
+                    ft.Text("调整酒馆网络设置，重启酒馆生效", size=14, color=ft.Colors.GREY_600),
                     ft.Switch(
                         label="启用局域网访问",
                         value=self.stcfg.listen,
@@ -210,12 +227,31 @@ class UniUI():
                     ),
                     ft.Text("开启后自动生成whitelist.txt(如有，则不会生成)，放行192.168.*.*，关闭后不会删除", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
-                    ft.TextField(
-                        label="监听端口",
-                        value=str(self.stcfg.port),
-                        hint_text="默认端口: 8000",
-                        on_change=self.ui_event.port_changed,
+                    ft.Row([
+                        self.port_field,
+                        ft.IconButton(
+                            icon=ft.Icons.SAVE,
+                            tooltip="保存端口设置",
+                            on_click=lambda e: self.ui_event.save_port(self.port_field.value)
+                        )
+                    ]),
+                    ft.Text("监听端口一般情况下不需要修改，请勿乱动", size=14, color=ft.Colors.BLUE_400),
+                    ft.Divider(),
+                    ft.Switch(
+                        label="启用请求代理",
+                        value=self.stcfg.proxy_enabled,
+                        on_change=self.ui_event.proxy_changed,
                     ),
+                    ft.Text("开启后酒馆的请求会走下方填入的代理", size=14, color=ft.Colors.BLUE_400),
+                    ft.Row([
+                        self.proxy_url_field,
+                        ft.IconButton(
+                            icon=ft.Icons.SAVE,
+                            tooltip="保存代理设置",
+                            on_click=lambda e: self.ui_event.save_proxy_url(self.proxy_url_field.value)
+                        )
+                    ]),
+                    ft.Text("请填入有效的代理URL，支持http, https, socks, socks5, socks4, pac | 上面的默认值是酒馆演示的socks5 URL", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
                     ft.Text("辅助功能", size=18, weight=ft.FontWeight.BOLD),
                     ft.Row(
@@ -292,7 +328,7 @@ class UniUI():
         ft.Text("关于", size=24, weight=ft.FontWeight.BOLD),
         ft.Divider(),
         ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
-        ft.Text("版本: 1.0.4", size=16),
+        ft.Text("版本: 1.1.0测试版", size=16),
         ft.Text("作者: 泠夜Soul", size=16),
         ft.ElevatedButton(
             "访问GitHub仓库",

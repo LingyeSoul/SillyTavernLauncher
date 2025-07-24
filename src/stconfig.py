@@ -9,6 +9,8 @@ class stcfg:
         self.whitelist_path = os.path.join(self.base_dir, "whitelist.txt")
         self.listen = False
         self.port = 8000
+        self.proxy_enabled = False
+        self.proxy_url = ""
         
         # 初始化YAML处理对象
         self.yaml = YAML()
@@ -25,6 +27,10 @@ class stcfg:
                 # 保留原始配置内容
                 self.listen = self.config_data.get('listen', False)
                 self.port = self.config_data.get('port', 8000)
+                # 加载requestProxy配置
+                request_proxy = self.config_data.get('requestProxy', {})
+                self.proxy_enabled = request_proxy.get('enabled', False)
+                self.proxy_url = request_proxy.get('url', "")
         except Exception as e:
             print(f"配置加载错误: {str(e)}")
             self.config_data = {
@@ -40,7 +46,11 @@ class stcfg:
             # 仅更新需要修改的字段
             self.config_data['listen'] = self.listen
             self.config_data['port'] = self.port
-            
+            # 保存requestProxy配置
+            if 'requestProxy' not in self.config_data:
+                self.config_data['requestProxy'] = {}
+            self.config_data['requestProxy']['enabled'] = self.proxy_enabled
+            self.config_data['requestProxy']['url'] = self.proxy_url
             
             with open(self.config_path, 'w', encoding='utf-8') as file:
                 self.yaml.dump(self.config_data, file)
