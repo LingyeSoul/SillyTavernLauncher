@@ -9,6 +9,7 @@ import os
 import subprocess
 import threading
 import codecs
+import datetime
 
 class Terminal:
     def __init__(self,page):
@@ -18,6 +19,8 @@ class Terminal:
             auto_scroll=True,
             padding=10
         )
+        # 初始化启动时间戳
+        self.launch_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         if page.platform == ft.PagePlatform.WINDOWS:
             self.view = ft.Column([
             ft.Text("终端", size=24, weight=ft.FontWeight.BOLD),
@@ -38,9 +41,6 @@ class Terminal:
     def stop_processes(self):
         """停止所有由execute_command启动的进程"""
         self.add_log("正在终止所有进程...")
-        
-        # 标记为不再运行
-        self.is_running = False
         
         # 首先停止所有输出线程
         for thread in self._output_threads:
@@ -91,6 +91,9 @@ class Terminal:
         # 清空进程列表
         self.active_processes = []
         self.add_log("所有进程已终止")
+         # 标记为不再运行
+        self.is_running = False
+
         return True
     
     def add_log(self, text: str):
@@ -108,6 +111,9 @@ class Terminal:
             # 限制单条日志长度并清理多余换行
             processed_text = text[:LOG_MAX_LENGTH]
             processed_text = self._empty_line_pattern.sub('\n\n', processed_text.strip())
+            
+            # 将日志写入文件
+            self._write_log_to_file(processed_text)
             
             # 超长日志特殊处理
             if len(processed_text) >= LOG_MAX_LENGTH:
@@ -134,6 +140,26 @@ class Terminal:
             print(f"日志处理异常: {str(e)}")
         except Exception as e:
             print(f"未知错误: {str(e)}")
+    
+    def _write_log_to_file(self, text: str):
+        """将日志写入文件"""
+        try:
+            # 创建logs目录（如果不存在）
+            logs_dir = os.path.join(os.getcwd(), "logs")
+            os.makedirs(logs_dir, exist_ok=True)
+            
+            # 生成基于启动时间戳的文件名
+            log_file_path = os.path.join(logs_dir, f"{self.launch_timestamp}.log")
+            
+            # 获取当前时间戳
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # 写入日志文件，追加模式
+            with open(log_file_path, "a", encoding="utf-8") as log_file:
+                log_file.write(f"[{timestamp}] {text}\n")
+        except Exception as e:
+            # 如果写入日志文件失败，不中断主流程，只在控制台输出错误
+            print(f"写入日志文件失败: {str(e)}")
 
 class UniUI():
     def __init__(self,page):
@@ -328,7 +354,7 @@ class UniUI():
         ft.Text("关于", size=24, weight=ft.FontWeight.BOLD),
         ft.Divider(),
         ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
-        ft.Text("版本: 1.1.0测试版", size=16),
+        ft.Text("版本: 1.1.0测试版2", size=16),
         ft.Text("作者: 泠夜Soul", size=16),
         ft.ElevatedButton(
             "访问GitHub仓库",
@@ -348,6 +374,13 @@ class UniUI():
             "访问作者B站",
             icon=ft.Icons.OPEN_IN_BROWSER,
             on_click=lambda e: e.page.launch_url("https://space.bilibili.com/298721157", web_window_name="bilibili"),
+            style=self.BSytle,
+            height=40
+        ),
+        ft.ElevatedButton(
+            "酒馆入门教程",
+            icon=ft.Icons.BOOK_ROUNDED,
+            on_click=lambda e: e.page.launch_url("https://www.yuque.com/yinsa-0wzmf/rcv7g3?", web_window_name="sillytaverntutorial"),
             style=self.BSytle,
             height=40
         ),

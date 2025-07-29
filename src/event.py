@@ -21,6 +21,7 @@ class UiEvent:
                     "patchgit": False,
                     "use_sys_env": self.envCheck(),
                     "theme": "dark",
+                    "first_run": True,
                     "github": {"mirror": "gh.llkk.cc"}
                 }, f, indent=4)
         
