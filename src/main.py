@@ -1,12 +1,8 @@
 import flet as ft
 from time import sleep
-from env import Env
-from sysenv import SysEnv
-from stconfig import stcfg
-from ui import UniUI, Terminal
-from event import UiEvent
-import json
-import os
+from ui import UniUI
+from config import ConfigManager
+from version import VersionChecker
 
 
 def main(page: ft.Page):
@@ -22,29 +18,21 @@ def main(page: ft.Page):
     page.window.min_width=800
     page.window.maximizable = False
     page.window.title_bar_hidden = True
+    version='1.2.0测试版1'
     
-    def showMsg(v):
-        page.open(ft.SnackBar(ft.Text(v),show_close_icon=True,duration=3000))
 
     # 检查是否为首次启动
     def check_first_launch():
-        config_path = os.path.join(os.getcwd(), "config.json")
+        config_manager = ConfigManager()
+        config = config_manager.config
         
-        # 检查配置文件是否存在
-        if os.path.exists(config_path):
-            try:
-                with open(config_path, "r") as f:
-                    config = json.load(f)
-                # 检查first_run参数是否存在且为True
-                if config.get("first_run", True):
-                    # 显示欢迎对话框
-                    show_welcome_dialog()
-                    # 更新配置文件，将first_run设置为False
-                    config["first_run"] = False
-                    with open(config_path, "w") as f:
-                        json.dump(config, f, indent=4)
-            except Exception as e:
-                show_welcome_dialog()
+        # 检查first_run参数是否存在且为True
+        if config.get("first_run", True):
+            # 显示欢迎对话框
+            show_welcome_dialog()
+            # 更新配置文件，将first_run设置为False
+            config_manager.set("first_run", False)
+            config_manager.save_config()
     
     # 显示欢迎对话框
     def show_welcome_dialog():
@@ -73,9 +61,19 @@ def main(page: ft.Page):
         )
         page.open(welcome_dialog)
 
+    # 检查更新
+    version_checker = VersionChecker(version,page)
+    def check_for_updates():
+        """检查更新并在有新版本时提示用户"""
+        # 在后台线程中执行检查更新操作
+        import threading
+        update_thread = threading.Thread(target=version_checker.run_check())
+        update_thread.daemon = True
+        update_thread.start()
+
     #BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
 
-    uniUI=UniUI(page)
+    uniUI=UniUI(page,version,version_checker)
     uniUI.setMainView(page)
     #ui_event = UiEvent(page, uniUI.terminal)
 
@@ -83,6 +81,12 @@ def main(page: ft.Page):
     page.update()
     check_first_launch()
     
+    # 启动时检查更新（根据设置决定是否检查）
+    config_manager = ConfigManager()
+    if config_manager.get("checkupdate", True):
+        check_for_updates()
+
+    #BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
 
 
 ft.app(target=main, view=ft.AppView.FLET_APP_HIDDEN)
