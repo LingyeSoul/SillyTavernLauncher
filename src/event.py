@@ -5,6 +5,7 @@ import flet as ft
 from env import Env
 from sysenv import SysEnv
 from stconfig import stcfg
+from config import ConfigManager
 import subprocess
 import codecs
 
@@ -13,20 +14,9 @@ class UiEvent:
     def __init__(self, page, terminal):
         self.page = page
         self.terminal = terminal
-        self.config_path = os.path.join(os.getcwd(),"config.json")
-        # 读取配置文件
-        if not os.path.exists(self.config_path):
-            with open(self.config_path, "w") as f:
-                json.dump({
-                    "patchgit": False,
-                    "use_sys_env": self.envCheck(),
-                    "theme": "dark",
-                    "first_run": True,
-                    "github": {"mirror": "gh.llkk.cc"}
-                }, f, indent=4)
+        self.config_manager = ConfigManager()
+        self.config = self.config_manager.config
         
-        with open(self.config_path, "r") as f:
-            self.config = json.load(f)
         use_sys_env=self.config["use_sys_env"]
         if use_sys_env:
             self.env=SysEnv()
@@ -56,15 +46,14 @@ class UiEvent:
         if self.page.theme_mode == "light":
             e.control.icon = "SUNNY"
             self.page.theme_mode = "dark"
-            self.config["theme"] = "dark"
+            self.config_manager.set("theme", "dark")
         else:
             e.control.icon = "MODE_NIGHT"
             self.page.theme_mode = "light"
-            self.config["theme"] = "light"
+            self.config_manager.set("theme", "light")
         
         # 保存配置
-        with open(self.config_path, "w") as f:
-            json.dump(self.config, f, indent=4)
+        self.config_manager.save_config()
         self.page.update()
 
 
@@ -200,6 +189,20 @@ class UiEvent:
                 self.terminal.add_log("Error: Git路径未正确配置")
 
     def start_sillytavern(self,e):
+        # 检查路径是否包含中文或空格
+        current_path = os.getcwd()
+        
+        # 检查是否包含中文字符（使用Python内置方法）
+        has_chinese = any('\u4e00' <= char <= '\u9fff' for char in current_path)
+        if has_chinese:
+            self.terminal.add_log("错误：路径包含中文字符，请将程序移动到不包含中文字符的路径下运行")
+            return
+            
+        # 检查是否包含空格
+        if ' ' in current_path:
+            self.terminal.add_log("错误：路径包含空格，请将程序移动到不包含空格的路径下运行")
+            return
+            
         if self.terminal.is_running:
             self.terminal.add_log("SillyTavern已经在运行中")
             return
@@ -329,6 +332,110 @@ class UiEvent:
             else:
                 self.terminal.add_log("未找到Git路径，请手动更新SillyTavern")
 
+    def update_sillytavern_with_callback(self, e):
+        """
+        更新SillyTavern并在完成后自动启动
+        """
+        git_path = self.env.get_git_path()
+        if self.env.checkST():
+            self.terminal.add_log("正在更新SillyTavern...")
+            if git_path:
+                # 执行git pull
+                def on_git_complete(process, retry_count=0):
+                    if process.returncode == 0:
+                        self.terminal.add_log("Git更新成功")
+                        if self.env.get_node_path():
+                            self.terminal.add_log("正在安装依赖...")
+                            def on_npm_complete(process, npm_retry_count=0):
+                                if process.returncode == 0:
+                                    self.terminal.add_log("依赖安装成功，正在启动SillyTavern...")
+                                    self.start_sillytavern(None)
+                                else:
+                                    if npm_retry_count < 2:
+                                        self.terminal.add_log(f"依赖安装失败，正在重试... (尝试次数: {npm_retry_count + 1}/2)")
+                                        # 清理npm缓存
+                                        cache_process = self.execute_command(
+                                            f"\"{self.env.get_node_path()}npm\" cache clean --force",
+                                            "SillyTavern"
+                                        )
+                                        if cache_process:
+                                            cache_process.wait()
+                                        # 删除node_modules
+                                        node_modules_path = os.path.join(self.env.st_dir, "node_modules")
+                                        if os.path.exists(node_modules_path):
+                                            try:
+                                                import shutil
+                                                shutil.rmtree(node_modules_path)
+                                            except Exception as ex:
+                                                self.terminal.add_log(f"删除node_modules失败: {str(ex)}")
+                                        # 重新安装依赖
+                                        retry_process = self.execute_command(
+                                            f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
+                                            "SillyTavern"
+                                        )
+                                        if retry_process:
+                                            def on_retry_complete(p):
+                                                if p.returncode == 0:
+                                                    self.terminal.add_log("依赖安装成功，正在启动SillyTavern...")
+                                                    self.start_sillytavern(None)
+                                                else:
+                                                    self.terminal.add_log("依赖安装失败，正在启动SillyTavern...")
+                                                    self.start_sillytavern(None)
+                                            threading.Thread(
+                                                target=lambda: (retry_process.wait(), on_retry_complete(retry_process)),
+                                                daemon=True
+                                            ).start()
+                                    else:
+                                        self.terminal.add_log("依赖安装失败，正在启动SillyTavern...")
+                                        self.start_sillytavern(None)
+                            
+                            process = self.execute_command(
+                                f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
+                                "SillyTavern"
+                            )
+                            
+                            if process:
+                                threading.Thread(
+                                    target=lambda: (process.wait(), on_npm_complete(process)),
+                                    daemon=True
+                                ).start()
+                        else:
+                            self.terminal.add_log("未找到nodejs，正在启动SillyTavern...")
+                            self.start_sillytavern(None)
+                    else:
+                        if retry_count < 2:
+                            self.terminal.add_log(f"Git更新失败，正在重试... (尝试次数: {retry_count + 1}/2)")
+                            # 重新执行git pull
+                            retry_process = self.execute_command(
+                                f'\"{git_path}git\" pull --rebase --autostash', 
+                                "SillyTavern"
+                            )
+                            if retry_process:
+                                def on_retry_complete(p):
+                                    on_git_complete(p, retry_count + 1)
+                                threading.Thread(
+                                    target=lambda: (retry_process.wait(), on_retry_complete(retry_process)),
+                                    daemon=True
+                                ).start()
+                        else:
+                            self.terminal.add_log("Git更新失败，跳过依赖安装，正在启动SillyTavern...")
+                            self.start_sillytavern(None)
+                
+                process = self.execute_command(
+                    f'\"{git_path}git\" pull --rebase --autostash', 
+                    "SillyTavern"
+                )
+                
+                # 添加git操作完成后的回调
+                if process:
+                    def wait_and_callback():
+                        process.wait()
+                        on_git_complete(process)
+                    
+                    threading.Thread(target=wait_and_callback, daemon=True).start()
+            else:
+                self.terminal.add_log("未找到Git路径，请手动更新SillyTavern，正在启动...")
+                self.start_sillytavern(None)
 
     def port_changed(self,e):
         self.stCfg.port = e.control.value
@@ -353,22 +460,22 @@ class UiEvent:
         self.showMsg('配置文件已保存')
         
     def env_changed(self,e):
-        self.config["use_sys_env"] = e.control.value
-        if e.control.value:
+        use_sys_env = e.control.value
+        self.config_manager.set("use_sys_env", use_sys_env)
+        if use_sys_env:
             self.env = SysEnv()
         else:
             self.env = Env()
         
         # 保存配置
-        with open(self.config_path, "w") as f:
-            json.dump(self.config, f, indent=4)
+        self.config_manager.save_config()
         self.showMsg('环境设置已保存')
     
     def patchgit_changed(self,e):
-        self.config["patchgit"] = e.control.value
+        patchgit = e.control.value
+        self.config_manager.set("patchgit", patchgit)
         # 保存配置
-        with open(self.config_path, "w") as f:
-            json.dump(self.config, f, indent=4)
+        self.config_manager.save_config()
         self.showMsg('设置已保存')
         
     def sys_env_check(self,e):
@@ -387,21 +494,38 @@ class UiEvent:
         else:
             self.showMsg(f'{tmp}')
             
+    def checkupdate_changed(self, e):
+        """
+        处理自动检查更新设置变更
+        """
+        checkupdate = e.control.value
+        self.config_manager.set("checkupdate", checkupdate)
+        # 保存配置
+        self.config_manager.save_config()
+        self.showMsg('设置已保存')
+
+    def stcheckupdate_changed(self, e):
+        """
+        处理酒馆自动检查更新设置变更
+        """
+        checkupdate = e.control.value
+        self.config_manager.set("stcheckupdate", checkupdate)
+        # 保存配置
+        self.config_manager.save_config()
+        self.showMsg('设置已保存')
+
     def showMsg(self, msg):
         self.page.open(ft.SnackBar(ft.Text(msg), show_close_icon=True, duration=3000))
 
     def update_mirror_setting(self, e):
         mirror_type = e.data  # DropdownM2使用data属性获取选中值
         # 保存设置到配置文件
-        if "github" not in self.config:
-            self.config["github"] = {}
-        self.config["github"]["mirror"] = mirror_type
+        self.config_manager.set("github.mirror", mirror_type)
         
         # 保存配置文件
-        with open(self.config_path, "w") as f:
-            json.dump(self.config, f, indent=4)
+        self.config_manager.save_config()
             
-        if (self.config.get("use_sys_env", False) and self.config.get("patchgit", False)) or not self.config.get("use_sys_env", False):
+        if (self.config_manager.get("use_sys_env", False) and self.config_manager.get("patchgit", False)) or not self.config_manager.get("use_sys_env", False):
             # 处理gitconfig文件
             if self.env.git_dir and os.path.exists(self.env.git_dir):
                 gitconfig_path = os.path.join(self.env.gitroot_dir, "etc", "gitconfig")
@@ -467,6 +591,16 @@ class UiEvent:
         except Exception as e:
             self.showMsg(f"保存代理设置失败: {str(e)}")
 
+    def log_changed(self, e):
+        """处理日志开关变化事件"""
+        log_enabled = e.control.value
+        self.config_manager.set("log", log_enabled)
+        # 更新终端的日志设置
+        self.terminal.update_log_setting(log_enabled)
+        # 保存配置
+        self.config_manager.save_config()
+        self.showMsg('日志设置已保存')
+
     def execute_command(self, command: str, workdir: str = "SillyTavern"):
         import os
         import platform
@@ -480,7 +614,7 @@ class UiEvent:
                 # 构建环境变量字典
                 env = os.environ.copy()
                 env['NODE_ENV'] = 'production'
-                if not self.config.get("use_sys_env", False):
+                if not self.config_manager.get("use_sys_env", False):
                     node_path = self.env.get_node_path().replace('\\', '/')
                     git_path = self.env.get_git_path().replace('\\', '/')
                     env['PATH'] = f"{node_path};{git_path};{env.get('PATH', '')}"
@@ -573,3 +707,80 @@ class UiEvent:
         except Exception as e:
             self.terminal.add_log(f"Error: {str(e)}")
             return None
+
+    def check_and_start_sillytavern(self, e):
+        """
+        检查本地和远程仓库的差异，如果没有差别就启动，有差别就先更新再启动
+        """
+        git_path = self.env.get_git_path()
+        if not self.env.checkST():
+            self.terminal.add_log("SillyTavern未安装，请先安装")
+            return
+
+        self.terminal.add_log("正在检查更新...")
+        if git_path:
+            def on_git_fetch_complete(process):
+                if process.returncode == 0:
+                    self.terminal.add_log("正在检查release分支状态...")
+                    # 检查本地release分支与远程release分支的差异
+                    status_process = self.execute_command(f'\"{git_path}git\" status -uno')
+
+                    if status_process:
+                        def on_status_complete(p):
+                            # 使用git diff检查本地和远程release分支的差异
+                            try:
+                                diff_process = subprocess.run(
+                                    f'\"{git_path}git\" diff release..origin/release',
+                                    shell=True,
+                                    capture_output=True,
+                                    text=True,
+                                    cwd="SillyTavern",
+                                    creationflags=subprocess.CREATE_NO_WINDOW,
+                                    encoding='utf-8',
+                                    errors='ignore'  # 忽略编码错误
+                                )
+                                
+                                # 检查diff_process是否成功执行
+                                if diff_process.returncode == 0 and diff_process.stdout is not None:
+                                    # 如果没有差异，则diff_process.stdout为空
+                                    if not diff_process.stdout.strip():
+                                        self.terminal.add_log("已是最新版本，正在启动SillyTavern...")
+                                        self.start_sillytavern(None)
+                                    else:
+                                        self.terminal.add_log("检测到新版本，正在更新...")
+                                        # 更新完成后启动SillyTavern
+                                        self.update_sillytavern_with_callback(None)
+                                else:
+                                    # 如果git diff命令执行失败，默认执行更新
+                                    self.terminal.add_log("检查更新状态时遇到问题，正在更新...")
+                                    self.update_sillytavern_with_callback(None)
+                            except Exception as ex:
+                                # 如果出现异常，默认执行更新以确保程序正常运行
+                                self.terminal.add_log(f"检查更新时出错: {str(ex)}，正在更新...")
+                                self.update_sillytavern_with_callback(None)
+
+                        threading.Thread(
+                            target=lambda: (status_process.wait(), on_status_complete(status_process)),
+                            daemon=True
+                        ).start()
+                    else:
+                        self.terminal.add_log("无法执行状态检查命令，直接启动SillyTavern...")
+                        self.start_sillytavern(None)
+                else:
+                    self.terminal.add_log("检查更新失败，直接启动SillyTavern...")
+                    self.start_sillytavern(None)
+
+            # 获取所有分支的更新，特别是release分支
+            fetch_process = self.execute_command(f'\"{git_path}git\" fetch --all')
+
+            if fetch_process:
+                threading.Thread(
+                    target=lambda: (fetch_process.wait(), on_git_fetch_complete(fetch_process)),
+                    daemon=True
+                ).start()
+            else:
+                self.terminal.add_log("执行更新检查命令失败，直接启动SillyTavern...")
+                self.start_sillytavern(None)
+        else:
+            self.terminal.add_log("未找到Git路径，直接启动SillyTavern...")
+            self.start_sillytavern(None)

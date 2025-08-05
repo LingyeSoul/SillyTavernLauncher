@@ -4,11 +4,9 @@ from env import Env
 from sysenv import SysEnv
 from stconfig import stcfg
 from event import UiEvent
-import json
+from config import ConfigManager
 import os
 import subprocess
-import threading
-import codecs
 import datetime
 
 class Terminal:
@@ -36,8 +34,14 @@ class Terminal:
         self.active_processes = []
         self.is_running = False  # 添加运行状态标志
         self._output_threads = []  # 存储输出处理线程
+        # 读取配置文件中的日志设置
+        config_manager = ConfigManager()
+        self.enable_logging = config_manager.get("log", True)
 
-    
+    def update_log_setting(self, enabled: bool):
+        """更新日志设置"""
+        self.enable_logging = enabled
+
     def stop_processes(self):
         """停止所有由execute_command启动的进程"""
         self.add_log("正在终止所有进程...")
@@ -97,7 +101,7 @@ class Terminal:
         return True
     
     def add_log(self, text: str):
-        """线程安全的日志添加方法"""
+        """线程安全的日志添加方法"""  
         import re
         LOG_MAX_LENGTH = 1000
         try:
@@ -143,37 +147,40 @@ class Terminal:
     
     def _write_log_to_file(self, text: str):
         """将日志写入文件"""
-        try:
-            # 创建logs目录（如果不存在）
-            logs_dir = os.path.join(os.getcwd(), "logs")
-            os.makedirs(logs_dir, exist_ok=True)
-            
-            # 生成基于启动时间戳的文件名
-            log_file_path = os.path.join(logs_dir, f"{self.launch_timestamp}.log")
-            
-            # 获取当前时间戳
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            # 写入日志文件，追加模式
-            with open(log_file_path, "a", encoding="utf-8") as log_file:
-                log_file.write(f"[{timestamp}] {text}\n")
-        except Exception as e:
-            # 如果写入日志文件失败，不中断主流程，只在控制台输出错误
-            print(f"写入日志文件失败: {str(e)}")
+        # 检查是否启用日志输出
+        if self.enable_logging:
+            try:
+                # 创建logs目录（如果不存在）
+                logs_dir = os.path.join(os.getcwd(), "logs")
+                os.makedirs(logs_dir, exist_ok=True)
+                
+                # 生成基于启动时间戳的文件名
+                log_file_path = os.path.join(logs_dir, f"{self.launch_timestamp}.log")
+                
+                # 获取当前时间戳
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                # 写入日志文件，追加模式
+                with open(log_file_path, "a", encoding="utf-8") as log_file:
+                    log_file.write(f"[{timestamp}] {text}\n")
+            except Exception as e:
+                # 如果写入日志文件失败，不中断主流程，只在控制台输出错误
+                print(f"写入日志文件失败: {str(e)}")
 
 class UniUI():
-    def __init__(self,page):
+    def __init__(self,page,ver,version_checker):
         self.page = page
         self.env = Env()
+        self.version_checker = version_checker
+        self.version = ver
         self.sysenv = SysEnv()
         self.stcfg = stcfg()
         self.platform = platform.system()
         self.terminal = Terminal(page)
-        config_path = os.path.join(os.getcwd(),"config.json")
+        self.config_manager = ConfigManager()
+        self.config = self.config_manager.config
         self.ui_event = UiEvent(self.page, self.terminal)
         self.BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
-        with open(config_path, "r") as f:
-            self.config = json.load(f)
         self.port_field = ft.TextField(
             label="监听端口",
             width= 610,
@@ -198,28 +205,14 @@ class UniUI():
                     ft.DropdownM2(
                         options=[
                             ft.dropdown.Option("github", "官方源 (github.com) - 可能较慢"),
-                            ft.dropdown.Option("github.tbedu.top", "镜像站点1 (github.tbedu.top)"),
-                            ft.dropdown.Option("github.acmsz.top", "镜像站点2 (github.acmsz.top)"),
-                            ft.dropdown.Option("gh-proxy.net", "镜像站点3 (gh-proxy.net)"),
-                            ft.dropdown.Option("tvv.tw", "镜像站点4 (tvv.tw)"),
-                            ft.dropdown.Option("gp-us.fyan.top", "镜像站点5 (gp-us.fyan.top)"),
-                            ft.dropdown.Option("hub.gitmirror.com", "镜像站点6 (hub.gitmirror.com)"),
-                            ft.dropdown.Option("gh.catmak.name", "镜像站点7 (gh.catmak.name)"),
-                            ft.dropdown.Option("github.cmsz.dpdns.org", "镜像站点8 (github.cmsz.dpdns.org)"),
-                            ft.dropdown.Option("gh.llkk.cc", "镜像站点9 (gh.llkk.cc)"),
-                            ft.dropdown.Option("ghfile.geekertao.top", "镜像站点10 (ghfile.geekertao.top)"),
-                            ft.dropdown.Option("github-whrstudio.top", "镜像站点11 (github.whrstudio.top)"),
-                            ft.dropdown.Option("github.kkproxy.dpdns.org", "镜像站点12 (github.kkproxy.dpdns.org)"),
-                            ft.dropdown.Option("gh.monlor.com", "镜像站点13 (gh.monlor.com)"),
-                            ft.dropdown.Option("goppx.com", "镜像站点14 (goppx.com)"),
-                            ft.dropdown.Option("github-proxy.lixxing.top", "镜像站点15 (github-proxy.lixxing.top)"),
-                            ft.dropdown.Option("jiashu.1win.eu.org", "镜像站点16 (jiashu.1win.eu.org)"),
-                            ft.dropdown.Option("j.1win.ggff.net", "镜像站点17 (j.1win.ggff.net)"),
-                            ft.dropdown.Option("git.yylx.win", "镜像站点18 (git.yylx.win)"),
-                            ft.dropdown.Option("j.1lin.dpdns.org", "镜像站点19 (j.1lin.dpdns.org)"),
-                            ft.dropdown.Option("gh.qninq.cn", "镜像站点20 (gh.qninq.cn)")
+                            ft.dropdown.Option("gh.llkk.cc", "镜像站点1 (gh.llkk.cc)"),
+                            ft.dropdown.Option("ghfile.geekertao.top", "镜像站点2 (ghfile.geekertao.top)"),
+                            ft.dropdown.Option("gh.dpik.top", "镜像站点3 (gh.dpik.top)"),
+                            ft.dropdown.Option("github.dpik.top", "镜像站点4 (github.dpik.top)"),
+                            ft.dropdown.Option("github.acmsz.top", "镜像站点5 (github.acmsz.top)"),
+                            ft.dropdown.Option("git.yylx.win", "镜像站点6 (git.yylx.win)"),
                         ],
-                        value=self.config.get("github", {}).get("mirror"),
+                        value=self.config_manager.get("github.mirror"),
                         on_change=self.ui_event.update_mirror_setting
                     ),
                     ft.Text("切换后新任务将立即生效，特别感谢Github镜像提供者", size=14, color=ft.Colors.BLUE_400),
@@ -230,12 +223,12 @@ class UniUI():
                         controls=[
                             ft.Switch(
                                 label="使用系统环境",
-                                value=self.config.get("use_sys_env", False),
+                                value=self.config_manager.get("use_sys_env", False),
                                 on_change=self.ui_event.env_changed,
                             ),
                             ft.Switch(
                                 label="启用修改Git配置文件",
-                                value=self.config.get("patchgit", False),
+                                value=self.config_manager.get("patchgit", False),
                                 on_change=self.ui_event.patchgit_changed,
                             )
                         ],
@@ -252,7 +245,6 @@ class UniUI():
                         on_change=self.ui_event.listen_changed,
                     ),
                     ft.Text("开启后自动生成whitelist.txt(如有，则不会生成)，放行192.168.*.*，关闭后不会删除", size=14, color=ft.Colors.BLUE_400),
-                    ft.Divider(),
                     ft.Row([
                         self.port_field,
                         ft.IconButton(
@@ -262,7 +254,6 @@ class UniUI():
                         )
                     ]),
                     ft.Text("监听端口一般情况下不需要修改，请勿乱动", size=14, color=ft.Colors.BLUE_400),
-                    ft.Divider(),
                     ft.Switch(
                         label="启用请求代理",
                         value=self.stcfg.proxy_enabled,
@@ -277,7 +268,27 @@ class UniUI():
                             on_click=lambda e: self.ui_event.save_proxy_url(self.proxy_url_field.value)
                         )
                     ]),
-                    ft.Text("请填入有效的代理URL，支持http, https, socks, socks5, socks4, pac | 上面的默认值是酒馆演示的socks5 URL", size=14, color=ft.Colors.BLUE_400),
+                    ft.Text("请填入有效的代理URL，支持http, https, socks, socks5, socks4, pac", size=14, color=ft.Colors.BLUE_400),
+                    ft.Divider(),
+                    ft.Text("启动器功能设置", size=18, weight=ft.FontWeight.BOLD),
+                    ft.Switch(
+                        label="启用日志",
+                        value=self.config_manager.get("log", True),
+                        on_change=self.ui_event.log_changed,
+                    ),
+                    ft.Text("开启后会在logs文件夹生成每次运行时的终端日志，在反馈时可以发送日志。", size=14, color=ft.Colors.BLUE_400),
+                    ft.Switch(
+                        label="自动检查启动器更新",
+                        value=self.config_manager.get("checkupdate", True),
+                        on_change=self.ui_event.checkupdate_changed,
+                    ),
+                    ft.Text("开启后在每次启动启动器时会自动检查更新并提示(启动器并不会自动安装更新，请手动下载并更新)", size=14, color=ft.Colors.BLUE_400),
+                    ft.Switch(
+                        label="自动检查酒馆更新",
+                        value=self.config_manager.get("stcheckupdate", True),
+                        on_change=self.ui_event.stcheckupdate_changed,
+                    ),
+                    ft.Text("开启后在每次启动酒馆时先进行更新操作再启动酒馆", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
                     ft.Text("辅助功能", size=18, weight=ft.FontWeight.BOLD),
                     ft.Row(
@@ -321,7 +332,7 @@ class UniUI():
                             icon=ft.Icons.PLAY_ARROW,
                             tooltip="启动SillyTavern",
                             style=self.BSytle,
-                            on_click=self.ui_event.start_sillytavern,
+                            on_click=self.ui_event.check_and_start_sillytavern if self.config_manager.get('stcheckupdate', True) else self.ui_event.start_sillytavern,
                             height=50,
                         ),
                         ft.ElevatedButton(
@@ -349,12 +360,19 @@ class UniUI():
 
 
     def getAboutView(self):
+        # 创建版本检查函数
+        def check_for_updates(e):
+            import threading
+            update_thread = threading.Thread(target=self.version_checker.run_check())
+            update_thread.daemon = True
+            update_thread.start()
+
         if self.platform == "Windows":
             return ft.Column([
         ft.Text("关于", size=24, weight=ft.FontWeight.BOLD),
         ft.Divider(),
         ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
-        ft.Text("版本: 1.1.0", size=16),
+        ft.Text(value=f"版本: {self.version}", size=16),
         ft.Text("作者: 泠夜Soul", size=16),
         ft.ElevatedButton(
             "访问GitHub仓库",
@@ -394,7 +412,7 @@ class UniUI():
         ft.ElevatedButton(
             "检查更新",
             icon=ft.Icons.UPDATE,
-            on_click=lambda e: e.page.launch_url("https://sillytavern.lingyesoul.top/update.html", web_window_name="update"),
+            on_click=check_for_updates,
             style=self.BSytle,
             height=40
         ),
@@ -454,14 +472,14 @@ class UniUI():
         )
         
     # 设置主题图标
-        if not self.ui_event.config["theme"] == "light":
+        if not self.config_manager.get("theme") == "light":
             themeIcon=ft.Icons.SUNNY
         else:
             themeIcon=ft.Icons.MODE_NIGHT        
         def minisize(e):
             page.window.minimized = True
             page.update()
-        page.theme_mode = self.ui_event.config["theme"]
+        page.theme_mode = self.config_manager.get("theme")
         page.appbar = ft.AppBar(
         #leading=ft.Icon(ft.Icons.PALETTE),
         leading_width=40,
@@ -478,4 +496,4 @@ class UniUI():
             if e.data == "close":
                 self.ui_event.exit_app(e)
         page.window.prevent_close = True
-        page.window.on_event = window_event 
+        page.window.on_event = window_event
