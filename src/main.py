@@ -18,7 +18,7 @@ def main(page: ft.Page):
     page.window.min_width=800
     page.window.maximizable = False
     page.window.title_bar_hidden = True
-    version='1.2.0测试版1'
+    version='1.2.0'
     
 
     # 检查是否为首次启动
