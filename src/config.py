@@ -14,8 +14,6 @@ class ConfigManager:
             self.config_path = os.path.join(os.getcwd(), "config.json")
         else:
             self.config_path = config_path
-            
-        self.config = self.load_config()
         self.default_config = {
                 "patchgit": False,
                 "use_sys_env": self._detect_env_type(),
@@ -25,7 +23,10 @@ class ConfigManager:
                 "log": True,
                 "checkupdate": True,
                 "stcheckupdate": False,
-            }
+            }   
+        self.config = self.load_config()
+        
+        
     def load_config(self):
         """
         加载配置文件
