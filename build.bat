@@ -20,7 +20,7 @@ flet pack src/main.py ^
   --product-name "%PRODUCT_NAME%" ^
   --file-description "%APP_NAME% %PRODUCT_NAME%" ^
   --product-version "%SEMVER%" ^
-  --file-version "%MAJOR%.%MINOR%.%PATCH%.0" ^
+  --file-version "%MAJOR%.%MINOR%.%PATCH%" ^
   --company-name "%COMPANY_NAME%" ^
   --copyright "Copyright (c) 2025 LingyeSoul" ^
   --onedir ^

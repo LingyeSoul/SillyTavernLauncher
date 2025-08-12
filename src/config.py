@@ -16,36 +16,7 @@ class ConfigManager:
             self.config_path = config_path
             
         self.config = self.load_config()
-    
-    def load_config(self):
-        """
-        加载配置文件
-        
-        Returns:
-            dict: 配置字典
-        """
-        # 如果配置文件不存在，创建默认配置
-        if not os.path.exists(self.config_path):
-            default_config = {
-                "patchgit": False,
-                "use_sys_env": self._detect_env_type(),
-                "theme": "dark",
-                "first_run": True,
-                "github": {"mirror": "gh.llkk.cc"},
-                "log": True,
-                "checkupdate": True,
-                "stcheckupdate": True,
-            }
-            self.save_config(default_config)
-            return default_config
-        
-        # 读取现有配置
-        try:
-            with open(self.config_path, "r") as f:
-                return json.load(f)
-        except Exception as e:
-            # 如果读取失败，返回默认配置
-            default_config = {
+        self.default_config = {
                 "patchgit": False,
                 "use_sys_env": self._detect_env_type(),
                 "theme": "dark",
@@ -55,7 +26,26 @@ class ConfigManager:
                 "checkupdate": True,
                 "stcheckupdate": False,
             }
-            return default_config
+    def load_config(self):
+        """
+        加载配置文件
+        
+        Returns:
+            dict: 配置字典
+        """
+        # 如果配置文件不存在，创建默认配置
+        if not os.path.exists(self.config_path):
+
+            self.save_config(self.default_config)
+            return self.default_config
+        
+        # 读取现有配置
+        try:
+            with open(self.config_path, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            # 如果读取失败，返回默认配置
+            return self.default_config
     
     def save_config(self, config_data=None):
         """
