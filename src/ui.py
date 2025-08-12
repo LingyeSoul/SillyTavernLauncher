@@ -220,12 +220,9 @@ class Terminal:
                 # 获取当前时间戳
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
-                # 移除ANSI颜色代码
-                clean_text = re.sub(r'\x1b\[[0-9;]*m', '', text)
-                
                 # 写入日志文件，追加模式
                 with open(log_file_path, "a", encoding="utf-8") as log_file:
-                    log_file.write(f"[{timestamp}] {clean_text}\n")
+                    log_file.write(f"[{timestamp}] {text}\n")
             except Exception as e:
                 # 如果写入日志文件失败，不中断主流程，只在控制台输出错误
                 print(f"写入日志文件失败: {str(e)}")
