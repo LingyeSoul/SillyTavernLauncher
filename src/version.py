@@ -109,22 +109,97 @@ class VersionChecker:
         Returns:
             int: 1表示本地版本更新，-1表示远程版本更新，0表示版本相同
         """
-        # 简单的版本比较实现
-        # 移除版本号中的"测试版"等中文字符
-        local_clean = local_version.replace("测试版", "").replace("测试版", "")
-        remote_clean = remote_version.replace("测试版", "").replace("测试版", "")
-        local_clean = local_version.replace("v", "").replace("v", "")
-        remote_clean = remote_version.replace("v", "").replace("v", "")
+        import re
         
-        # 如果版本号相同
-        if local_clean == remote_clean:
-            if local_version != remote_version:
-                return -1
-            return 0
-        elif local_clean > remote_clean:
-            return 1
+        # 移除版本号中的前缀"v"
+        local_clean = local_version.replace("v", "")
+        remote_clean = remote_version.replace("v", "")
+        
+        # 使用正则表达式分离版本号和可能的后缀（如"测试版"或"测试版12"）
+        # 匹配主要版本号（数字和点）以及可选的后缀部分
+        local_match = re.match(r'^(\d+(?:\.\d+)*)\s*(.*)$', local_clean)
+        remote_match = re.match(r'^(\d+(?:\.\d+)*)\s*(.*)$', remote_clean)
+        
+        if local_match:
+            local_main = local_match.group(1)
+            local_suffix = local_match.group(2)
         else:
+            # 如果没有匹配到标准格式，将整个字符串作为主要版本号
+            local_main = local_clean
+            local_suffix = ""
+            
+        if remote_match:
+            remote_main = remote_match.group(1)
+            remote_suffix = remote_match.group(2)
+        else:
+            # 如果没有匹配到标准格式，将整个字符串作为主要版本号
+            remote_main = remote_clean
+            remote_suffix = ""
+        
+        # 如果主要版本号不同，按主要版本号比较
+        if local_main != remote_main:
+            # 分割版本号的各部分进行比较
+            local_nums = [int(x) for x in local_main.split(".") if x.isdigit()]
+            remote_nums = [int(x) for x in remote_main.split(".") if x.isdigit()]
+            
+            # 逐个比较版本号的每个部分
+            for i in range(max(len(local_nums), len(remote_nums))):
+                local_num = local_nums[i] if i < len(local_nums) else 0
+                remote_num = remote_nums[i] if i < len(remote_nums) else 0
+                
+                if local_num > remote_num:
+                    return 1
+                elif local_num < remote_num:
+                    return -1
+        
+        # 主要版本号相同的情况下，检查后缀
+        local_has_suffix = len(local_suffix) > 0
+        remote_has_suffix = len(remote_suffix) > 0
+        
+        # 如果本地有后缀而远程没有，则远程版本更新
+        if local_has_suffix and not remote_has_suffix:
             return -1
+        # 如果远程有后缀而本地没有，则本地版本更新
+        elif not local_has_suffix and remote_has_suffix:
+            return 1
+        # 如果两者都有后缀，则比较后缀
+        elif local_has_suffix and remote_has_suffix:
+            # 如果都是测试版，比较测试版号
+            local_beta_match = re.match(r'^测试版\s*(\d*)$', local_suffix)
+            remote_beta_match = re.match(r'^测试版\s*(\d*)$', remote_suffix)
+            
+            # 如果都是测试版格式
+            if local_beta_match and remote_beta_match:
+                local_beta_num = local_beta_match.group(1)
+                remote_beta_num = remote_beta_match.group(1)
+                
+                # 如果都有测试版号，则比较测试版号
+                if local_beta_num and remote_beta_num:
+                    if int(local_beta_num) > int(remote_beta_num):
+                        return 1
+                    elif int(local_beta_num) < int(remote_beta_num):
+                        return -1
+                    else:
+                        return 0
+                # 如果一个有测试版号，另一个没有，则有测试版号的更新
+                elif local_beta_num and not remote_beta_num:
+                    return 1
+                elif not local_beta_num and remote_beta_num:
+                    return -1
+                # 如果都没有测试版号，则相同
+                else:
+                    return 0
+            # 如果后缀不同，则简单比较字符串
+            else:
+                if local_suffix < remote_suffix:
+                    return -1
+                elif local_suffix > remote_suffix:
+                    return 1
+                else:
+                    return 0
+        # 如果两者都没有后缀，则版本相同
+        else:
+            return 0
 
     def check_for_updates(self):
         """

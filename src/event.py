@@ -618,6 +618,9 @@ class UiEvent:
                     node_path = self.env.get_node_path().replace('\\', '/')
                     git_path = self.env.get_git_path().replace('\\', '/')
                     env['PATH'] = f"{node_path};{git_path};{env.get('PATH', '')}"
+                
+                # 添加ANSI颜色支持
+                env['FORCE_COLOR'] = '1'
 
                 self.terminal.add_log(f"{workdir} $ {command}")
                 # 启动进程并记录(优化Windows参数)
@@ -646,6 +649,7 @@ class UiEvent:
                     try:
                         # 明确读取字节数据
                         chunk = pipe.readline()
+                        # 如果读取到空字节且管道已关闭，则退出循环
                         if not chunk:
                             break
 
@@ -654,25 +658,32 @@ class UiEvent:
                             chunk = chunk.encode('utf-8', errors='replace')
 
                         # 优先尝试UTF-8解码
-                        text = decoder.decode(chunk)
+                        text = decoder.decode(chunk, final=False)
                         if text:
-                            self.terminal.add_log(f"{text}" if is_stderr else text)
+                            # 清理输出内容，移除末尾的换行符以便统一处理
+                            clean_text = text.rstrip('\r\n')
+                            if clean_text:  # 只有当文本非空时才添加日志
+                                self.terminal.add_log(f"{clean_text}" if is_stderr else clean_text)
 
                     except UnicodeDecodeError as e:
                         # 添加空值检查
-                        if 'chunk' not in locals():
+                        if 'chunk' not in locals() or not chunk:
                             continue
                             
                         # 重置解码器
                         decoder = codecs.getincrementaldecoder('utf-8')()
                         try:
-                            # 尝试GBK解码并处理可能的截断
-                            text = chunk.decode('gbk', errors='ignore')
-                            self.terminal.add_log(f"[GBK解码] {text}")
+                            # 尝试GBK解码
+                            text = chunk.decode('gbk', errors='replace')
+                            clean_text = text.rstrip('\r\n')
+                            if clean_text:
+                                self.terminal.add_log(clean_text)
                         except UnicodeDecodeError:
-                            # 最终尝试latin1解码并处理可能的截断
-                            text = chunk.decode('latin1', errors='ignore')
-                            self.terminal.add_log(f"[LATIN1解码] {text}")
+                            # 最终尝试latin1解码作为后备
+                            text = chunk.decode('latin1', errors='replace')
+                            clean_text = text.rstrip('\r\n')
+                            if clean_text:
+                                self.terminal.add_log(clean_text)
 
                     except Exception as ex:
                         if hasattr(self.terminal, 'view') and self.terminal.view.page:
@@ -680,9 +691,15 @@ class UiEvent:
                         break
 
                 # 处理剩余缓冲区
-                remaining = decoder.decode(b'')
-                if remaining and hasattr(self.terminal, 'view') and self.terminal.view.page:
-                    self.terminal.add_log(f"[FINAL] {remaining}")
+                try:
+                    remaining = decoder.decode(b'', final=True)
+                    if remaining and hasattr(self.terminal, 'view') and self.terminal.view.page:
+                        clean_remaining = remaining.rstrip('\r\n')
+                        if clean_remaining:
+                            self.terminal.add_log(clean_remaining)
+                except Exception as ex:
+                    if hasattr(self.terminal, 'view') and self.terminal.view.page:
+                        self.terminal.add_log(f"解码器最终处理错误: {type(ex).__name__}: {str(ex)}")
 
             # 创建并启动输出处理线程
             stdout_thread = threading.Thread(
