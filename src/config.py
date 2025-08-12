@@ -53,7 +53,7 @@ class ConfigManager:
                 "github": {"mirror": "gh.llkk.cc"},
                 "log": True,
                 "checkupdate": True,
-                "stcheckupdate": True,
+                "stcheckupdate": False,
             }
             return default_config
     

@@ -8,6 +8,59 @@ from config import ConfigManager
 import os
 import subprocess
 import datetime
+import re
+
+# ANSI颜色代码正则表达式
+ANSI_ESCAPE_REGEX = re.compile(r'\x1b\[[0-9;]*m')
+COLOR_MAP = {
+    '\x1b[30m': ft.Colors.BLACK,
+    '\x1b[31m': ft.Colors.RED,
+    '\x1b[32m': ft.Colors.GREEN,
+    '\x1b[33m': ft.Colors.YELLOW,
+    '\x1b[34m': ft.Colors.BLUE,
+    '\x1b[35m': ft.Colors.PURPLE,
+    '\x1b[36m': ft.Colors.CYAN,
+    '\x1b[37m': ft.Colors.WHITE,
+    '\x1b[90m': ft.Colors.GREY,
+    '\x1b[91m': ft.Colors.RED_300,
+    '\x1b[92m': ft.Colors.GREEN_300,
+    '\x1b[93m': ft.Colors.YELLOW_300,
+    '\x1b[94m': ft.Colors.BLUE_300,
+    '\x1b[95m': ft.Colors.PURPLE_300,
+    '\x1b[96m': ft.Colors.CYAN_300,
+    '\x1b[97m': ft.Colors.WHITE,
+    '\x1b[0m': None,  # 重置代码
+    '\x1b[m': None   # 重置代码
+}
+
+def parse_ansi_text(text):
+    """解析ANSI文本并返回带有颜色样式的TextSpan对象列表"""
+    if not text:
+        return []
+    
+    # 使用正则表达式分割ANSI代码和文本
+    parts = ANSI_ESCAPE_REGEX.split(text)
+    ansi_codes = ANSI_ESCAPE_REGEX.findall(text)
+    
+    spans = []
+    current_color = None
+    
+    # 第一个部分没有前置的ANSI代码
+    if parts and parts[0]:
+        spans.append(ft.TextSpan(parts[0], style=ft.TextStyle(color=current_color)))
+    
+    # 处理剩余部分和对应的ANSI代码
+    for i, part in enumerate(parts[1:]):
+        if i < len(ansi_codes):
+            ansi_code = ansi_codes[i]
+            if ansi_code in COLOR_MAP:
+                current_color = COLOR_MAP[ansi_code]
+        
+        if part:  # 非空文本部分
+            # 创建带颜色的文本片段
+            spans.append(ft.TextSpan(part, style=ft.TextStyle(color=current_color)))
+    
+    return spans
 
 class Terminal:
     def __init__(self,page):
@@ -123,7 +176,14 @@ class Terminal:
             if len(processed_text) >= LOG_MAX_LENGTH:
                 self.logs.controls.clear()
             
-            new_text = ft.Text(processed_text, selectable=True)
+            # 检查是否包含ANSI颜色代码
+            if ANSI_ESCAPE_REGEX.search(processed_text):
+                # 解析ANSI颜色代码并创建富文本
+                spans = parse_ansi_text(processed_text)
+                new_text = ft.Text(spans=spans, selectable=True)
+            else:
+                # 普通文本
+                new_text = ft.Text(processed_text, selectable=True)
             
             async def update_ui():
                 try:
@@ -160,9 +220,12 @@ class Terminal:
                 # 获取当前时间戳
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
+                # 移除ANSI颜色代码
+                clean_text = re.sub(r'\x1b\[[0-9;]*m', '', text)
+                
                 # 写入日志文件，追加模式
                 with open(log_file_path, "a", encoding="utf-8") as log_file:
-                    log_file.write(f"[{timestamp}] {text}\n")
+                    log_file.write(f"[{timestamp}] {clean_text}\n")
             except Exception as e:
                 # 如果写入日志文件失败，不中断主流程，只在控制台输出错误
                 print(f"写入日志文件失败: {str(e)}")
