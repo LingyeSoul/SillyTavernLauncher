@@ -3,11 +3,18 @@ import json
 import os
 import flet as ft
 from env import Env
-from sysenv import SysEnv
-from stconfig import stcfg
 from config import ConfigManager
+from stconfig import stcfg
+from sysenv import SysEnv
+import os
 import subprocess
+import json
 import codecs
+import time
+import threading
+import re
+import shutil
+from packaging import version
 
 
 class UiEvent:
@@ -631,9 +638,10 @@ class UiEvent:
                     stderr=subprocess.PIPE,
                     cwd=workdir,
                     encoding='utf-8',
+                    errors='replace',  # 添加错误处理
                     env=env,  # 使用自定义环境变量
                     creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
-                    universal_newlines=False
+                    universal_newlines=True  # 使用文本模式
                 )
                 self.terminal.active_processes.append({
                     'process': process,
@@ -643,63 +651,28 @@ class UiEvent:
             
             # 读取输出
             def read_output(pipe, is_stderr=False):
-                # 使用增量解码器处理多字节字符
-                decoder = codecs.getincrementaldecoder('utf-8')()
-                while True:
-                    try:
-                        # 明确读取字节数据
-                        chunk = pipe.readline()
-                        # 如果读取到空字节且管道已关闭，则退出循环
-                        if not chunk:
-                            break
-
-                        # 确保处理的是字节流
-                        if isinstance(chunk, str):
-                            chunk = chunk.encode('utf-8', errors='replace')
-
-                        # 优先尝试UTF-8解码
-                        text = decoder.decode(chunk, final=False)
-                        if text:
-                            # 清理输出内容，移除末尾的换行符以便统一处理
-                            clean_text = text.rstrip('\r\n')
-                            if clean_text:  # 只有当文本非空时才添加日志
-                                self.terminal.add_log(f"{clean_text}" if is_stderr else clean_text)
-
-                    except UnicodeDecodeError as e:
-                        # 添加空值检查
-                        if 'chunk' not in locals() or not chunk:
-                            continue
-                            
-                        # 重置解码器
-                        decoder = codecs.getincrementaldecoder('utf-8')()
-                        try:
-                            # 尝试GBK解码
-                            text = chunk.decode('gbk', errors='replace')
-                            clean_text = text.rstrip('\r\n')
-                            if clean_text:
-                                self.terminal.add_log(clean_text)
-                        except UnicodeDecodeError:
-                            # 最终尝试latin1解码作为后备
-                            text = chunk.decode('latin1', errors='replace')
-                            clean_text = text.rstrip('\r\n')
-                            if clean_text:
-                                self.terminal.add_log(clean_text)
-
-                    except Exception as ex:
-                        if hasattr(self.terminal, 'view') and self.terminal.view.page:
-                            self.terminal.add_log(f"输出处理错误: {type(ex).__name__}: {str(ex)}")
-                        break
-
-                # 处理剩余缓冲区
                 try:
-                    remaining = decoder.decode(b'', final=True)
-                    if remaining and hasattr(self.terminal, 'view') and self.terminal.view.page:
-                        clean_remaining = remaining.rstrip('\r\n')
-                        if clean_remaining:
-                            self.terminal.add_log(clean_remaining)
+                    while True:
+                        # 读取一行文本（因为我们设置了universal_newlines=True）
+                        line = pipe.readline()
+                        
+                        # 如果返回空字符串且进程已经结束，则退出循环
+                        if line == '' and process.poll() is not None:
+                            break
+                        
+                        # 处理读取到的行
+                        if line:
+                            # 清理行尾的换行符
+                            clean_line = line.rstrip('\r\n')
+                            if clean_line:  # 只有当文本非空时才添加日志
+                                self.terminal.add_log(clean_line)
+
                 except Exception as ex:
+                    import traceback
                     if hasattr(self.terminal, 'view') and self.terminal.view.page:
-                        self.terminal.add_log(f"解码器最终处理错误: {type(ex).__name__}: {str(ex)}")
+                        self.terminal.add_log(f"输出处理错误: {type(ex).__name__}: {str(ex)}")
+                        self.terminal.add_log(f"错误详情: {traceback.format_exc()}")
+                    return
 
             # 创建并启动输出处理线程
             stdout_thread = threading.Thread(
@@ -722,7 +695,9 @@ class UiEvent:
             
             return process
         except Exception as e:
+            import traceback
             self.terminal.add_log(f"Error: {str(e)}")
+            self.terminal.add_log(f"错误详情: {traceback.format_exc()}")
             return None
 
     def check_and_start_sillytavern(self, e):
