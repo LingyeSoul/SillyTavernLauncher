@@ -9,6 +9,9 @@ import os
 import subprocess
 import datetime
 import re
+import time
+import threading
+import queue
 
 # ANSI颜色代码正则表达式
 ANSI_ESCAPE_REGEX = re.compile(r'\x1b\[[0-9;]*m')
@@ -63,7 +66,7 @@ def parse_ansi_text(text):
     return spans
 
 class Terminal:
-    def __init__(self,page):
+    def __init__(self, page):
         self.logs = ft.ListView(
             expand=True,
             spacing=5,
@@ -90,6 +93,12 @@ class Terminal:
         # 读取配置文件中的日志设置
         config_manager = ConfigManager()
         self.enable_logging = config_manager.get("log", True)
+        # 批量处理相关属性
+        self._log_queue = queue.Queue()  # 使用队列替代列表作为缓冲区
+        self._last_process_time = 0  # 上次处理时间
+        self._process_interval = 0.1  # 处理间隔（秒）
+        self._processing = False  # 防止并发处理
+        self._batch_size_threshold = 50  # 批量处理阈值
 
     def update_log_setting(self, enabled: bool):
         """更新日志设置"""
@@ -102,10 +111,11 @@ class Terminal:
         # 首先停止所有输出线程
         for thread in self._output_threads:
             if thread.is_alive():
-                thread.join(timeout=1.0)
+                # 等待线程自然结束，最多等待2秒
+                thread.join(timeout=2.0)
         
         self._output_threads = []
-        env = Env()
+        
         # 使用平台特定方式终止进程
         for proc_info in self.active_processes[:]:  # 使用副本避免遍历时修改
             try:
@@ -148,11 +158,99 @@ class Terminal:
         # 清空进程列表
         self.active_processes = []
         self.add_log("所有进程已终止")
-         # 标记为不再运行
+        
+        # 标记为不再运行
         self.is_running = False
 
         return True
     
+
+    def _process_batch(self):
+        """处理批量日志条目"""
+        # 防止并发处理
+        if self._processing:
+            return
+            
+        # 获取当前时间
+        current_time = time.time()
+        
+        # 检查是否需要处理（基于时间间隔或队列大小）
+        queue_size = self._log_queue.qsize()
+        time_to_process = (current_time - self._last_process_time) >= self._process_interval
+        size_to_process = queue_size >= self._batch_size_threshold
+        
+        # 如果不需要处理，直接返回
+        if not time_to_process and not size_to_process and queue_size == 0:
+            return
+            
+        self._processing = True
+        try:
+            # 收集队列中的日志条目（最多处理_batch_size_threshold条，避免处理时间过长）
+            log_entries = []
+            processed_count = 0
+            while processed_count < self._batch_size_threshold:
+                try:
+                    entry = self._log_queue.get_nowait()
+                    log_entries.append(entry)
+                    processed_count += 1
+                except queue.Empty:
+                    break
+            
+            if not log_entries:
+                return
+                
+            # 创建日志控件
+            new_controls = []
+            for processed_text in log_entries:
+                if ANSI_ESCAPE_REGEX.search(processed_text):
+                    # 解析ANSI颜色代码并创建富文本
+                    spans = parse_ansi_text(processed_text)
+                    new_text = ft.Text(spans=spans, selectable=True)
+                else:
+                    # 普通文本
+                    new_text = ft.Text(processed_text, selectable=True)
+                new_controls.append(new_text)
+            
+            # 批量更新日志控件
+            self.logs.controls.extend(new_controls)
+            
+            # 限制日志数量
+            MAX_LOG_ENTRIES = 1000
+            if len(self.logs.controls) > MAX_LOG_ENTRIES:
+                # 保留最新的500条日志
+                self.logs.controls = self.logs.controls[-500:]
+            
+            # 更新处理时间
+            self._last_process_time = current_time
+            
+            # 批量更新UI
+            if hasattr(self, 'view') and self.view.page is not None:
+                self.logs.update()
+            
+        except Exception as e:
+            import traceback
+            print(f"批量处理失败: {str(e)}")
+            print(f"错误详情: {traceback.format_exc()}")
+        finally:
+            # 确保_processing标志被重置
+            self._processing = False
+            # 如果队列中还有未处理的日志，安排下一次处理
+            if not self._log_queue.empty():
+                self._schedule_batch_process()
+
+    def _schedule_batch_process(self):
+        """安排批量处理"""
+        if hasattr(self, 'view') and self.view.page is not None:
+            try:
+                # 直接在下一帧执行处理，避免复杂的异步操作
+                self.view.page.run_task(self._process_batch)
+            except Exception as e:
+                # 如果run_task失败，尝试直接调用_process_batch
+                try:
+                    self._process_batch()
+                except Exception as fallback_error:
+                    print(f"日志处理失败: {str(fallback_error)}")
+
     def add_log(self, text: str):
         """线程安全的日志添加方法"""  
         import re
@@ -162,48 +260,47 @@ class Terminal:
             if not text:
                 return
             
-            # 预编译正则表达式
-            self._empty_line_pattern = re.compile(r'(\r?\n){3,}')
-            
             # 限制单条日志长度并清理多余换行
             processed_text = text[:LOG_MAX_LENGTH]
-            processed_text = self._empty_line_pattern.sub('\n\n', processed_text.strip())
+            processed_text = re.sub(r'(\r?\n){3,}', '\n\n', processed_text.strip())
             
             # 将日志写入文件
             self._write_log_to_file(processed_text)
             
             # 超长日志特殊处理
             if len(processed_text) >= LOG_MAX_LENGTH:
-                self.logs.controls.clear()
+                # 在UI线程中清理控件
+                def clear_logs():
+                    try:
+                        self.logs.controls.clear()
+                        if hasattr(self, 'view') and self.view.page is not None:
+                            self.logs.update()
+                    except Exception as e:
+                        print(f"清空日志失败: {str(e)}")
+                
+                if hasattr(self, 'view') and self.view.page is not None:
+                    try:
+                        self.view.page.run_task(clear_logs)
+                    except:
+                        clear_logs()
+                        
+                with self._log_queue.mutex:
+                    self._log_queue.queue.clear()  # 清空队列
             
-            # 检查是否包含ANSI颜色代码
-            if ANSI_ESCAPE_REGEX.search(processed_text):
-                # 解析ANSI颜色代码并创建富文本
-                spans = parse_ansi_text(processed_text)
-                new_text = ft.Text(spans=spans, selectable=True)
-            else:
-                # 普通文本
-                new_text = ft.Text(processed_text, selectable=True)
+            # 添加到日志队列
+            self._log_queue.put(processed_text)
             
-            async def update_ui():
-                try:
-                    self.logs.controls.append(new_text)
-                    # 更严格的日志数量限制
-                    MAX_LOG_ENTRIES = 800
-                    if len(self.logs.controls) > MAX_LOG_ENTRIES:
-                        self.logs.controls = self.logs.controls[-int(MAX_LOG_ENTRIES/2):]
-                    self.logs.scroll_to(offset=float("inf"), duration=100)
-                    self.logs.update()
-                except Exception as ui_error:
-                    print(f"UI更新失败: {str(ui_error)}")
-
-            # 确保在主线程中更新UI
-            if hasattr(self, 'view') and self.view.page is not None:
-                self.view.page.run_task(update_ui)
+            # 安排批量处理（基于时间或队列大小的处理）
+            self._schedule_batch_process()
+            
         except (TypeError, IndexError, AttributeError) as e:
+            import traceback
             print(f"日志处理异常: {str(e)}")
+            print(f"错误详情: {traceback.format_exc()}")
         except Exception as e:
+            import traceback
             print(f"未知错误: {str(e)}")
+            print(f"错误详情: {traceback.format_exc()}")
     
     def _write_log_to_file(self, text: str):
         """将日志写入文件"""
@@ -220,9 +317,12 @@ class Terminal:
                 # 获取当前时间戳
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
+                # 移除ANSI颜色代码
+                clean_text = re.sub(r'\x1b\[[0-9;]*m', '', text)
+                
                 # 写入日志文件，追加模式
                 with open(log_file_path, "a", encoding="utf-8") as log_file:
-                    log_file.write(f"[{timestamp}] {text}\n")
+                    log_file.write(f"[{timestamp}] {clean_text}\n")
             except Exception as e:
                 # 如果写入日志文件失败，不中断主流程，只在控制台输出错误
                 print(f"写入日志文件失败: {str(e)}")

@@ -18,7 +18,7 @@ def main(page: ft.Page):
     page.window.min_width=800
     page.window.maximizable = False
     page.window.title_bar_hidden = True
-    version='v1.2.1'
+    version='v1.2.2测试版1'
     
 
     # 检查是否为首次启动
@@ -79,6 +79,8 @@ def main(page: ft.Page):
 
     page.window.center()
     page.update()
+    page.window.width = 800
+    page.window.height = 640
     check_first_launch()
     
     # 启动时检查更新（根据设置决定是否检查）
