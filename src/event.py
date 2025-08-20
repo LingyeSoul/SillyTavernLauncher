@@ -649,49 +649,80 @@ class UiEvent:
                     'command': command
                 })
             
-            # 读取输出
-            def read_output(pipe, is_stderr=False):
-                try:
-                    while True:
-                        # 读取一行文本（因为我们设置了universal_newlines=True）
-                        line = pipe.readline()
-                        
-                        # 如果返回空字符串且进程已经结束，则退出循环
-                        if line == '' and process.poll() is not None:
-                            break
-                        
-                        # 处理读取到的行
-                        if line:
-                            # 清理行尾的换行符
-                            clean_line = line.rstrip('\r\n')
-                            if clean_line:  # 只有当文本非空时才添加日志
-                                self.terminal.add_log(clean_line)
+            # 读取输出的异步方法
+            async def read_output_async(pipe, is_stderr=False):
+                loop = asyncio.get_event_loop()
+                while True:
+                    # 在线程池中读取数据以避免阻塞事件循环
+                    line = await loop.run_in_executor(None, pipe.readline)
+                    
+                    # 如果返回空字符串且进程已经结束，则退出循环
+                    if line == '' and process.poll() is not None:
+                        break
+                    
+                    # 处理读取到的行
+                    if line:
+                        # 清理行尾的换行符
+                        clean_line = line.rstrip('\r\n')
+                        if clean_line:  # 只有当文本非空时才添加日志
+                            self.terminal.add_log(clean_line)
 
-                except Exception as ex:
-                    import traceback
-                    if hasattr(self.terminal, 'view') and self.terminal.view.page:
-                        self.terminal.add_log(f"输出处理错误: {type(ex).__name__}: {str(ex)}")
-                        self.terminal.add_log(f"错误详情: {traceback.format_exc()}")
-                    return
+            # 创建并启动异步输出处理任务
+            async def start_output_tasks():
+                loop = asyncio.get_event_loop()
+                stdout_task = loop.create_task(read_output_async(process.stdout, False))
+                stderr_task = loop.create_task(read_output_async(process.stderr, True))
+                return [stdout_task, stderr_task]
+            
+            # 在事件循环中启动异步任务
+            if hasattr(self.terminal.view.page, '_loop'):
+                # 如果页面有事件循环，使用它来运行任务
+                tasks = self.terminal.view.page._loop.run_until_complete(start_output_tasks())
+                self.terminal._output_tasks = tasks
+            else:
+                # 否则回退到线程方式
+                def read_output(pipe, is_stderr=False):
+                    try:
+                        while True:
+                            # 读取一行文本（因为我们设置了universal_newlines=True）
+                            line = pipe.readline()
+                            
+                            # 如果返回空字符串且进程已经结束，则退出循环
+                            if line == '' and process.poll() is not None:
+                                break
+                            
+                            # 处理读取到的行
+                            if line:
+                                # 清理行尾的换行符
+                                clean_line = line.rstrip('\r\n')
+                                if clean_line:  # 只有当文本非空时才添加日志
+                                    self.terminal.add_log(clean_line)
 
-            # 创建并启动输出处理线程
-            stdout_thread = threading.Thread(
-                target=read_output, 
-                args=(process.stdout, False),
-                daemon=True
-            )
-            stderr_thread = threading.Thread(
-                target=read_output, 
-                args=(process.stderr, True),
-                daemon=True
-            )
-            
-            stdout_thread.start()
-            stderr_thread.start()
-            
-            # 保存线程引用以便后续管理
-            self.terminal._output_threads.append(stdout_thread)
-            self.terminal._output_threads.append(stderr_thread)
+                    except Exception as ex:
+                        import traceback
+                        if hasattr(self.terminal, 'view') and self.terminal.view.page:
+                            self.terminal.add_log(f"输出处理错误: {type(ex).__name__}: {str(ex)}")
+                            self.terminal.add_log(f"错误详情: {traceback.format_exc()}")
+                        return
+
+                # 创建并启动输出处理线程
+                stdout_thread = threading.Thread(
+                    target=read_output, 
+                    args=(process.stdout, False),
+                    daemon=True
+                )
+                stderr_thread = threading.Thread(
+                    target=read_output, 
+                    args=(process.stderr, True),
+                    daemon=True
+                )
+                
+                stdout_thread.start()
+                stderr_thread.start()
+                
+                # 保存线程引用以便后续管理
+                self.terminal._output_threads.append(stdout_thread)
+                self.terminal._output_threads.append(stderr_thread)
             
             return process
         except Exception as e:

@@ -12,6 +12,8 @@ import re
 import time
 import threading
 import queue
+import asyncio
+import functools
 
 # ANSI颜色代码正则表达式
 ANSI_ESCAPE_REGEX = re.compile(r'\x1b\[[0-9;]*m')
@@ -65,7 +67,7 @@ def parse_ansi_text(text):
     
     return spans
 
-class Terminal:
+class AsyncTerminal:
     def __init__(self, page):
         self.logs = ft.ListView(
             expand=True,
@@ -93,12 +95,33 @@ class Terminal:
         # 读取配置文件中的日志设置
         config_manager = ConfigManager()
         self.enable_logging = config_manager.get("log", True)
-        # 批量处理相关属性
-        self._log_queue = queue.Queue()  # 使用队列替代列表作为缓冲区
+        
+        # 异步处理相关属性
+        self._log_queue = queue.Queue()  # 使用队列作为缓冲区
         self._last_process_time = 0  # 上次处理时间
         self._process_interval = 0.1  # 处理间隔（秒）
         self._processing = False  # 防止并发处理
         self._batch_size_threshold = 50  # 批量处理阈值
+        self._stop_event = threading.Event()  # 停止事件
+        
+        # 启动异步日志处理循环
+        self._start_log_processing_loop()
+
+    def _start_log_processing_loop(self):
+        """启动异步日志处理循环"""
+        def log_processing_worker():
+            while not self._stop_event.is_set():
+                try:
+                    # 等待一小段时间或直到有日志需要处理
+                    if not self._log_queue.empty():
+                        self._process_batch()
+                    time.sleep(0.05)  # 50ms间隔检查
+                except Exception as e:
+                    print(f"日志处理循环错误: {str(e)}")
+        
+        # 在单独的线程中运行日志处理循环
+        self._log_thread = threading.Thread(target=log_processing_worker, daemon=True)
+        self._log_thread.start()
 
     def update_log_setting(self, enabled: bool):
         """更新日志设置"""
@@ -107,6 +130,9 @@ class Terminal:
     def stop_processes(self):
         """停止所有由execute_command启动的进程"""
         self.add_log("正在终止所有进程...")
+        
+        # 设置停止事件
+        self._stop_event.set()
         
         # 首先停止所有输出线程
         for thread in self._output_threads:
@@ -225,7 +251,11 @@ class Terminal:
             
             # 批量更新UI
             if hasattr(self, 'view') and self.view.page is not None:
-                self.logs.update()
+                try:
+                    self.logs.update()
+                except AssertionError:
+                    # 控件未正确附加到页面，跳过更新
+                    pass
             
         except Exception as e:
             import traceback
@@ -244,7 +274,7 @@ class Terminal:
             try:
                 # 直接在下一帧执行处理，避免复杂的异步操作
                 self.view.page.run_task(self._process_batch)
-            except Exception as e:
+            except (AssertionError, Exception) as e:
                 # 如果run_task失败，尝试直接调用_process_batch
                 try:
                     self._process_batch()
@@ -336,7 +366,7 @@ class UniUI():
         self.sysenv = SysEnv()
         self.stcfg = stcfg()
         self.platform = platform.system()
-        self.terminal = Terminal(page)
+        self.terminal = AsyncTerminal(page)
         self.config_manager = ConfigManager()
         self.config = self.config_manager.config
         self.ui_event = UiEvent(self.page, self.terminal)
@@ -637,8 +667,23 @@ class UniUI():
         else:
             themeIcon=ft.Icons.MODE_NIGHT        
         def minisize(e):
-            page.window.minimized = True
-            page.update()
+            try:
+                page.window.minimized = True
+                # 使用run_task进行异步更新，避免直接调用update
+                if hasattr(page, 'run_task'):
+                    page.run_task(lambda: None)  # 使用空任务触发更新
+                else:
+                    # 降级方案：直接调用update，但添加异常处理
+                    try:
+                        page.update()
+                    except (AssertionError, Exception) as ex:
+                        import traceback
+                        print(f"UI更新失败: {str(ex)}")
+                        print(f"错误详情: {traceback.format_exc()}")
+            except Exception as e:
+                import traceback
+                print(f"最小化窗口失败: {str(e)}")
+                print(f"错误详情: {traceback.format_exc()}")
         page.theme_mode = self.config_manager.get("theme")
         page.appbar = ft.AppBar(
         #leading=ft.Icon(ft.Icons.PALETTE),
