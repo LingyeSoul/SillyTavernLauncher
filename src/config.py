@@ -19,7 +19,7 @@ class ConfigManager:
                 "use_sys_env": self._detect_env_type(),
                 "theme": "dark",
                 "first_run": True,
-                "github": {"mirror": "gh.llkk.cc"},
+                "github": {"mirror": "gh-proxy.com"},
                 "log": True,
                 "checkupdate": True,
                 "stcheckupdate": False,

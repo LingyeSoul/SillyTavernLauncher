@@ -395,7 +395,7 @@ class UniUI():
                     ft.DropdownM2(
                         options=[
                             ft.dropdown.Option("github", "官方源 (github.com) - 可能较慢"),
-                            ft.dropdown.Option("gh.llkk.cc", "镜像站点1 (gh.llkk.cc)"),
+                            ft.dropdown.Option("gh-proxy.com", "镜像站点1 (gh-proxy.com)"),
                             ft.dropdown.Option("ghfile.geekertao.top", "镜像站点2 (ghfile.geekertao.top)"),
                             ft.dropdown.Option("gh.dpik.top", "镜像站点3 (gh.dpik.top)"),
                             ft.dropdown.Option("github.dpik.top", "镜像站点4 (github.dpik.top)"),
@@ -669,17 +669,7 @@ class UniUI():
         def minisize(e):
             try:
                 page.window.minimized = True
-                # 使用run_task进行异步更新，避免直接调用update
-                if hasattr(page, 'run_task'):
-                    page.run_task(lambda: None)  # 使用空任务触发更新
-                else:
-                    # 降级方案：直接调用update，但添加异常处理
-                    try:
-                        page.update()
-                    except (AssertionError, Exception) as ex:
-                        import traceback
-                        print(f"UI更新失败: {str(ex)}")
-                        print(f"错误详情: {traceback.format_exc()}")
+                page.update()
             except Exception as e:
                 import traceback
                 print(f"最小化窗口失败: {str(e)}")
