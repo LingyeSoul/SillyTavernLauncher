@@ -22,7 +22,7 @@ async def main(page: ft.Page):
     version='v1.2.4'
 
     # 检查是否为首次启动
-    def check_first_launch():
+    async def check_first_launch():
         config_manager = ConfigManager()
         config = config_manager.config
         
@@ -84,6 +84,5 @@ async def main(page: ft.Page):
     config_manager = ConfigManager()
     if config_manager.get("checkupdate", True):
         asyncio.create_task(check_for_updates())
-    check_first_launch()
-
+    asyncio.create_task(check_first_launch())
 ft.app(target=main, view=ft.AppView.FLET_APP_HIDDEN)
