@@ -3,9 +3,10 @@ from time import sleep
 from ui import UniUI
 from config import ConfigManager
 from version import VersionChecker
+import asyncio
 
 
-def main(page: ft.Page):
+async def main(page: ft.Page):
     page.window.center()
     page.window.visible = True
     page.title = "SillyTavernLauncher"
@@ -18,8 +19,7 @@ def main(page: ft.Page):
     page.window.min_width=800
     page.window.maximizable = False
     page.window.title_bar_hidden = True
-    version='v1.2.3'
-    
+    version='v1.2.4'
 
     # 检查是否为首次启动
     def check_first_launch():
@@ -63,14 +63,12 @@ def main(page: ft.Page):
 
     # 检查更新
     version_checker = VersionChecker(version,page)
-    def check_for_updates():
+    async def check_for_updates():
         """检查更新并在有新版本时提示用户"""
-        # 在后台线程中执行检查更新操作
-        import threading
-        update_thread = threading.Thread(target=version_checker.run_check())
-        update_thread.daemon = True
-        update_thread.start()
-
+        # 直接执行检查更新操作
+        await asyncio.sleep(1)
+        await version_checker.run_check()
+    
     #BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
 
     uniUI=UniUI(page,version,version_checker)
@@ -81,14 +79,11 @@ def main(page: ft.Page):
     page.update()
     page.window.width = 800
     page.window.height = 640
-    check_first_launch()
     
     # 启动时检查更新（根据设置决定是否检查）
     config_manager = ConfigManager()
     if config_manager.get("checkupdate", True):
-        check_for_updates()
-
-    #BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
-
+        asyncio.create_task(check_for_updates())
+    check_first_launch()
 
 ft.app(target=main, view=ft.AppView.FLET_APP_HIDDEN)

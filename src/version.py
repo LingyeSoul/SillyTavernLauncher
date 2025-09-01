@@ -4,6 +4,8 @@ import urllib.error
 from config import ConfigManager
 import flet as ft
 import ssl
+import asyncio
+import aiohttp
 
 
 class VersionChecker:
@@ -18,8 +20,8 @@ class VersionChecker:
     def _showMsg(self,v):
         self.page.open(ft.SnackBar(ft.Text(v),show_close_icon=True,duration=3000))
 
-    def run_check(self):
-        def show_update_dialog(self):
+    async def run_check(self):
+        async def show_update_dialog(self):
             update_dialog = ft.AlertDialog(
             title=ft.Text("发现新版本"),
             content=ft.Column([
@@ -34,11 +36,11 @@ class VersionChecker:
                         actions_alignment=ft.MainAxisAlignment.END,
                     )
             self.page.open(update_dialog)
-        result = self.check_for_updates()
+        result = await self.check_for_updates()
         if result["has_error"]:
             self._showMsg(f"检查更新失败: {result['error_message']}")
         elif result["has_update"]:
-            show_update_dialog(self)
+            await show_update_dialog(self)
         else:
             self._showMsg("当前已是最新版本")
 
@@ -51,7 +53,7 @@ class VersionChecker:
         mirror = self.config_manager.get("github.mirror", "github")
         return mirror
 
-    def get_latest_release_version(self):
+    async def get_latest_release_version(self):
         """
         通过GitHub API获取最新版本号
         
@@ -68,31 +70,20 @@ class VersionChecker:
             api_url = f"https://{mirror}/https://api.github.com/repos/LingyeSoul/SillyTavernLauncher/releases/latest"
         
         try:
-            # 创建请求
-            request = urllib.request.Request(
-                api_url,
-                headers={
-                    'User-Agent': 'SillyTavernLauncher/1.0'
-                }
-            )
-            
-            # 发送请求
-            response = urllib.request.urlopen(request, context=self.context, timeout=10)
-            data = json.loads(response.read().decode('utf-8'))
-            
-            # 提取版本号
-            if 'tag_name' in data:
-                return data['tag_name']
-            elif 'name' in data:
-                return data['name']
-            else:
-                return None
+            async with aiohttp.ClientSession() as session:
+                async with session.get(api_url, headers={'User-Agent': 'SillyTavernLauncher/1.0'}, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    data = await response.json()
+                    
+                    # 提取版本号
+                    if 'tag_name' in data:
+                        return data['tag_name']
+                    elif 'name' in data:
+                        return data['name']
+                    else:
+                        return None
                 
-        except urllib.error.URLError as e:
+        except aiohttp.ClientError as e:
             print(f"网络错误: {e}")
-            return None
-        except json.JSONDecodeError as e:
-            print(f"JSON解析错误: {e}")
             return None
         except Exception as e:
             print(f"获取版本信息时出错: {e}")
@@ -201,14 +192,14 @@ class VersionChecker:
         else:
             return 0
 
-    def check_for_updates(self):
+    async def check_for_updates(self):
         """
         检查是否有更新版本
         
         Returns:
             dict: 包含检查结果的字典
         """
-        latest_version = self.get_latest_release_version()
+        latest_version = await self.get_latest_release_version()
         
         if latest_version is None:
             return {

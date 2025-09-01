@@ -12,8 +12,6 @@ import re
 import time
 import threading
 import queue
-import asyncio
-import functools
 
 # ANSI颜色代码正则表达式
 ANSI_ESCAPE_REGEX = re.compile(r'\x1b\[[0-9;]*m')
@@ -72,22 +70,22 @@ class AsyncTerminal:
         self.logs = ft.ListView(
             expand=True,
             spacing=5,
-            auto_scroll=True,
+            auto_scroll=True,  # 恢复自动滚动
             padding=10
         )
         # 初始化启动时间戳
         self.launch_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         if page.platform == ft.PagePlatform.WINDOWS:
             self.view = ft.Column([
-            ft.Text("终端", size=24, weight=ft.FontWeight.BOLD),
-            ft.Container(
-                content=self.logs,
-                border=ft.border.all(1, ft.Colors.GREY_400),
-                padding=10,
-                width=730,
-                height=440,
-            )
-        ])
+                ft.Text("终端", size=24, weight=ft.FontWeight.BOLD),
+                ft.Container(
+                    content=self.logs,
+                    border=ft.border.all(1, ft.Colors.GREY_400),
+                    padding=10,
+                    width=730,
+                    height=440,
+                )
+            ])
     
         self.active_processes = []
         self.is_running = False  # 添加运行状态标志
@@ -99,10 +97,11 @@ class AsyncTerminal:
         # 异步处理相关属性
         self._log_queue = queue.Queue()  # 使用队列作为缓冲区
         self._last_process_time = 0  # 上次处理时间
-        self._process_interval = 0.1  # 处理间隔（秒）
-        self._processing = False  # 防止并发处理
-        self._batch_size_threshold = 50  # 批量处理阈值
+        self._process_interval = 0.02  # 处理间隔（秒）- 优化为20ms以提高响应性
+        self._processing = False  # 阻止并发处理
+        self._batch_size_threshold = 30  # 批量处理阈值 - 调整为30以平衡性能和响应性
         self._stop_event = threading.Event()  # 停止事件
+        self._max_log_entries = 1500  # 最大日志条目数 - 调整为1500以减少内存占用
         
         # 启动异步日志处理循环
         self._start_log_processing_loop()
@@ -115,7 +114,7 @@ class AsyncTerminal:
                     # 等待一小段时间或直到有日志需要处理
                     if not self._log_queue.empty():
                         self._process_batch()
-                    time.sleep(0.05)  # 50ms间隔检查
+                    time.sleep(0.02)  # 20ms间隔检查 - 提高检查频率以提高响应性
                 except Exception as e:
                     print(f"日志处理循环错误: {str(e)}")
         
@@ -131,6 +130,9 @@ class AsyncTerminal:
         """停止所有由execute_command启动的进程"""
         self.add_log("正在终止所有进程...")
         
+        # 刷新日志缓冲区
+        self._flush_log_buffer()
+        
         # 设置停止事件
         self._stop_event.set()
         
@@ -142,44 +144,124 @@ class AsyncTerminal:
         
         self._output_threads = []
         
+        # 停止所有异步任务
+        if hasattr(self, '_output_tasks'):
+            for task in self._output_tasks:
+                if not task.done():
+                    task.cancel()
+            self._output_tasks = []
+        
         # 使用平台特定方式终止进程
         for proc_info in self.active_processes[:]:  # 使用副本避免遍历时修改
             try:
                 process = proc_info['process']
-                if process.poll() is None:  # 检查进程是否仍在运行
+                # 对于异步进程，使用不同的终止方法
+                if hasattr(process, 'terminate'):
+                    if not process.returncode:  # 如果进程仍在运行
+                        process.terminate()
+                
+                # 检查进程是否仍在运行
+                is_running = False
+                if hasattr(process, 'poll'):
+                    is_running = process.poll() is None
+                elif hasattr(process, 'returncode'):
+                    is_running = process.returncode is None
+                else:
+                    # 对于协程对象，默认认为仍在运行
+                    is_running = True
+                    
+                if is_running:
                     self.add_log(f"终止进程 {proc_info['pid']}: {proc_info['command']}")
                     
                     # 首先使用PowerShell递归终止整个进程树
-                    subprocess.run(
-                        f"powershell.exe -Command \"Get-CimInstance Win32_Process -Filter 'ParentProcessId={proc_info['pid']}' | Select-Object -ExpandProperty Handle | ForEach-Object {{ Stop-Process -Id $_ -Force }}\"",
+                    result1 = subprocess.run(
+                        f"powershell.exe -WindowStyle Hidden -Command \"Get-CimInstance Win32_Process -Filter 'ParentProcessId={proc_info['pid']}' | Select-Object -ExpandProperty Handle | ForEach-Object {{ Stop-Process -Id $_ -Force }}\"",
                         shell=True,
                         stderr=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
                         creationflags=subprocess.CREATE_NO_WINDOW
                     )
+                    if result1.stderr and result1.stderr.strip():
+                        error_text = result1.stderr.decode('utf-8', errors='replace').strip()
+                        # 忽略PowerShell的预期错误
+                        ignore_keywords = ["no cim instances", "not found", "没有找到", "不存在", "无法找到"]
+                        if not any(ignore_text in error_text.lower() for ignore_text in ignore_keywords):
+                            self.add_log(f"PowerShell终止子进程错误: {error_text}")
                     
                     # 使用taskkill递归终止进程树
-                    subprocess.run(
+                    result2 = subprocess.run(
                         f"taskkill /F /T /PID {proc_info['pid']}",
                         shell=True,
                         stderr=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
                         creationflags=subprocess.CREATE_NO_WINDOW
                     )
+                    # 只有当stderr不为空且不是预期的错误消息时才记录错误
+                    if result2.stderr and result2.stderr.strip():
+                        # 解码错误文本，尝试多种编码
+                        error_bytes = result2.stderr
+                        error_text = ""
+                        for encoding in ['utf-8', 'gbk', 'gb2312', 'latin1']:
+                            try:
+                                error_text = error_bytes.decode(encoding).strip()
+                                break
+                            except UnicodeDecodeError:
+                                continue
+                        
+                        if not error_text:
+                            error_text = error_bytes.decode('utf-8', errors='replace').strip()
+                        
+                        # 忽略taskkill的预期错误
+                        ignore_keywords = [
+                            "not found", "no running", "ûҵ", "没有找到", 
+                            "不存在", "无法找到", "not running", "process not found"
+                        ]
+                        if not any(ignore_text in error_text.lower() for ignore_text in ignore_keywords):
+                            self.add_log(f"Taskkill终止进程树错误: {error_text}")
                     
                     # 额外使用PowerShell按名称终止node.exe
-                    subprocess.run(
-                        f"powershell.exe -Command \"Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force\"",
+                    result3 = subprocess.run(
+                        f"powershell.exe -WindowStyle Hidden -Command \"Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force\"",
                         shell=True,
                         stderr=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
                         creationflags=subprocess.CREATE_NO_WINDOW
                     )
+                    if result3.stderr and result3.stderr.strip():
+                        error_text = result3.stderr.decode('utf-8', errors='replace').strip()
+                        # 忽略PowerShell的预期错误
+                        ignore_keywords = ["no processes", "not found", "没有找到", "不存在", "无法找到"]
+                        if not any(ignore_text in error_text.lower() for ignore_text in ignore_keywords):
+                            self.add_log(f"PowerShell终止node进程错误: {error_text}")
                     
-                    # 等待进程终止
-                    try:
-                        process.wait(timeout=3.0)
-                    except subprocess.TimeoutExpired:
-                        self.add_log(f"进程 {proc_info['pid']} 未能及时终止")
+                    # 等待进程终止，最多等待5秒
+                    import time
+                    start_time = time.time()
+                    while time.time() - start_time < 5:
+                        if hasattr(process, 'poll') and process.poll() is not None:
+                            # 同步进程已结束
+                            break
+                        elif hasattr(process, 'returncode') and process.returncode is not None:
+                            # 异步进程已结束
+                            break
+                        time.sleep(0.1)  # 短暂休眠避免占用过多CPU
+                    
+                    # 再次检查进程是否仍在运行
+                    still_running = True
+                    if hasattr(process, 'poll'):
+                        still_running = process.poll() is None
+                    elif hasattr(process, 'returncode'):
+                        still_running = process.returncode is None
+                    
+                    # 只有当进程确实仍在运行时才报告错误
+                    if still_running:
+                        self.add_log(f"警告: 进程 {proc_info['pid']} 可能仍在运行")
             except Exception as ex:
-                self.add_log(f"终止进程时出错: {str(ex)}")
+                # 只在有实际错误信息时才记录错误
+                error_msg = str(ex).strip()
+                if error_msg:
+                    self.add_log(f"终止进程时出错: {error_msg}")
+                # 继续处理其他进程，不因单个进程错误而中断
         
         # 清空进程列表
         self.active_processes = []
@@ -193,7 +275,7 @@ class AsyncTerminal:
 
     def _process_batch(self):
         """处理批量日志条目"""
-        # 防止并发处理
+        # 阻止并发处理
         if self._processing:
             return
             
@@ -205,16 +287,20 @@ class AsyncTerminal:
         time_to_process = (current_time - self._last_process_time) >= self._process_interval
         size_to_process = queue_size >= self._batch_size_threshold
         
-        # 如果不需要处理，直接返回
-        if not time_to_process and not size_to_process and queue_size == 0:
-            return
+        # 如果不需要处理，但队列不为空，强制处理少量日志以确保及时显示
+        if not time_to_process and not size_to_process and queue_size > 0:
+            # 即使未达到处理条件，如果有日志也处理少量（最多3条）以确保及时显示
+            size_to_process = True
+            batch_limit = min(3, queue_size)  # 限制处理数量以避免影响性能
+        else:
+            batch_limit = min(self._batch_size_threshold, queue_size) if queue_size > 0 else self._batch_size_threshold
             
         self._processing = True
         try:
-            # 收集队列中的日志条目（最多处理_batch_size_threshold条，避免处理时间过长）
+            # 收集队列中的日志条目
             log_entries = []
             processed_count = 0
-            while processed_count < self._batch_size_threshold:
+            while processed_count < batch_limit:
                 try:
                     entry = self._log_queue.get_nowait()
                     log_entries.append(entry)
@@ -225,26 +311,25 @@ class AsyncTerminal:
             if not log_entries:
                 return
                 
-            # 创建日志控件
+            # 创建日志控件 - 批量创建以提高性能
             new_controls = []
             for processed_text in log_entries:
                 if ANSI_ESCAPE_REGEX.search(processed_text):
                     # 解析ANSI颜色代码并创建富文本
                     spans = parse_ansi_text(processed_text)
-                    new_text = ft.Text(spans=spans, selectable=True)
+                    new_text = ft.Text(spans=spans, selectable=True, size=14)
                 else:
                     # 普通文本
-                    new_text = ft.Text(processed_text, selectable=True)
+                    new_text = ft.Text(processed_text, selectable=True, size=14)
                 new_controls.append(new_text)
             
             # 批量更新日志控件
             self.logs.controls.extend(new_controls)
             
             # 限制日志数量
-            MAX_LOG_ENTRIES = 1000
-            if len(self.logs.controls) > MAX_LOG_ENTRIES:
-                # 保留最新的500条日志
-                self.logs.controls = self.logs.controls[-500:]
+            if len(self.logs.controls) > self._max_log_entries:
+                # 保留最新的日志条目
+                self.logs.controls = self.logs.controls[-self._max_log_entries//2:]  # 保留一半数量
             
             # 更新处理时间
             self._last_process_time = current_time
@@ -252,6 +337,7 @@ class AsyncTerminal:
             # 批量更新UI
             if hasattr(self, 'view') and self.view.page is not None:
                 try:
+                    # 更新UI，让Flet框架自动处理滚动
                     self.logs.update()
                 except AssertionError:
                     # 控件未正确附加到页面，跳过更新
@@ -266,14 +352,19 @@ class AsyncTerminal:
             self._processing = False
             # 如果队列中还有未处理的日志，安排下一次处理
             if not self._log_queue.empty():
+                # 使用更积极的调度策略
                 self._schedule_batch_process()
 
     def _schedule_batch_process(self):
         """安排批量处理"""
         if hasattr(self, 'view') and self.view.page is not None:
             try:
-                # 直接在下一帧执行处理，避免复杂的异步操作
-                self.view.page.run_task(self._process_batch)
+                # 定义异步函数用于处理批处理
+                async def async_process_batch():
+                    self._process_batch()
+                
+                # 使用run_task执行异步函数
+                self.view.page.run_task(async_process_batch)  # 修复：传递函数引用而不是调用结果
             except (AssertionError, Exception) as e:
                 # 如果run_task失败，尝试直接调用_process_batch
                 try:
@@ -284,7 +375,7 @@ class AsyncTerminal:
     def add_log(self, text: str):
         """线程安全的日志添加方法"""  
         import re
-        LOG_MAX_LENGTH = 1000
+        LOG_MAX_LENGTH = 2000  # 单条日志长度限制
         try:
             # 优先处理空值情况
             if not text:
@@ -310,7 +401,11 @@ class AsyncTerminal:
                 
                 if hasattr(self, 'view') and self.view.page is not None:
                     try:
-                        self.view.page.run_task(clear_logs)
+                        # 定义异步函数用于清理日志
+                        async def async_clear_logs():
+                            clear_logs()
+                        
+                        self.view.page.run_task(async_clear_logs)
                     except:
                         clear_logs()
                         
@@ -320,8 +415,26 @@ class AsyncTerminal:
             # 添加到日志队列
             self._log_queue.put(processed_text)
             
-            # 安排批量处理（基于时间或队列大小的处理）
-            self._schedule_batch_process()
+            # 立即安排处理少量日志以确保及时显示
+            # 如果队列中有一定数量的日志或者距离上次处理已经有一段时间，则安排处理
+            queue_size = self._log_queue.qsize()
+            current_time = time.time()
+            time_since_last_process = current_time - self._last_process_time
+            
+            # 如果队列中有日志且满足以下条件之一，则立即处理：
+            # 1. 队列中有较多日志（>=3条）
+            # 2. 距离上次处理已经超过50ms
+            if queue_size > 0 and (queue_size >= 3 or time_since_last_process >= 0.05):
+                self._schedule_batch_process()
+            # 对于少量日志，也确保不会等待太久才显示
+            elif queue_size > 0:
+                # 使用page.after安排延迟处理，确保即使没有达到批量阈值也能及时处理
+                if hasattr(self, 'view') and self.view.page is not None:
+                    try:
+                        self.view.page.after(30, self._schedule_batch_process)  # 30ms后处理
+                    except:
+                        # 如果page.after不可用，则直接安排处理
+                        self._schedule_batch_process()
             
         except (TypeError, IndexError, AttributeError) as e:
             import traceback
@@ -350,13 +463,41 @@ class AsyncTerminal:
                 # 移除ANSI颜色代码
                 clean_text = re.sub(r'\x1b\[[0-9;]*m', '', text)
                 
-                # 写入日志文件，追加模式
-                with open(log_file_path, "a", encoding="utf-8") as log_file:
-                    log_file.write(f"[{timestamp}] {clean_text}\n")
+                # 使用缓冲写入提高性能
+                if not hasattr(self, '_log_buffer'):
+                    self._log_buffer = []
+                    self._log_buffer_size = 0
+                
+                # 添加到缓冲区
+                log_entry = f"[{timestamp}] {clean_text}\n"
+                self._log_buffer.append(log_entry)
+                self._log_buffer_size += len(log_entry)
+                
+                # 如果缓冲区足够大，则写入文件
+                if self._log_buffer_size > 4096:  # 4KB缓冲区 - 减小缓冲区大小以提高写入频率
+                    with open(log_file_path, "a", encoding="utf-8") as log_file:
+                        log_file.writelines(self._log_buffer)
+                    self._log_buffer.clear()
+                    self._log_buffer_size = 0
+                    
             except Exception as e:
                 # 如果写入日志文件失败，不中断主流程，只在控制台输出错误
                 print(f"写入日志文件失败: {str(e)}")
-
+    
+    def _flush_log_buffer(self):
+        """刷新日志缓冲区，确保所有日志都被写入文件"""
+        if self.enable_logging and hasattr(self, '_log_buffer') and self._log_buffer:
+            try:
+                logs_dir = os.path.join(os.getcwd(), "logs")
+                os.makedirs(logs_dir, exist_ok=True)
+                log_file_path = os.path.join(logs_dir, f"{self.launch_timestamp}.log")
+                
+                with open(log_file_path, "a", encoding="utf-8") as log_file:
+                    log_file.writelines(self._log_buffer)
+                self._log_buffer.clear()
+                self._log_buffer_size = 0
+            except Exception as e:
+                print(f"刷新日志缓冲区失败: {str(e)}")
 class UniUI():
     def __init__(self,page,ver,version_checker):
         self.page = page
@@ -366,7 +507,7 @@ class UniUI():
         self.sysenv = SysEnv()
         self.stcfg = stcfg()
         self.platform = platform.system()
-        self.terminal = AsyncTerminal(page)
+        self.terminal = AsyncTerminal(page)  # 使用异步终端替换高性能终端
         self.config_manager = ConfigManager()
         self.config = self.config_manager.config
         self.ui_event = UiEvent(self.page, self.terminal)
