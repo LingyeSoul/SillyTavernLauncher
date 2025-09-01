@@ -9,4 +9,7 @@ build
 main.spec
 config.json
 debugdist
+Nuitkadist
 logs
+nuitka-crash-report.xml
+.vscode

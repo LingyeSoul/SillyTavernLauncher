@@ -1,19 +1,13 @@
 import threading
-import json
 import os
 import flet as ft
 from env import Env
 from config import ConfigManager
 from stconfig import stcfg
 from sysenv import SysEnv
-import os
 import subprocess
 import json
-import codecs
-import time
-import threading
-import re
-import shutil
+import asyncio
 from packaging import version
 
 
@@ -85,7 +79,21 @@ class UiEvent:
                                 "SillyTavern"
                             )
                             if cache_process:
-                                cache_process.wait()
+                                # 等待异步进程完成
+                                process_obj = None
+                                if asyncio.iscoroutine(cache_process):
+                                    # 正确处理协程对象
+                                    loop = asyncio.new_event_loop()
+                                    asyncio.set_event_loop(loop)
+                                    try:
+                                        process_obj = loop.run_until_complete(cache_process)
+                                        loop.run_until_complete(process_obj.wait())
+                                    finally:
+                                        loop.close()
+                                        asyncio.set_event_loop(None)
+                                else:
+                                    process_obj = cache_process
+                                    process_obj.wait()
                             # 删除node_modules
                             node_modules_path = os.path.join(self.env.st_dir, "node_modules")
                             if os.path.exists(node_modules_path):
@@ -105,8 +113,27 @@ class UiEvent:
                                         self.terminal.add_log("依赖安装成功")
                                     else:
                                         self.terminal.add_log("依赖安装失败")
-                                threading.Thread(
-                                    target=lambda: (retry_process.wait(), on_retry_complete(retry_process)),
+                                
+                                def wait_for_retry_process():
+                                    # 等待异步进程完成
+                                    process_obj = None
+                                    if asyncio.iscoroutine(retry_process):
+                                        # 正确处理协程对象
+                                        loop = asyncio.new_event_loop()
+                                        asyncio.set_event_loop(loop)
+                                        try:
+                                            process_obj = loop.run_until_complete(retry_process)
+                                            loop.run_until_complete(process_obj.wait())
+                                        finally:
+                                            loop.close()
+                                            asyncio.set_event_loop(None)
+                                    else:
+                                        process_obj = retry_process
+                                        process_obj.wait()
+                                    on_retry_complete(process_obj)
+                                    
+                                    threading.Thread(
+                                    target=wait_for_retry_process,
                                     daemon=True
                                 ).start()
                     
@@ -116,8 +143,26 @@ class UiEvent:
                     )
                     
                     if process:
+                        def wait_for_process():
+                            # 等待异步进程完成
+                            process_obj = None
+                            if asyncio.iscoroutine(process):
+                                # 正确处理协程对象
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                try:
+                                    process_obj = loop.run_until_complete(process)
+                                    loop.run_until_complete(process_obj.wait())
+                                finally:
+                                    loop.close()
+                                    asyncio.set_event_loop(None)
+                            else:
+                                process_obj = process
+                                process_obj.wait()
+                            on_npm_complete(process_obj)
+                        
                         threading.Thread(
-                            target=lambda: (process.wait(), on_npm_complete(process)),
+                            target=wait_for_process,
                             daemon=True
                         ).start()
             else:
@@ -143,7 +188,19 @@ class UiEvent:
                                         "SillyTavern"
                                     )
                                     if cache_process:
-                                        cache_process.wait()
+                                        # 等待异步进程完成
+                                        if asyncio.iscoroutine(cache_process):
+                                            # 正确处理协程对象
+                                            loop = asyncio.new_event_loop()
+                                            asyncio.set_event_loop(loop)
+                                            try:
+                                                process_obj = loop.run_until_complete(cache_process)
+                                                loop.run_until_complete(process_obj.wait())
+                                            finally:
+                                                loop.close()
+                                                asyncio.set_event_loop(None)
+                                        else:
+                                            cache_process.wait()
                                     # 删除node_modules
                                     node_modules_path = os.path.join(self.env.st_dir, "node_modules")
                                     if os.path.exists(node_modules_path):
@@ -163,18 +220,56 @@ class UiEvent:
                                                 self.terminal.add_log("依赖安装成功")
                                             else:
                                                 self.terminal.add_log("依赖安装失败")
+                                        
+                                        def wait_for_retry_process():
+                                            # 等待异步进程完成
+                                            process_obj = None
+                                            if asyncio.iscoroutine(retry_process):
+                                                # 正确处理协程对象
+                                                loop = asyncio.new_event_loop()
+                                                asyncio.set_event_loop(loop)
+                                                try:
+                                                    process_obj = loop.run_until_complete(retry_process)
+                                                    loop.run_until_complete(process_obj.wait())
+                                                finally:
+                                                    loop.close()
+                                                    asyncio.set_event_loop(None)
+                                            else:
+                                                process_obj = retry_process
+                                                process_obj.wait()
+                                            on_retry_complete(process_obj)
+                                        
                                         threading.Thread(
-                                            target=lambda: (retry_process.wait(), on_retry_complete(retry_process)),
+                                            target=wait_for_retry_process,
                                             daemon=True
                                         ).start()
+                            
                             process = self.execute_command(
                                 f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
                                 "SillyTavern"
                             )
                             
                             if process:
+                                def wait_for_process():
+                                    # 等待异步进程完成
+                                    process_obj = None
+                                    if asyncio.iscoroutine(process):
+                                        # 正确处理协程对象
+                                        loop = asyncio.new_event_loop()
+                                        asyncio.set_event_loop(loop)
+                                        try:
+                                            process_obj = loop.run_until_complete(process)
+                                            loop.run_until_complete(process_obj.wait())
+                                        finally:
+                                            loop.close()
+                                            asyncio.set_event_loop(None)
+                                    else:
+                                        process_obj = process
+                                        process_obj.wait()
+                                    on_npm_complete(process_obj)
+                                
                                 threading.Thread(
-                                    target=lambda: (process.wait(), on_npm_complete(process)),
+                                    target=wait_for_process,
                                     daemon=True
                                 ).start()
                         else:
@@ -188,8 +283,24 @@ class UiEvent:
                 )
                 
                 if process:
+                    def wait_for_process():
+                        # 等待异步进程完成
+                        process_obj = None
+                        if asyncio.iscoroutine(process):
+                            # 对于协程对象，先运行它获取进程对象，然后等待进程完成
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                process_obj = loop.run_until_complete(process)
+                                loop.run_until_complete(process_obj.wait())
+                            finally:
+                                loop.close()
+                        else:
+                            process.wait()
+                        on_git_complete(process)
+                    
                     threading.Thread(
-                        target=lambda: (process.wait(), on_git_complete(process)),
+                        target=wait_for_process,
                         daemon=True
                     ).start()
             else:
@@ -225,7 +336,20 @@ class UiEvent:
                 process = self.execute_command(f"\"{self.env.get_node_path()}node\" server.js %*", "SillyTavern")
                 if process:
                     def wait_for_exit():
-                        process.wait()
+                        # 创建一个新的事件循环并运行直到完成
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            # 如果process是一个协程对象，我们需要运行它直到完成以获取进程对象
+                            if asyncio.iscoroutine(process):
+                                process_obj = loop.run_until_complete(process)
+                            else:
+                                process_obj = process
+                            
+                            # 等待进程完成
+                            loop.run_until_complete(process_obj.wait())
+                        finally:
+                            loop.close()
                         on_process_exit()
                     
                     threading.Thread(target=wait_for_exit, daemon=True).start()
@@ -250,92 +374,112 @@ class UiEvent:
             self.terminal.add_log("正在更新SillyTavern...")
             if git_path:
                 # 执行git pull
-                def on_git_complete(process, retry_count=0):
+                def on_git_complete(process):
                     if process.returncode == 0:
                         self.terminal.add_log("Git更新成功")
                         if self.env.get_node_path():
                             self.terminal.add_log("正在安装依赖...")
-                            def on_npm_complete(process, npm_retry_count=0):
+                            def on_npm_complete(process):
                                 if process.returncode == 0:
                                     self.terminal.add_log("依赖安装成功")
                                 else:
-                                    if npm_retry_count < 2:
-                                        self.terminal.add_log(f"依赖安装失败，正在重试... (尝试次数: {npm_retry_count + 1}/2)")
-                                        # 清理npm缓存
-                                        cache_process = self.execute_command(
-                                            f"\"{self.env.get_node_path()}npm\" cache clean --force",
-                                            "SillyTavern"
-                                        )
-                                        if cache_process:
-                                            cache_process.wait()
-                                        # 删除node_modules
-                                        node_modules_path = os.path.join(self.env.st_dir, "node_modules")
-                                        if os.path.exists(node_modules_path):
-                                            try:
-                                                import shutil
-                                                shutil.rmtree(node_modules_path)
-                                            except Exception as ex:
-                                                self.terminal.add_log(f"删除node_modules失败: {str(ex)}")
-                                        # 重新安装依赖
-                                        retry_process = self.execute_command(
-                                            f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
-                                            "SillyTavern"
-                                        )
-                                        if retry_process:
-                                            def on_retry_complete(p):
-                                                if p.returncode == 0:
-                                                    self.terminal.add_log("依赖安装成功")
-                                                else:
-                                                    self.terminal.add_log("依赖安装失败")
-                                            threading.Thread(
-                                                target=lambda: (retry_process.wait(), on_retry_complete(retry_process)),
-                                                daemon=True
-                                            ).start()
-                                    else:
-                                        self.terminal.add_log("依赖安装失败")
+                                    self.terminal.add_log("依赖安装失败")
                             
-                            process = self.execute_command(
-                                f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
-                                "SillyTavern"
-                            )
-                            
+                            process = self.execute_command(f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", "SillyTavern")
                             if process:
-                                threading.Thread(
-                                    target=lambda: (process.wait(), on_npm_complete(process)),
-                                    daemon=True
-                                ).start()
+                                def wait_for_process():
+                                    # 等待异步进程完成
+                                    process_obj = None
+                                    if asyncio.iscoroutine(process):
+                                        # 正确处理协程对象
+                                        loop = asyncio.new_event_loop()
+                                        asyncio.set_event_loop(loop)
+                                        try:
+                                            process_obj = loop.run_until_complete(process)
+                                            loop.run_until_complete(process_obj.wait())
+                                        finally:
+                                            loop.close()
+                                            asyncio.set_event_loop(None)
+                                    else:
+                                        process_obj = process
+                                        process_obj.wait()
+                                    on_npm_complete(process_obj)
+                                
+                                threading.Thread(target=wait_for_process,daemon=True).start()
                         else:
                             self.terminal.add_log("未找到nodejs")
                     else:
-                        if retry_count < 2:
-                            self.terminal.add_log(f"Git更新失败，正在重试... (尝试次数: {retry_count + 1}/2)")
-                            # 重新执行git pull
-                            retry_process = self.execute_command(
-                                f'\"{git_path}git\" pull --rebase --autostash', 
-                                "SillyTavern"
+                        # 检查是否是由于package-lock.json冲突导致的更新失败
+                        self.terminal.add_log("Git更新失败，检查是否为package-lock.json冲突...")
+                        try:
+                            # 尝试解决package-lock.json冲突
+                            reset_process = subprocess.run(
+                                f'\"{git_path}git\" checkout -- package-lock.json',
+                                shell=True,
+                                cwd=self.env.st_dir,
+                                creationflags=subprocess.CREATE_NO_WINDOW,
+                                capture_output=True,
+                                text=True
                             )
-                            if retry_process:
-                                def on_retry_complete(p):
-                                    on_git_complete(p, retry_count + 1)
-                                threading.Thread(
-                                    target=lambda: (retry_process.wait(), on_retry_complete(retry_process)),
-                                    daemon=True
-                                ).start()
-                        else:
-                            self.terminal.add_log("Git更新失败，跳过依赖安装")
-                
-                process = self.execute_command(
-                    f'\"{git_path}git\" pull --rebase --autostash', 
-                    "SillyTavern"
-                )
+                            
+                            if reset_process.returncode == 0:
+                                self.terminal.add_log("已重置package-lock.json，重新尝试更新...")
+                                # 重新执行git pull
+                                retry_process = self.execute_command(
+                                    f'\"{git_path}git\" pull --rebase --autostash', 
+                                    "SillyTavern"
+                                )
+                                
+                                if retry_process:
+                                    def wait_for_retry_process():
+                                        # 等待异步进程完成
+                                        process_obj = None
+                                        if asyncio.iscoroutine(retry_process):
+                                            # 正确处理协程对象
+                                            loop = asyncio.new_event_loop()
+                                            asyncio.set_event_loop(loop)
+                                            try:
+                                                process_obj = loop.run_until_complete(retry_process)
+                                                loop.run_until_complete(process_obj.wait())
+                                            finally:
+                                                loop.close()
+                                                asyncio.set_event_loop(None)
+                                        else:
+                                            process_obj = retry_process
+                                            process_obj.wait()
+                                        on_git_complete(process_obj)
+                                    
+                                    threading.Thread(target=wait_for_retry_process, daemon=True).start()
+                                else:
+                                    self.terminal.add_log("重试更新失败")
+                            else:
+                                self.terminal.add_log("无法解决package-lock.json冲突，需要手动处理")
+                        except Exception as ex:
+                            self.terminal.add_log(f"处理package-lock.json冲突时出错: {str(ex)}")
+            
+                process = self.execute_command(f'\"{git_path}git\" pull --rebase --autostash', "SillyTavern")
                 
                 # 添加git操作完成后的回调
                 if process:
-                    def wait_and_callback():
-                        process.wait()
-                        on_git_complete(process)
+                    def wait_for_process():
+                        # 等待异步进程完成
+                        process_obj = None
+                        if asyncio.iscoroutine(process):
+                            # 正确处理协程对象
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                process_obj = loop.run_until_complete(process)
+                                loop.run_until_complete(process_obj.wait())
+                            finally:
+                                loop.close()
+                                asyncio.set_event_loop(None)
+                        else:
+                            process_obj = process
+                            process_obj.wait()
+                        on_git_complete(process_obj)
                     
-                    threading.Thread(target=wait_and_callback, daemon=True).start()
+                    threading.Thread(target=wait_for_process,daemon=True).start()
             else:
                 self.terminal.add_log("未找到Git路径，请手动更新SillyTavern")
 
@@ -366,7 +510,19 @@ class UiEvent:
                                             "SillyTavern"
                                         )
                                         if cache_process:
-                                            cache_process.wait()
+                                            # 等待异步进程完成
+                                            if asyncio.iscoroutine(cache_process):
+                                                # 正确处理协程对象
+                                                loop = asyncio.new_event_loop()
+                                                asyncio.set_event_loop(loop)
+                                                try:
+                                                    process_obj = loop.run_until_complete(cache_process)
+                                                    loop.run_until_complete(process_obj.wait())
+                                                finally:
+                                                    loop.close()
+                                                    asyncio.set_event_loop(None)
+                                            else:
+                                                cache_process.wait()
                                         # 删除node_modules
                                         node_modules_path = os.path.join(self.env.st_dir, "node_modules")
                                         if os.path.exists(node_modules_path):
@@ -382,14 +538,26 @@ class UiEvent:
                                         )
                                         if retry_process:
                                             def on_retry_complete(p):
-                                                if p.returncode == 0:
-                                                    self.terminal.add_log("依赖安装成功，正在启动SillyTavern...")
-                                                    self.start_sillytavern(None)
+                                                # 等待异步进程完成
+                                                process_obj = None
+                                                if asyncio.iscoroutine(retry_process):
+                                                    # 正确处理协程对象
+                                                    loop = asyncio.new_event_loop()
+                                                    asyncio.set_event_loop(loop)
+                                                    try:
+                                                        process_obj = loop.run_until_complete(retry_process)
+                                                        loop.run_until_complete(process_obj.wait())
+                                                    finally:
+                                                        loop.close()
+                                                        asyncio.set_event_loop(None)
                                                 else:
-                                                    self.terminal.add_log("依赖安装失败，正在启动SillyTavern...")
-                                                    self.start_sillytavern(None)
+                                                    process_obj = retry_process
+                                                    process_obj.wait()
+                                                on_npm_complete(process_obj, npm_retry_count + 1)
+                                            
                                             threading.Thread(
-                                                target=lambda: (retry_process.wait(), on_retry_complete(retry_process)),
+                                                target=on_retry_complete,
+                                                args=(retry_process,),
                                                 daemon=True
                                             ).start()
                                     else:
@@ -402,30 +570,85 @@ class UiEvent:
                             )
                             
                             if process:
+                                def wait_for_process():
+                                    # 等待异步进程完成
+                                    process_obj = None
+                                    if asyncio.iscoroutine(process):
+                                        # 正确处理协程对象
+                                        loop = asyncio.new_event_loop()
+                                        asyncio.set_event_loop(loop)
+                                        try:
+                                            process_obj = loop.run_until_complete(process)
+                                            loop.run_until_complete(process_obj.wait())
+                                        finally:
+                                            loop.close()
+                                            asyncio.set_event_loop(None)
+                                    else:
+                                        process_obj = process
+                                        process_obj.wait()
+                                    on_npm_complete(process_obj, 0)
+                                
                                 threading.Thread(
-                                    target=lambda: (process.wait(), on_npm_complete(process)),
+                                    target=wait_for_process,
                                     daemon=True
                                 ).start()
                         else:
                             self.terminal.add_log("未找到nodejs，正在启动SillyTavern...")
                             self.start_sillytavern(None)
                     else:
+                        # 检查重试次数，避免无限重试
                         if retry_count < 2:
-                            self.terminal.add_log(f"Git更新失败，正在重试... (尝试次数: {retry_count + 1}/2)")
-                            # 重新执行git pull
-                            retry_process = self.execute_command(
-                                f'\"{git_path}git\" pull --rebase --autostash', 
-                                "SillyTavern"
-                            )
-                            if retry_process:
-                                def on_retry_complete(p):
-                                    on_git_complete(p, retry_count + 1)
-                                threading.Thread(
-                                    target=lambda: (retry_process.wait(), on_retry_complete(retry_process)),
-                                    daemon=True
-                                ).start()
+                            self.terminal.add_log(f"Git更新失败，检查是否为package-lock.json冲突... (尝试次数: {retry_count + 1}/2)")
+                            try:
+                                # 尝试解决package-lock.json冲突
+                                reset_process = subprocess.run(
+                                    f'\"{git_path}git\" checkout -- package-lock.json',
+                                    shell=True,
+                                    cwd=self.env.st_dir,
+                                    creationflags=subprocess.CREATE_NO_WINDOW,
+                                    capture_output=True,
+                                    text=True
+                                )
+                                
+                                if reset_process.returncode == 0:
+                                    self.terminal.add_log("已重置package-lock.json，重新尝试更新...")
+                                    # 重新执行git pull
+                                    retry_process = self.execute_command(
+                                        f'\"{git_path}git\" pull --rebase --autostash', 
+                                        "SillyTavern"
+                                    )
+                                    
+                                    if retry_process:
+                                        def wait_for_retry_process():
+                                            # 等待异步进程完成
+                                            process_obj = None
+                                            if asyncio.iscoroutine(retry_process):
+                                                # 正确处理协程对象
+                                                loop = asyncio.new_event_loop()
+                                                asyncio.set_event_loop(loop)
+                                                try:
+                                                    process_obj = loop.run_until_complete(retry_process)
+                                                    loop.run_until_complete(process_obj.wait())
+                                                finally:
+                                                    loop.close()
+                                                    asyncio.set_event_loop(None)
+                                            else:
+                                                process_obj = retry_process
+                                                process_obj.wait()
+                                            on_git_complete(process_obj, retry_count + 1)
+                                        
+                                        threading.Thread(target=wait_for_retry_process, daemon=True).start()
+                                    else:
+                                        self.terminal.add_log("重试更新失败")
+                                        self.start_sillytavern(None)
+                                else:
+                                    self.terminal.add_log("无法解决package-lock.json冲突，需要手动处理")
+                                    self.start_sillytavern(None)
+                            except Exception as ex:
+                                self.terminal.add_log(f"处理package-lock.json冲突时出错: {str(ex)}")
+                                self.start_sillytavern(None)
                         else:
-                            self.terminal.add_log("Git更新失败，跳过依赖安装，正在启动SillyTavern...")
+                            self.terminal.add_log("Git更新失败，已达到最大重试次数")
                             self.start_sillytavern(None)
                 
                 process = self.execute_command(
@@ -435,14 +658,30 @@ class UiEvent:
                 
                 # 添加git操作完成后的回调
                 if process:
-                    def wait_and_callback():
-                        process.wait()
-                        on_git_complete(process)
+                    def wait_for_process():
+                        # 等待异步进程完成
+                        process_obj = None
+                        if asyncio.iscoroutine(process):
+                            # 正确处理协程对象
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                process_obj = loop.run_until_complete(process)
+                                loop.run_until_complete(process_obj.wait())
+                            finally:
+                                loop.close()
+                                asyncio.set_event_loop(None)
+                        else:
+                            process_obj = process
+                            process_obj.wait()
+                        on_git_complete(process_obj)
                     
-                    threading.Thread(target=wait_and_callback, daemon=True).start()
+                    threading.Thread(
+                        target=wait_for_process,
+                        daemon=True
+                    ).start()
             else:
-                self.terminal.add_log("未找到Git路径，请手动更新SillyTavern，正在启动...")
-                self.start_sillytavern(None)
+                self.terminal.add_log("未找到Git路径，请手动更新SillyTavern")
 
     def port_changed(self,e):
         self.stCfg.port = e.control.value
@@ -608,11 +847,13 @@ class UiEvent:
         self.config_manager.save_config()
         self.showMsg('日志设置已保存')
 
-    def execute_command(self, command: str, workdir: str = "SillyTavern"):
+    async def execute_command(self, command: str, workdir: str = "SillyTavern"):
         import os
         import platform
+        import asyncio
+        import subprocess
         try:
-        # 根据操作系统设置环境变量
+            # 根据操作系统设置环境变量
             if platform.system() == "Windows":
                 # 确保工作目录存在
                 if not os.path.exists(workdir):
@@ -631,18 +872,15 @@ class UiEvent:
 
                 self.terminal.add_log(f"{workdir} $ {command}")
                 # 启动进程并记录(优化Windows参数)
-                process = subprocess.Popen(
+                process = await asyncio.create_subprocess_shell(
                     command,  # 直接执行原始命令
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                     cwd=workdir,
-                    encoding='utf-8',
-                    errors='replace',  # 添加错误处理
                     env=env,  # 使用自定义环境变量
-                    creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
-                    universal_newlines=True  # 使用文本模式
+                    creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
                 )
+                
                 self.terminal.active_processes.append({
                     'process': process,
                     'pid': process.pid,
@@ -650,79 +888,34 @@ class UiEvent:
                 })
             
             # 读取输出的异步方法
-            async def read_output_async(pipe, is_stderr=False):
-                loop = asyncio.get_event_loop()
+            async def read_output_async(stream, is_stderr=False):
                 while True:
-                    # 在线程池中读取数据以避免阻塞事件循环
-                    line = await loop.run_in_executor(None, pipe.readline)
-                    
-                    # 如果返回空字符串且进程已经结束，则退出循环
-                    if line == '' and process.poll() is not None:
-                        break
-                    
-                    # 处理读取到的行
-                    if line:
-                        # 清理行尾的换行符
-                        clean_line = line.rstrip('\r\n')
+                    try:
+                        # 从流中读取一行
+                        line = await stream.readline()
+                        if not line:  # 如果没有数据且流已结束，则退出循环
+                            break
+                        
+                        # 处理读取到的行
+                        # 清理行尾的换行符和回车符
+                        clean_line = line.decode('utf-8', errors='replace').rstrip('\r\n')
                         if clean_line:  # 只有当文本非空时才添加日志
                             self.terminal.add_log(clean_line)
-
-            # 创建并启动异步输出处理任务
-            async def start_output_tasks():
-                loop = asyncio.get_event_loop()
-                stdout_task = loop.create_task(read_output_async(process.stdout, False))
-                stderr_task = loop.create_task(read_output_async(process.stderr, True))
-                return [stdout_task, stderr_task]
-            
-            # 在事件循环中启动异步任务
-            if hasattr(self.terminal.view.page, '_loop'):
-                # 如果页面有事件循环，使用它来运行任务
-                tasks = self.terminal.view.page._loop.run_until_complete(start_output_tasks())
-                self.terminal._output_tasks = tasks
-            else:
-                # 否则回退到线程方式
-                def read_output(pipe, is_stderr=False):
-                    try:
-                        while True:
-                            # 读取一行文本（因为我们设置了universal_newlines=True）
-                            line = pipe.readline()
-                            
-                            # 如果返回空字符串且进程已经结束，则退出循环
-                            if line == '' and process.poll() is not None:
-                                break
-                            
-                            # 处理读取到的行
-                            if line:
-                                # 清理行尾的换行符
-                                clean_line = line.rstrip('\r\n')
-                                if clean_line:  # 只有当文本非空时才添加日志
-                                    self.terminal.add_log(clean_line)
-
                     except Exception as ex:
                         import traceback
                         if hasattr(self.terminal, 'view') and self.terminal.view.page:
                             self.terminal.add_log(f"输出处理错误: {type(ex).__name__}: {str(ex)}")
                             self.terminal.add_log(f"错误详情: {traceback.format_exc()}")
-                        return
+                        break
 
-                # 创建并启动输出处理线程
-                stdout_thread = threading.Thread(
-                    target=read_output, 
-                    args=(process.stdout, False),
-                    daemon=True
-                )
-                stderr_thread = threading.Thread(
-                    target=read_output, 
-                    args=(process.stderr, True),
-                    daemon=True
-                )
-                
-                stdout_thread.start()
-                stderr_thread.start()
-                
-                # 保存线程引用以便后续管理
-                self.terminal._output_threads.append(stdout_thread)
-                self.terminal._output_threads.append(stderr_thread)
+            # 创建并启动异步输出处理任务
+            stdout_task = asyncio.create_task(read_output_async(process.stdout, False))
+            stderr_task = asyncio.create_task(read_output_async(process.stderr, True))
+            
+            # 将任务添加到终端的任务列表中以便后续管理
+            if not hasattr(self.terminal, '_output_tasks'):
+                self.terminal._output_tasks = []
+            self.terminal._output_tasks.extend([stdout_task, stderr_task])
             
             return process
         except Exception as e:
@@ -782,8 +975,26 @@ class UiEvent:
                                 self.terminal.add_log(f"检查更新时出错: {str(ex)}，正在更新...")
                                 self.update_sillytavern_with_callback(None)
 
+                        def wait_for_status_process():
+                            # 等待异步进程完成
+                            process_obj = None
+                            if asyncio.iscoroutine(status_process):
+                                # 正确处理协程对象
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                try:
+                                    process_obj = loop.run_until_complete(status_process)
+                                    loop.run_until_complete(process_obj.wait())
+                                finally:
+                                    loop.close()
+                                    asyncio.set_event_loop(None)
+                            else:
+                                process_obj = status_process
+                                process_obj.wait()
+                            on_status_complete(process_obj)
+                        
                         threading.Thread(
-                            target=lambda: (status_process.wait(), on_status_complete(status_process)),
+                            target=wait_for_status_process,
                             daemon=True
                         ).start()
                     else:
@@ -797,8 +1008,26 @@ class UiEvent:
             fetch_process = self.execute_command(f'\"{git_path}git\" fetch --all')
 
             if fetch_process:
+                def wait_for_fetch_process():
+                    # 等待异步进程完成
+                    process_obj = None
+                    if asyncio.iscoroutine(fetch_process):
+                        # 正确处理协程对象
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            process_obj = loop.run_until_complete(fetch_process)
+                            loop.run_until_complete(process_obj.wait())
+                        finally:
+                            loop.close()
+                            asyncio.set_event_loop(None)
+                    else:
+                        process_obj = fetch_process
+                        process_obj.wait()
+                    on_git_fetch_complete(process_obj)
+                
                 threading.Thread(
-                    target=lambda: (fetch_process.wait(), on_git_fetch_complete(fetch_process)),
+                    target=wait_for_fetch_process,
                     daemon=True
                 ).start()
             else:
