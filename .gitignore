@@ -13,3 +13,4 @@ Nuitkadist
 logs
 nuitka-crash-report.xml
 .vscode
+.flet
