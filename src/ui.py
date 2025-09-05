@@ -12,6 +12,16 @@ import re
 import time
 import threading
 import queue
+import threading
+import time
+import os
+import datetime
+import re
+import subprocess
+import platform
+import ftplib
+import flet as ft
+from config import ConfigManager
 
 # ANSI颜色代码正则表达式
 ANSI_ESCAPE_REGEX = re.compile(r'\x1b\[[0-9;]*m')
@@ -103,8 +113,15 @@ class AsyncTerminal:
         self._stop_event = threading.Event()  # 停止事件
         self._max_log_entries = 1500  # 最大日志条目数 - 调整为1500以减少内存占用
         
+        # 日志文件写入线程相关属性
+        self._log_file_queue = queue.Queue()
+        self._log_file_thread = None
+        self._log_file_stop_event = threading.Event()
+        
         # 启动异步日志处理循环
         self._start_log_processing_loop()
+        # 启动日志文件写入线程
+        self._start_log_file_thread()
 
     def _start_log_processing_loop(self):
         """启动异步日志处理循环"""
@@ -121,6 +138,39 @@ class AsyncTerminal:
         # 在单独的线程中运行日志处理循环
         self._log_thread = threading.Thread(target=log_processing_worker, daemon=True)
         self._log_thread.start()
+        
+    def _start_log_file_thread(self):
+        """启动日志文件写入线程"""
+        def log_file_worker():
+            """日志文件写入工作线程"""
+            while not self._log_file_stop_event.is_set():
+                try:
+                    # 批量处理日志文件写入
+                    entries = []
+                    try:
+                        # 先处理一个日志条目
+                        entry = self._log_file_queue.get(timeout=0.1)
+                        entries.append(entry)
+                        
+                        # 尝试获取更多日志条目进行批量处理
+                        while len(entries) < 50:  # 最多批量处理50条
+                            try:
+                                entry = self._log_file_queue.get_nowait()
+                                entries.append(entry)
+                            except queue.Empty:
+                                break
+                    except queue.Empty:
+                        continue
+                    
+                    if entries:
+                        self._write_log_entries_to_file(entries)
+                        
+                except Exception as e:
+                    print(f"日志文件写入线程错误: {str(e)}")
+        
+        # 启动日志文件写入线程
+        self._log_file_thread = threading.Thread(target=log_file_worker, daemon=True)
+        self._log_file_thread.start()
 
     def update_log_setting(self, enabled: bool):
         """更新日志设置"""
@@ -135,6 +185,7 @@ class AsyncTerminal:
         
         # 设置停止事件
         self._stop_event.set()
+        self._log_file_stop_event.set()
         
         # 首先停止所有输出线程
         for thread in self._output_threads:
@@ -385,8 +436,10 @@ class AsyncTerminal:
             processed_text = text[:LOG_MAX_LENGTH]
             processed_text = re.sub(r'(\r?\n){3,}', '\n\n', processed_text.strip())
             
-            # 将日志写入文件
-            self._write_log_to_file(processed_text)
+            # 将日志写入文件（通过队列异步处理）
+            if self.enable_logging:
+                timestamp = datetime.datetime.now()
+                self._log_file_queue.put((timestamp, processed_text))
             
             # 超长日志特殊处理
             if len(processed_text) >= LOG_MAX_LENGTH:
@@ -445,59 +498,54 @@ class AsyncTerminal:
             print(f"未知错误: {str(e)}")
             print(f"错误详情: {traceback.format_exc()}")
     
-    def _write_log_to_file(self, text: str):
-        """将日志写入文件"""
+    def _write_log_entries_to_file(self, entries):
+        """将一批日志条目写入文件"""
         # 检查是否启用日志输出
-        if self.enable_logging:
-            try:
-                # 创建logs目录（如果不存在）
-                logs_dir = os.path.join(os.getcwd(), "logs")
-                os.makedirs(logs_dir, exist_ok=True)
-                
-                # 生成基于启动时间戳的文件名
-                log_file_path = os.path.join(logs_dir, f"{self.launch_timestamp}.log")
-                
-                # 获取当前时间戳
-                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if not self.enable_logging:
+            return
+            
+        try:
+            # 创建logs目录（如果不存在）
+            logs_dir = os.path.join(os.getcwd(), "logs")
+            os.makedirs(logs_dir, exist_ok=True)
+            
+            # 生成基于启动时间戳的文件名
+            log_file_path = os.path.join(logs_dir, f"{self.launch_timestamp}.log")
+            
+            # 准备日志内容
+            log_lines = []
+            for timestamp, text in entries:
+                # 格式化时间戳
+                formatted_timestamp = timestamp.strftime("%Y-%m-%d %H:%M:%S")
                 
                 # 移除ANSI颜色代码
                 clean_text = re.sub(r'\x1b\[[0-9;]*m', '', text)
                 
-                # 使用缓冲写入提高性能
-                if not hasattr(self, '_log_buffer'):
-                    self._log_buffer = []
-                    self._log_buffer_size = 0
+                # 添加到日志行
+                log_lines.append(f"[{formatted_timestamp}] {clean_text}\n")
+            
+            # 写入文件
+            with open(log_file_path, "a", encoding="utf-8") as log_file:
+                log_file.writelines(log_lines)
                 
-                # 添加到缓冲区
-                log_entry = f"[{timestamp}] {clean_text}\n"
-                self._log_buffer.append(log_entry)
-                self._log_buffer_size += len(log_entry)
-                
-                # 如果缓冲区足够大，则写入文件
-                if self._log_buffer_size > 4096:  # 4KB缓冲区 - 减小缓冲区大小以提高写入频率
-                    with open(log_file_path, "a", encoding="utf-8") as log_file:
-                        log_file.writelines(self._log_buffer)
-                    self._log_buffer.clear()
-                    self._log_buffer_size = 0
-                    
-            except Exception as e:
-                # 如果写入日志文件失败，不中断主流程，只在控制台输出错误
-                print(f"写入日志文件失败: {str(e)}")
+        except Exception as e:
+            # 如果写入日志文件失败，不中断主流程，只在控制台输出错误
+            print(f"写入日志文件失败: {str(e)}")
+    
+    def _write_log_to_file(self, text: str):
+        """将日志写入文件（已废弃，保留向后兼容性）"""
+        # 此方法已废弃，现在使用队列异步处理日志写入
+        # 保留此方法以确保向后兼容性
+        if self.enable_logging:
+            timestamp = datetime.datetime.now()
+            self._log_file_queue.put((timestamp, text))
     
     def _flush_log_buffer(self):
         """刷新日志缓冲区，确保所有日志都被写入文件"""
-        if self.enable_logging and hasattr(self, '_log_buffer') and self._log_buffer:
-            try:
-                logs_dir = os.path.join(os.getcwd(), "logs")
-                os.makedirs(logs_dir, exist_ok=True)
-                log_file_path = os.path.join(logs_dir, f"{self.launch_timestamp}.log")
-                
-                with open(log_file_path, "a", encoding="utf-8") as log_file:
-                    log_file.writelines(self._log_buffer)
-                self._log_buffer.clear()
-                self._log_buffer_size = 0
-            except Exception as e:
-                print(f"刷新日志缓冲区失败: {str(e)}")
+        # 等待日志文件队列处理完毕
+        while not self._log_file_queue.empty() and not self._log_file_stop_event.is_set():
+            time.sleep(0.01)  # 等待队列处理完成
+
 class UniUI():
     def __init__(self,page,ver,version_checker):
         self.page = page
