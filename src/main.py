@@ -19,7 +19,7 @@ async def main(page: ft.Page):
     page.window.min_width=800
     page.window.maximizable = False
     page.window.title_bar_hidden = True
-    version='v1.2.5测试版1'
+    version='v1.2.5'
 
     # 检查是否为首次启动
     async def check_first_launch():
