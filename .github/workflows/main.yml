@@ -61,43 +61,29 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 📦 安装依赖
+      - name: 📦 升级 pip 和安装基础依赖
         run: |
           python -m pip install --upgrade pip
-          pip install flet pyinstaller ruamel.yaml packaging Nuitka flet-cli==0.28.3
+          pip install flet pyinstaller ruamel.yaml packaging Nuitka
 
-      # ✅ 新增：检出你自己的 flet_cli 仓库
-      - name: 📥 检出自定义 flet_cli 仓库
-        uses: actions/checkout@v4
-        with:
-          repository: LingyeSoul/flet_cli
-          path: ./custom_flet_cli
-          ref: main  # 或指定 tag/branch，如 v1.0
-
-      # ✅ 替换 flet_cli 的文件
-      - name: 🔧 注入自定义 flet_cli（从仓库）
+      - name: 🔧 安装自定义 flet-cli
         run: |
-          # 获取已安装的 flet_cli 路径
-          $installed_path = python -c "import flet_cli; print(flet_cli.__file__.replace('__init__.py', ''))"
-          Write-Host "已安装的 flet_cli 路径: $installed_path"
-
-          # 替换 cli.py
-          Copy-Item -Path "./custom_flet_cli/cli.py" -Destination "$installed_path\cli.py" -Force
-
-          # 确保 commands 目录存在
-          $commands_dir = "$installed_path\commands"
-          if (!(Test-Path $commands_dir)) {
-            New-Item -ItemType Directory -Path $commands_dir
-          }
-
-          # 复制 packn.py
-          Copy-Item -Path "./custom_flet_cli/packn.py" -Destination "$commands_dir\packn.py" -Force
-
-          Write-Host "✅ 已从 ./custom_flet_cli 注入 cli.py 和 packn.py"
+          # 卸载默认的 flet-cli（如果存在）
+          pip uninstall -y flet-cli
+          
+          # 安装自定义版本的 flet-cli
+          pip install git+https://github.com/LingyeSoul/flet_cli.git@main
+          
+          # 验证安装版本
+          echo "=== 已安装的 flet-cli 信息 ==="
+          pip show flet-cli
+          
+          # 验证 flet 命令是否可用
+          flet --version
+          flet pack --help
         shell: pwsh
 
-      # ✅ 使用你指定的 packn 命令打包
-      - name: 🧱 打包应用（使用 packn）
+      - name: 🧱 打包应用
         run: |
           flet packn src/main.py `
             --icon "$env:ICON_PATH" `
@@ -124,7 +110,8 @@ jobs:
           if (-Not (Test-Path $path)) {
               throw "❌ ZIP 文件未生成: $path"
           }
-          Write-Host "✅ ZIP 文件存在: $path"
+          $size = (Get-Item $path).Length / 1MB
+          Write-Host "✅ ZIP 文件存在: $path (大小: $([math]::Round($size, 2)) MB)"
         shell: pwsh
 
       - name: ⏱️ 获取当前时间（上海时区，中文格式）
@@ -163,6 +150,7 @@ jobs:
 
             - 打包时间：${{ steps.timestamp.outputs.now }}
             - 版本号：v${{ env.SEMVER }}
+            - 构建系统：Windows
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
