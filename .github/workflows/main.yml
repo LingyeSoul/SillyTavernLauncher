@@ -65,7 +65,7 @@ jobs:
       - name: Upgrade pip and install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flet pyinstaller ruamel.yaml packaging Nuitka flet-desktop==0.28.3
+          pip install pyinstaller ruamel.yaml packaging Nuitka flet-desktop==0.28.3 aiohttp flet==0.28.3 pystray==0.19.5
 
       - name: Install custom flet-cli
         run: |
