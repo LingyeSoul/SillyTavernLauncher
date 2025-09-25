@@ -61,21 +61,45 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 📦 安装运行时依赖
+      - name: 📦 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install flet pyinstaller ruamel.yaml packaging Nuitka
+          pip install flet pyinstaller ruamel.yaml packaging Nuitka flet-cli==0.28.3
 
-      - name: 📥 检出自定义 flet_cli
+      # ✅ 新增：检出你自己的 flet_cli 仓库
+      - name: 📥 检出自定义 flet_cli 仓库
         uses: actions/checkout@v4
         with:
           repository: LingyeSoul/flet_cli
           path: ./custom_flet_cli
-          ref: main
+          ref: main  # 或指定 tag/branch，如 v1.0
 
-      - name: 🧱 打包应用（使用自定义 cli.py）
+      # ✅ 替换 flet_cli 的文件
+      - name: 🔧 注入自定义 flet_cli（从仓库）
         run: |
-          python ./custom_flet_cli/cli.py packn src/main.py `
+          # 获取已安装的 flet_cli 路径
+          $installed_path = python -c "import flet_cli; print(flet_cli.__file__.replace('__init__.py', ''))"
+          Write-Host "已安装的 flet_cli 路径: $installed_path"
+
+          # 替换 cli.py
+          Copy-Item -Path "./custom_flet_cli/cli.py" -Destination "$installed_path\cli.py" -Force
+
+          # 确保 commands 目录存在
+          $commands_dir = "$installed_path\commands"
+          if (!(Test-Path $commands_dir)) {
+            New-Item -ItemType Directory -Path $commands_dir
+          }
+
+          # 复制 packn.py
+          Copy-Item -Path "./custom_flet_cli/packn.py" -Destination "$commands_dir\packn.py" -Force
+
+          Write-Host "✅ 已从 ./custom_flet_cli 注入 cli.py 和 packn.py"
+        shell: pwsh
+
+      # ✅ 使用你指定的 packn 命令打包
+      - name: 🧱 打包应用（使用 packn）
+        run: |
+          flet packn src/main.py `
             --icon "$env:ICON_PATH" `
             --name "$env:APP_NAME" `
             --product-name "$env:PRODUCT_NAME" `
@@ -85,7 +109,7 @@ jobs:
             --distpath "$env:DIST_PATH" `
             --yes
         shell: pwsh
-        
+
       - name: 🗂️ 压缩 dist 到 ZIP
         id: compress_dist
         run: |
