@@ -65,12 +65,10 @@ jobs:
       - name: 📦 升级 pip 和安装基础依赖
         run: |
           python -m pip install --upgrade pip
-          pip install flet pyinstaller ruamel.yaml packaging Nuitka
+          pip install flet pyinstaller ruamel.yaml packaging Nuitka flet-desktop==0.28.3
 
       - name: 🔧 安装自定义 flet-cli
         run: |
-          # 卸载默认的 flet-cli（如果存在）
-          pip uninstall -y flet-cli
           
           # 安装自定义版本的 flet-cli
           pip install git+https://github.com/LingyeSoul/flet_cli.git@main
