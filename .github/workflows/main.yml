@@ -21,7 +21,7 @@ jobs:
       COPYRIGHT: "Copyright (c) 2025 LingyeSoul"
 
     steps:
-      - name: 🔁 拉取代码
+      - name: 🔁 拉取主项目代码
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -64,20 +64,48 @@ jobs:
       - name: 📦 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install flet pyinstaller ruamel.yaml packaging
+          pip install flet pyinstaller ruamel.yaml packaging Nuitka
 
-      - name: 🧱 打包应用
+      # ✅ 新增：检出你自己的 flet_cli 仓库
+      - name: 📥 检出自定义 flet_cli 仓库
+        uses: actions/checkout@v4
+        with:
+          repository: LingyeSoul/flet_cli
+          path: ./custom_flet_cli
+          ref: main  # 或指定 tag/branch，如 v1.0
+
+      # ✅ 替换 flet_cli 的文件
+      - name: 🔧 注入自定义 flet_cli（从仓库）
         run: |
-          flet pack src/main.py `
+          # 获取已安装的 flet_cli 路径
+          $installed_path = python -c "import flet_cli; print(flet_cli.__file__.replace('__init__.py', ''))"
+          Write-Host "已安装的 flet_cli 路径: $installed_path"
+
+          # 替换 cli.py
+          Copy-Item -Path "./custom_flet_cli/cli.py" -Destination "$installed_path\cli.py" -Force
+
+          # 确保 commands 目录存在
+          $commands_dir = "$installed_path\commands"
+          if (!(Test-Path $commands_dir)) {
+            New-Item -ItemType Directory -Path $commands_dir
+          }
+
+          # 复制 packn.py
+          Copy-Item -Path "./custom_flet_cli/packn.py" -Destination "$commands_dir\packn.py" -Force
+
+          Write-Host "✅ 已从 ./custom_flet_cli 注入 cli.py 和 packn.py"
+        shell: pwsh
+
+      # ✅ 使用你指定的 packn 命令打包
+      - name: 🧱 打包应用（使用 packn）
+        run: |
+          flet packn src/main.py `
             --icon "$env:ICON_PATH" `
             --name "$env:APP_NAME" `
             --product-name "$env:PRODUCT_NAME" `
             --file-description "$env:APP_NAME $env:PRODUCT_NAME" `
-            --product-version "${{ env.SEMVER }}" `
-            --file-version "${{ env.MAJOR }}.${{ env.MINOR }}.${{ env.PATCH }}.0" `
-            --company-name "$env:COMPANY_NAME" `
+            --product-version "$env:SEMVER" `
             --copyright "$env:COPYRIGHT" `
-            --onedir `
             --distpath "$env:DIST_PATH" `
             --yes
         shell: pwsh
@@ -90,7 +118,7 @@ jobs:
           echo "zip_name=$zipName" >> $env:GITHUB_OUTPUT
         shell: pwsh
 
-      - name: ✅ 验证 ZIP
+      - name: ✅ 验证 ZIP 文件
         run: |
           $path = "${{ steps.compress_dist.outputs.zip_name }}"
           if (-Not (Test-Path $path)) {
@@ -108,17 +136,16 @@ jobs:
           "now=$formatted" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
 
-      - name: 📜 生成更新日志
+      - name: 📜 生成更新日志（最近 5 条 commit）
         id: changelog
         run: |
           $log = git log --pretty=format:"* [%h] %s (%an)" -n 5
-          $logPath = "$env:GITHUB_OUTPUT"
-          Add-Content -Path $logPath -Value "log<<EOF"
-          Add-Content -Path $logPath -Value "$log"
-          Add-Content -Path $logPath -Value "EOF"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "log<<EOF"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "$log"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "EOF"
         shell: pwsh
 
-      - name: 🚀 创建 Release 并上传 ZIP
+      - name: 🚀 创建 Release 并上传 ZIP（仅在 release 触发时）
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
@@ -139,7 +166,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 📁 上传 Artifact
+      - name: 📁 上传 Artifact（供调试或下载）
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APP_NAME }}-windows-v${{ env.SEMVER }}
