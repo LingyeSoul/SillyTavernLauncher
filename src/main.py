@@ -4,22 +4,19 @@ from ui import UniUI
 from config import ConfigManager
 from version import VersionChecker
 import asyncio
-
-
 async def main(page: ft.Page):
     page.window.center()
-    page.window.visible = True
     page.title = "SillyTavernLauncher"
     page.theme = ft.Theme(color_scheme_seed=ft.Colors.BLUE,font_family="Microsoft YaHei")
     page.dark_theme=ft.Theme(color_scheme_seed=ft.Colors.BLUE,font_family="Microsoft YaHei")
     page.window.width = 800
-    page.window.height = 640
+    page.window.height = 644
     page.window.resizable = False
-    page.window.min_height=640
+    page.window.min_height=644
     page.window.min_width=800
     page.window.maximizable = False
     page.window.title_bar_hidden = True
-    version='v1.2.5'
+    version='v1.2.6测试版2'
 
     # 检查是否为首次启动
     async def check_first_launch():
@@ -76,13 +73,31 @@ async def main(page: ft.Page):
     #ui_event = UiEvent(page, uniUI.terminal)
 
     page.window.center()
-    page.update()
     page.window.width = 800
-    page.window.height = 640
+    page.window.height = 644
+
+    # 初始化时根据配置决定是否创建托盘
+    config_manager = ConfigManager()
+    if config_manager.get("tray", True):
+        async def create_tray_delayed():
+            from tray import Tray
+            uniUI.ui_event.tray = Tray(page,uniUI.ui_event)
+            # 检查是否应该自动启动酒馆
+            if config_manager.get("autostart", False):
+                page.window.visible = False
+                page.update()
+                uniUI.ui_event.start_sillytavern(None)
+        
+        asyncio.create_task(create_tray_delayed())
     
+    
+    if not config_manager.get("autostart", False):
+        page.window.visible = True
+    page.update()
     # 启动时检查更新（根据设置决定是否检查）
     config_manager = ConfigManager()
     if config_manager.get("checkupdate", True):
         asyncio.create_task(check_for_updates())
     asyncio.create_task(check_first_launch())
+
 ft.app(target=main, view=ft.AppView.FLET_APP_HIDDEN)

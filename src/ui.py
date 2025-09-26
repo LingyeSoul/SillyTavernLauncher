@@ -9,17 +9,12 @@ import os
 import subprocess
 import datetime
 import re
-import time
 import threading
 import queue
-import threading
 import time
-import os
 import datetime
-import re
 import subprocess
 import platform
-import ftplib
 import flet as ft
 from config import ConfigManager
 
@@ -597,7 +592,7 @@ class UniUI():
                     ft.Text("切换后新任务将立即生效，特别感谢Github镜像提供者", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
                     ft.Text("环境设置", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Text("懒人包请勿修改，如需修改则重启后生效", size=14, color=ft.Colors.GREY_600),
+                    ft.Text("懒人包请勿修改", size=14, color=ft.Colors.GREY_600),
                     ft.Row(
                         controls=[
                             ft.Switch(
@@ -614,7 +609,7 @@ class UniUI():
                         spacing=5,
                         scroll=ft.ScrollMode.AUTO
                     ),
-                    ft.Text("懒人包请勿修改，如需修改则重启后生效 | 开启后修改系统环境的Git配置文件", size=14, color=ft.Colors.BLUE_400),
+                    ft.Text("懒人包请勿修改 | 开启后修改系统环境的Git配置文件", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
                     ft.Text("酒馆网络设置", size=18, weight=ft.FontWeight.BOLD),
                     ft.Text("调整酒馆网络设置，重启酒馆生效", size=14, color=ft.Colors.GREY_600),
@@ -668,6 +663,18 @@ class UniUI():
                         on_change=self.ui_event.stcheckupdate_changed,
                     ),
                     ft.Text("开启后在每次启动酒馆时先进行更新操作再启动酒馆", size=14, color=ft.Colors.BLUE_400),
+                    ft.Switch(
+                        label="启用系统托盘",
+                        value=self.config_manager.get("tray", True),
+                        on_change=self.ui_event.tray_changed,
+                    ),
+                    ft.Text("开启后将在系统托盘中显示图标，可快速退出程序", size=14, color=ft.Colors.BLUE_400),
+                    ft.Switch(
+                        label="启用自动启动",
+                        value=self.config_manager.get("autostart", False),
+                        on_change=self.ui_event.autostart_changed,
+                    ),
+                    ft.Text("在打开托盘的状态下，启动启动器时，会自动隐藏窗口并静默启动酒馆", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
                     ft.Text("辅助功能", size=18, weight=ft.FontWeight.BOLD),
                     ft.Row(
@@ -878,6 +885,13 @@ class UniUI():
     )
         def window_event(e):
             if e.data == "close":
-                self.ui_event.exit_app(e)
+                # 检查是否启用了托盘功能
+                if self.config_manager.get("tray", True):
+                    # 启用托盘时，只隐藏窗口
+                    self.page.window.visible = False
+                    self.page.update()
+                else:
+                    # 未启用托盘时，正常退出程序
+                    self.ui_event.exit_app(e)
         page.window.prevent_close = True
         page.window.on_event = window_event
