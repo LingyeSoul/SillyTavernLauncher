@@ -28,10 +28,7 @@
 
 ```bash
 # 安装依赖
-pip install flet ruamel.yaml packaging pyinstaller
-
-# 打包命令
-build.bat
+pip install flet ruamel.yaml packaging pystray aiohttp
 ```
 
 ## 功能特性 🌟

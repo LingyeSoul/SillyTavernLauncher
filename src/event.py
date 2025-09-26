@@ -30,6 +30,7 @@ class UiEvent:
             if not tmp==True:
                 self.terminal.add_log(tmp)
         self.stCfg = stcfg()
+        self.tray = None  # 添加tray引用
 
     def envCheck(self):
         if os.path.exists(os.path.join(os.getcwd(), "env\\")):
@@ -38,10 +39,29 @@ class UiEvent:
             return True
         
     def exit_app(self, e):
+        # 检查是否启用了托盘功能
+        if self.config_manager.get("tray", True):
+            # 启用托盘时，停止所有运行的进程并隐藏窗口
+            if self.terminal.is_running:
+                self.terminal.stop_processes()
+            self.page.window.visible = False
+            self.page.update()
+        else:
+            # 未启用托盘时，正常退出程序
+            if self.terminal.is_running:
+                self.terminal.stop_processes()
+            self.page.window.visible = False
+            self.page.window.destroy()
+        
+    def exit_app_with_tray(self, e):
+        # 停止所有运行的进程
         if self.terminal.is_running:
             self.terminal.stop_processes()
-        self.page.window.visible = False
-        self.page.window.destroy()
+        
+        # 如果启用了托盘功能，则先停止托盘
+        if self.config_manager.get("tray", True) and self.tray is not None:
+            self.tray.tray.stop()
+        self.exit_app(e)
 
     def switch_theme(self, e):
         if self.page.theme_mode == "light":
@@ -367,6 +387,63 @@ class UiEvent:
         self.terminal.stop_processes()
         self.terminal.add_log("所有进程已停止")
 
+    def restart_sillytavern(self, e):
+        """重启SillyTavern服务"""
+        self.terminal.add_log("正在重启SillyTavern...")
+        # 先停止服务
+        self.terminal.stop_processes()
+        self.terminal.add_log("旧进程已停止")
+        
+        # 检查路径是否包含中文或空格
+        current_path = os.getcwd()
+        
+        # 检查是否包含中文字符（使用Python内置方法）
+        has_chinese = any('\u4e00' <= char <= '\u9fff' for char in current_path)
+        if has_chinese:
+            self.terminal.add_log("错误：路径包含中文字符，请将程序移动到不包含中文字符的路径下运行")
+            return
+            
+        # 检查是否包含空格
+        if ' ' in current_path:
+            self.terminal.add_log("错误：路径包含空格，请将程序移动到不包含空格的路径下运行")
+            return
+            
+        if self.env.checkST():
+            if self.env.check_nodemodules():
+                self.terminal.is_running = True
+                def on_process_exit():
+                    self.terminal.is_running = False
+                    self.terminal.add_log("SillyTavern进程已退出")
+                
+                # 启动进程并设置退出回调
+                process = self.execute_command(f"\"{self.env.get_node_path()}node\" server.js %*", "SillyTavern")
+                if process:
+                    def wait_for_exit():
+                        # 创建一个新的事件循环并运行直到完成
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            # 如果process是一个协程对象，我们需要运行它直到完成以获取进程对象
+                            if asyncio.iscoroutine(process):
+                                process_obj = loop.run_until_complete(process)
+                            else:
+                                process_obj = process
+                            
+                            # 等待进程完成
+                            loop.run_until_complete(process_obj.wait())
+                        finally:
+                            loop.close()
+                        on_process_exit()
+                    
+                    threading.Thread(target=wait_for_exit, daemon=True).start()
+                    self.terminal.add_log("SillyTavern已重启")
+                else:
+                    self.terminal.add_log("重启失败")
+            else:
+                self.terminal.add_log("依赖项未安装")
+        else:
+            self.terminal.add_log("SillyTavern未安装")
+
     
     def update_sillytavern(self,e):
         git_path = self.env.get_git_path()
@@ -447,7 +524,42 @@ class UiEvent:
                                         else:
                                             process_obj = retry_process
                                             process_obj.wait()
-                                        on_git_complete(process_obj)
+                                        # 避免递归调用，直接处理结果
+                                        if process_obj.returncode == 0:
+                                            self.terminal.add_log("Git更新成功")
+                                            if self.env.get_node_path():
+                                                self.terminal.add_log("正在安装依赖...")
+                                                def on_npm_complete(process):
+                                                    if process.returncode == 0:
+                                                        self.terminal.add_log("依赖安装成功")
+                                                    else:
+                                                        self.terminal.add_log("依赖安装失败")
+                                                
+                                                process = self.execute_command(f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", "SillyTavern")
+                                                if process:
+                                                    def wait_for_process():
+                                                        # 等待异步进程完成
+                                                        process_obj = None
+                                                        if asyncio.iscoroutine(process):
+                                                            # 正确处理协程对象
+                                                            loop = asyncio.new_event_loop()
+                                                            asyncio.set_event_loop(loop)
+                                                            try:
+                                                                process_obj = loop.run_until_complete(process)
+                                                                loop.run_until_complete(process_obj.wait())
+                                                            finally:
+                                                                loop.close()
+                                                                asyncio.set_event_loop(None)
+                                                        else:
+                                                            process_obj = process
+                                                            process_obj.wait()
+                                                        on_npm_complete(process_obj)
+                                                    
+                                                    threading.Thread(target=wait_for_process,daemon=True).start()
+                                            else:
+                                                self.terminal.add_log("未找到nodejs")
+                                        else:
+                                            self.terminal.add_log("重试更新失败")
                                     
                                     threading.Thread(target=wait_for_retry_process, daemon=True).start()
                                 else:
@@ -635,7 +747,112 @@ class UiEvent:
                                             else:
                                                 process_obj = retry_process
                                                 process_obj.wait()
-                                            on_git_complete(process_obj, retry_count + 1)
+                                            # 避免递归调用，直接处理结果
+                                            if process_obj.returncode == 0:
+                                                self.terminal.add_log("Git更新成功")
+                                                if self.env.get_node_path():
+                                                    self.terminal.add_log("正在安装依赖...")
+                                                    def on_npm_complete(process, npm_retry_count=0):
+                                                        if process.returncode == 0:
+                                                            self.terminal.add_log("依赖安装成功，正在启动SillyTavern...")
+                                                            self.start_sillytavern(None)
+                                                        else:
+                                                            if npm_retry_count < 2:
+                                                                self.terminal.add_log(f"依赖安装失败，正在重试... (尝试次数: {npm_retry_count + 1}/2)")
+                                                                # 清理npm缓存
+                                                                cache_process = self.execute_command(
+                                                                    f"\"{self.env.get_node_path()}npm\" cache clean --force",
+                                                                    "SillyTavern"
+                                                                )
+                                                                if cache_process:
+                                                                    # 等待异步进程完成
+                                                                    if asyncio.iscoroutine(cache_process):
+                                                                        # 正确处理协程对象
+                                                                        loop = asyncio.new_event_loop()
+                                                                        asyncio.set_event_loop(loop)
+                                                                        try:
+                                                                            process_obj = loop.run_until_complete(cache_process)
+                                                                            loop.run_until_complete(process_obj.wait())
+                                                                        finally:
+                                                                            loop.close()
+                                                                            asyncio.set_event_loop(None)
+                                                                    else:
+                                                                        cache_process.wait()
+                                                                # 删除node_modules
+                                                                node_modules_path = os.path.join(self.env.st_dir, "node_modules")
+                                                                if os.path.exists(node_modules_path):
+                                                                    try:
+                                                                        import shutil
+                                                                        shutil.rmtree(node_modules_path)
+                                                                    except Exception as ex:
+                                                                        self.terminal.add_log(f"删除node_modules失败: {str(ex)}")
+                                                                # 重新安装依赖
+                                                                retry_process = self.execute_command(
+                                                                    f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
+                                                                    "SillyTavern"
+                                                                )
+                                                                if retry_process:
+                                                                    def on_retry_complete(p):
+                                                                        # 等待异步进程完成
+                                                                        process_obj = None
+                                                                        if asyncio.iscoroutine(retry_process):
+                                                                            # 正确处理协程对象
+                                                                            loop = asyncio.new_event_loop()
+                                                                            asyncio.set_event_loop(loop)
+                                                                            try:
+                                                                                process_obj = loop.run_until_complete(retry_process)
+                                                                                loop.run_until_complete(process_obj.wait())
+                                                                            finally:
+                                                                                loop.close()
+                                                                                asyncio.set_event_loop(None)
+                                                                        else:
+                                                                            process_obj = retry_process
+                                                                            process_obj.wait()
+                                                                        on_npm_complete(process_obj, npm_retry_count + 1)
+                                                                    
+                                                                    threading.Thread(
+                                                                        target=on_retry_complete,
+                                                                        args=(retry_process,),
+                                                                        daemon=True
+                                                                    ).start()
+                                                            else:
+                                                                self.terminal.add_log("依赖安装失败，正在启动SillyTavern...")
+                                                                self.start_sillytavern(None)
+                                                    
+                                                    process = self.execute_command(
+                                                        f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
+                                                        "SillyTavern"
+                                                    )
+                                                    
+                                                    if process:
+                                                        def wait_for_process():
+                                                            # 等待异步进程完成
+                                                            process_obj = None
+                                                            if asyncio.iscoroutine(process):
+                                                                # 正确处理协程对象
+                                                                loop = asyncio.new_event_loop()
+                                                                asyncio.set_event_loop(loop)
+                                                                try:
+                                                                    process_obj = loop.run_until_complete(process)
+                                                                    loop.run_until_complete(process_obj.wait())
+                                                                finally:
+                                                                    loop.close()
+                                                                    asyncio.set_event_loop(None)
+                                                            else:
+                                                                process_obj = process
+                                                                process_obj.wait()
+                                                            on_npm_complete(process_obj, 0)
+                                                        
+                                                        threading.Thread(
+                                                            target=wait_for_process,
+                                                            daemon=True
+                                                        ).start()
+                                                else:
+                                                    self.terminal.add_log("未找到nodejs，正在启动SillyTavern...")
+                                                    self.start_sillytavern(None)
+                                            else:
+                                                # 递增retry_count并再次尝试
+                                                on_git_complete(process_obj, retry_count + 1)
                                         
                                         threading.Thread(target=wait_for_retry_process, daemon=True).start()
                                     else:
@@ -847,6 +1064,42 @@ class UiEvent:
         self.config_manager.save_config()
         self.showMsg('日志设置已保存')
 
+    def tray_changed(self, e):
+        """处理托盘开关变化"""
+        # 更新配置
+        self.config_manager.set("tray", e.control.value)
+        self.config_manager.save_config()
+        
+        # 实时处理托盘功能
+        if e.control.value and self.tray is None:
+            # 启用托盘功能且托盘未创建，则创建托盘
+            try:
+                from tray import Tray
+                self.tray = Tray(self.page, self)
+                self.showMsg("托盘功能已开启")
+            except Exception as ex:
+                self.showMsg(f"托盘功能开启失败: {str(ex)}")
+        elif not e.control.value and self.tray is not None:
+            # 关闭托盘功能且托盘已创建，则停止托盘
+            try:
+                self.tray.tray.stop()
+                self.tray = None
+                self.showMsg("托盘功能已关闭")
+            except Exception as ex:
+                self.showMsg(f"托盘功能关闭失败: {str(ex)}")
+        else:
+            # 其他情况（已开启再次开启，或已关闭再次关闭）
+            self.showMsg(f"托盘功能已{'开启' if e.control.value else '关闭'}")
+
+    def autostart_changed(self, e):
+        """处理自动启动开关变化"""
+        # 更新配置
+        self.config_manager.set("autostart", e.control.value)
+        self.config_manager.set("tray", e.control.value)
+        self.config_manager.save_config()
+        # 显示操作反馈
+        self.showMsg(f"自动启动功能已{'开启' if e.control.value else '关闭'}")
+    
     async def execute_command(self, command: str, workdir: str = "SillyTavern"):
         import os
         import platform
