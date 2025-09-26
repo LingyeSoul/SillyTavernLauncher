@@ -6,6 +6,7 @@ on:
       - main
   release:
     types: [created]
+  workflow_dispatch:
 
 jobs:
   build-windows:
@@ -21,34 +22,34 @@ jobs:
       COPYRIGHT: "Copyright (c) 2025 LingyeSoul"
 
     steps:
-      - name: 🔁 拉取代码
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: 🧹 清理工作区
+      - name: Clean workspace
         run: |
           if (Test-Path $env:DIST_PATH) { Remove-Item -Recurse -Force $env:DIST_PATH }
           if (Test-Path *.zip) { Remove-Item -Force *.zip }
         shell: pwsh
 
-      - name: ⏳ 缓存 GitVersion
+      - name: Cache GitVersion
         uses: actions/cache@v4
         with:
           path: C:\GitVersion
           key: gitversion-5.x
           restore-keys: gitversion-
 
-      - name: 🛠️ 安装 GitVersion
+      - name: Install GitVersion
         uses: gittools/actions/gitversion/setup@v0.9.13
         with:
           versionSpec: '5.x'
 
-      - name: 📊 获取版本号
+      - name: Get version number
         id: gitversion
         uses: gittools/actions/gitversion/execute@v0.9.13
 
-      - name: 🧾 提取版本信息
+      - name: Extract version info
         run: |
           echo "SEMVER=${{ steps.gitversion.outputs.SemVer }}" >> $GITHUB_ENV
           echo "MAJOR=${{ steps.gitversion.outputs.Major }}" >> $GITHUB_ENV
@@ -56,50 +57,108 @@ jobs:
           echo "PATCH=${{ steps.gitversion.outputs.Patch }}" >> $GITHUB_ENV
         shell: bash
 
-      - name: 🐍 设置 Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      - name: 📦 安装依赖
+      - name: Upgrade pip and install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flet pyinstaller ruamel.yaml packaging
+          pip install pyinstaller ruamel.yaml packaging Nuitka flet-desktop==0.28.3 aiohttp flet==0.28.3 pystray==0.19.5
 
-      - name: 🧱 打包应用
+      - name: Install custom flet-cli
         run: |
-          flet pack src/main.py `
+          # Install custom flet-cli version
+          pip install git+https://github.com/LingyeSoul/flet_cli.git@main
+          
+          # Verify installation
+          echo "=== Installed flet-cli info ==="
+          pip show flet-cli
+          
+          # Verify flet command availability
+          flet --version
+          flet pack --help
+        shell: pwsh
+
+      - name: Package application
+        run: |
+          flet packn src/main.py `
             --icon "$env:ICON_PATH" `
             --name "$env:APP_NAME" `
             --product-name "$env:PRODUCT_NAME" `
             --file-description "$env:APP_NAME $env:PRODUCT_NAME" `
-            --product-version "${{ env.SEMVER }}" `
-            --file-version "${{ env.MAJOR }}.${{ env.MINOR }}.${{ env.PATCH }}.0" `
-            --company-name "$env:COMPANY_NAME" `
+            --product-version "$env:SEMVER" `
             --copyright "$env:COPYRIGHT" `
-            --onedir `
             --distpath "$env:DIST_PATH" `
             --yes
         shell: pwsh
 
-      - name: 🗂️ 压缩 dist 到 ZIP
+      - name: Check packaging results
+        run: |
+          Write-Host "=== Check dist directory structure ==="
+          if (Test-Path $env:DIST_PATH) {
+            Get-ChildItem -Path $env:DIST_PATH -Recurse | ForEach-Object { Write-Host $_.FullName }
+            
+            # Check if main.dist directory exists
+            $mainDistPath = Join-Path $env:DIST_PATH "main.dist"
+            if (Test-Path $mainDistPath) {
+              Write-Host "✅ Found main.dist directory"
+              Write-Host "=== main.dist directory contents ==="
+              Get-ChildItem -Path $mainDistPath | ForEach-Object { Write-Host $_.Name }
+            } else {
+              Write-Host "❌ main.dist directory not found"
+              Write-Host "=== Direct contents of dist directory ==="
+              Get-ChildItem -Path $env:DIST_PATH | ForEach-Object { Write-Host $_.Name }
+            }
+          } else {
+            Write-Host "❌ dist directory does not exist"
+          }
+        shell: pwsh
+
+      - name: Compress dist to ZIP (handle Nuitka output)
         id: compress_dist
         run: |
           $zipName = "$env:APP_NAME-win-v${{ env.SEMVER }}.zip"
-          Compress-Archive -Path "$env:DIST_PATH\*" -DestinationPath $zipName -Force
+          
+          # Check packaging structure and compress accordingly
+          $mainDistPath = Join-Path $env:DIST_PATH "main.dist"
+          if (Test-Path $mainDistPath) {
+            Write-Host "📦 Detected Nuitka packaging structure, compressing main.dist directory"
+            # If main.dist exists, compress its contents
+            Compress-Archive -Path "$mainDistPath\*" -DestinationPath $zipName -Force
+          } else {
+            Write-Host "📦 Standard packaging structure, compressing entire dist directory"
+            # Otherwise compress the entire dist directory
+            Compress-Archive -Path "$env:DIST_PATH\*" -DestinationPath $zipName -Force
+          }
+          
           echo "zip_name=$zipName" >> $env:GITHUB_OUTPUT
+          Write-Host "✅ ZIP file created: $zipName"
         shell: pwsh
 
-      - name: ✅ 验证 ZIP
+      - name: Validate ZIP file
         run: |
           $path = "${{ steps.compress_dist.outputs.zip_name }}"
           if (-Not (Test-Path $path)) {
-              throw "❌ ZIP 文件未生成: $path"
+              throw "❌ ZIP file not generated: $path"
           }
-          Write-Host "✅ ZIP 文件存在: $path"
+          $size = (Get-Item $path).Length / 1MB
+          Write-Host "✅ ZIP file exists: $path (Size: $([math]::Round($size, 2)) MB)"
+          
+          # Optional: Check ZIP file contents
+          Write-Host "=== ZIP file contents ==="
+          try {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($path)
+            $zip.Entries | ForEach-Object { Write-Host $_.FullName }
+            $zip.Dispose()
+          } catch {
+            Write-Host "⚠️ Unable to inspect ZIP contents in detail, but file exists"
+          }
         shell: pwsh
 
-      - name: ⏱️ 获取当前时间（上海时区，中文格式）
+      - name: Get current time (Shanghai timezone, Chinese format)
         id: timestamp
         run: |
           $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("China Standard Time")
@@ -108,17 +167,16 @@ jobs:
           "now=$formatted" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
 
-      - name: 📜 生成更新日志
+      - name: Generate changelog (last 5 commits)
         id: changelog
         run: |
           $log = git log --pretty=format:"* [%h] %s (%an)" -n 5
-          $logPath = "$env:GITHUB_OUTPUT"
-          Add-Content -Path $logPath -Value "log<<EOF"
-          Add-Content -Path $logPath -Value "$log"
-          Add-Content -Path $logPath -Value "EOF"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "log<<EOF"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "$log"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "EOF"
         shell: pwsh
 
-      - name: 🚀 创建 Release 并上传 ZIP
+      - name: Create Release and upload ZIP (only on release trigger)
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
@@ -136,10 +194,11 @@ jobs:
 
             - 打包时间：${{ steps.timestamp.outputs.now }}
             - 版本号：v${{ env.SEMVER }}
+            - 构建系统：Windows
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 📁 上传 Artifact
+      - name: Upload Artifact (for debugging or download)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APP_NAME }}-windows-v${{ env.SEMVER }}
