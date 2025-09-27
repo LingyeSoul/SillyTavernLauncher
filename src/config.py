@@ -15,13 +15,19 @@ class ConfigManager:
         else:
             self.config_path = config_path
         self.default_config = {
-            "theme": "dark",
-            "checkupdate": True,
-            "use_sys_env": False,
-            "tray": True,
-            "autostart": False,  
-            "first_run": True
-        }
+                "patchgit": False,
+                "use_sys_env": False,
+                "theme": "dark",
+                "first_run": True,
+                "github": {
+                    "mirror": "gh-proxy.com"
+                },
+                "log": False,
+                "checkupdate": True,
+                "stcheckupdate": False,
+                "tray": False,
+                "autostart": False,
+                }
         self.config = self.load_config()
         
         
