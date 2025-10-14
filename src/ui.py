@@ -220,65 +220,77 @@ class AsyncTerminal:
                     self.add_log(f"终止进程 {proc_info['pid']}: {proc_info['command']}")
                     
                     # 首先使用PowerShell递归终止整个进程树
-                    result1 = subprocess.run(
-                        f"powershell.exe -WindowStyle Hidden -Command \"Get-CimInstance Win32_Process -Filter 'ParentProcessId={proc_info['pid']}' | Select-Object -ExpandProperty Handle | ForEach-Object {{ Stop-Process -Id $_ -Force }}\"",
-                        shell=True,
-                        stderr=subprocess.PIPE,
-                        stdout=subprocess.PIPE,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-                    if result1.stderr and result1.stderr.strip():
-                        error_text = result1.stderr.decode('utf-8', errors='replace').strip()
-                        # 忽略PowerShell的预期错误
-                        ignore_keywords = ["no cim instances", "not found", "没有找到", "不存在", "无法找到"]
-                        if not any(ignore_text in error_text.lower() for ignore_text in ignore_keywords):
-                            self.add_log(f"PowerShell终止子进程错误: {error_text}")
+                    try:
+                        result1 = subprocess.run(
+                            f"powershell.exe -WindowStyle Hidden -Command \"Get-CimInstance Win32_Process -Filter 'ParentProcessId={proc_info['pid']}' | Select-Object -ExpandProperty Handle | ForEach-Object {{ Stop-Process -Id $_ -Force }}\"",
+                            shell=True,
+                            stderr=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            creationflags=subprocess.CREATE_NO_WINDOW,
+                            timeout=10  # 添加10秒超时
+                        )
+                        if result1.stderr and result1.stderr.strip():
+                            error_text = result1.stderr.decode('utf-8', errors='replace').strip()
+                            # 忽略PowerShell的预期错误
+                            ignore_keywords = ["no cim instances", "not found", "没有找到", "不存在", "无法找到"]
+                            if not any(ignore_text in error_text.lower() for ignore_text in ignore_keywords):
+                                self.add_log(f"PowerShell终止子进程错误: {error_text}")
+                    except subprocess.TimeoutExpired:
+                        self.add_log(f"PowerShell终止子进程超时: {proc_info['pid']}")
                     
                     # 使用taskkill递归终止进程树
-                    result2 = subprocess.run(
-                        f"taskkill /F /T /PID {proc_info['pid']}",
-                        shell=True,
-                        stderr=subprocess.PIPE,
-                        stdout=subprocess.PIPE,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-                    # 只有当stderr不为空且不是预期的错误消息时才记录错误
-                    if result2.stderr and result2.stderr.strip():
-                        # 解码错误文本，尝试多种编码
-                        error_bytes = result2.stderr
-                        error_text = ""
-                        for encoding in ['utf-8', 'gbk', 'gb2312', 'latin1']:
-                            try:
-                                error_text = error_bytes.decode(encoding).strip()
-                                break
-                            except UnicodeDecodeError:
-                                continue
-                        
-                        if not error_text:
-                            error_text = error_bytes.decode('utf-8', errors='replace').strip()
-                        
-                        # 忽略taskkill的预期错误
-                        ignore_keywords = [
-                            "not found", "no running", "ûҵ", "没有找到", 
-                            "不存在", "无法找到", "not running", "process not found"
-                        ]
-                        if not any(ignore_text in error_text.lower() for ignore_text in ignore_keywords):
-                            self.add_log(f"Taskkill终止进程树错误: {error_text}")
+                    try:
+                        result2 = subprocess.run(
+                            f"taskkill /F /T /PID {proc_info['pid']}",
+                            shell=True,
+                            stderr=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            creationflags=subprocess.CREATE_NO_WINDOW,
+                            timeout=10  # 添加10秒超时
+                        )
+                        # 只有当stderr不为空且不是预期的错误消息时才记录错误
+                        if result2.stderr and result2.stderr.strip():
+                            # 解码错误文本，尝试多种编码
+                            error_bytes = result2.stderr
+                            error_text = ""
+                            for encoding in ['utf-8', 'gbk', 'gb2312', 'latin1']:
+                                try:
+                                    error_text = error_bytes.decode(encoding).strip()
+                                    break
+                                except UnicodeDecodeError:
+                                    continue
+                            
+                            if not error_text:
+                                error_text = error_bytes.decode('utf-8', errors='replace').strip()
+                            
+                            # 忽略taskkill的预期错误
+                            ignore_keywords = [
+                                "not found", "no running", "ûҵ", "没有找到", 
+                                "不存在", "无法找到", "not running", "process not found"
+                            ]
+                            if not any(ignore_text in error_text.lower() for ignore_text in ignore_keywords):
+                                self.add_log(f"Taskkill终止进程树错误: {error_text}")
+                    except subprocess.TimeoutExpired:
+                        self.add_log(f"Taskkill终止进程树超时: {proc_info['pid']}")
                     
                     # 额外使用PowerShell按名称终止node.exe
-                    result3 = subprocess.run(
-                        f"powershell.exe -WindowStyle Hidden -Command \"Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force\"",
-                        shell=True,
-                        stderr=subprocess.PIPE,
-                        stdout=subprocess.PIPE,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-                    if result3.stderr and result3.stderr.strip():
-                        error_text = result3.stderr.decode('utf-8', errors='replace').strip()
-                        # 忽略PowerShell的预期错误
-                        ignore_keywords = ["no processes", "not found", "没有找到", "不存在", "无法找到"]
-                        if not any(ignore_text in error_text.lower() for ignore_text in ignore_keywords):
-                            self.add_log(f"PowerShell终止node进程错误: {error_text}")
+                    try:
+                        result3 = subprocess.run(
+                            f"powershell.exe -WindowStyle Hidden -Command \"Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force\"",
+                            shell=True,
+                            stderr=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            creationflags=subprocess.CREATE_NO_WINDOW,
+                            timeout=10  # 添加10秒超时
+                        )
+                        if result3.stderr and result3.stderr.strip():
+                            error_text = result3.stderr.decode('utf-8', errors='replace').strip()
+                            # 忽略PowerShell的预期错误
+                            ignore_keywords = ["no processes", "not found", "没有找到", "不存在", "无法找到"]
+                            if not any(ignore_text in error_text.lower() for ignore_text in ignore_keywords):
+                                self.add_log(f"PowerShell终止node进程错误: {error_text}")
+                    except subprocess.TimeoutExpired:
+                        self.add_log("PowerShell终止node进程超时")
                     
                     # 等待进程终止，最多等待5秒
                     import time
@@ -388,6 +400,10 @@ class AsyncTerminal:
                 except AssertionError:
                     # 控件未正确附加到页面，跳过更新
                     pass
+                except RuntimeError as e:
+                    # 事件循环已关闭，跳过更新
+                    if "Event loop is closed" not in str(e):
+                        raise
             
         except Exception as e:
             import traceback
@@ -411,12 +427,20 @@ class AsyncTerminal:
                 
                 # 使用run_task执行异步函数
                 self.view.page.run_task(async_process_batch)  # 修复：传递函数引用而不是调用结果
-            except (AssertionError, Exception) as e:
-                # 如果run_task失败，尝试直接调用_process_batch
-                try:
-                    self._process_batch()
-                except Exception as fallback_error:
-                    print(f"日志处理失败: {str(fallback_error)}")
+            except (AssertionError, RuntimeError, Exception) as e:
+                # 检查是否是事件循环关闭错误
+                if "Event loop is closed" in str(e):
+                    # 如果事件循环已关闭，直接调用_process_batch
+                    try:
+                        self._process_batch()
+                    except Exception as fallback_error:
+                        print(f"日志处理失败: {str(fallback_error)}")
+                else:
+                    # 如果是其他错误，尝试直接调用_process_batch
+                    try:
+                        self._process_batch()
+                    except Exception as fallback_error:
+                        print(f"日志处理失败: {str(fallback_error)}")
 
     def add_log(self, text: str):
         """线程安全的日志添加方法"""  
@@ -454,8 +478,12 @@ class AsyncTerminal:
                             clear_logs()
                         
                         self.view.page.run_task(async_clear_logs)
-                    except:
-                        clear_logs()
+                    except (RuntimeError, Exception) as e:
+                        # 处理事件循环关闭的情况
+                        if "Event loop is closed" in str(e):
+                            clear_logs()
+                        else:
+                            clear_logs()
                         
                 with self._log_queue.mutex:
                     self._log_queue.queue.clear()  # 清空队列
@@ -476,12 +504,14 @@ class AsyncTerminal:
                 self._schedule_batch_process()
             # 对于少量日志，也确保不会等待太久才显示
             elif queue_size > 0:
-                # 使用page.after安排延迟处理，确保即使没有达到批量阈值也能及时处理
+                # 使用threading.Timer安排延迟处理，确保即使没有达到批量阈值也能及时处理
                 if hasattr(self, 'view') and self.view.page is not None:
                     try:
-                        self.view.page.after(30, self._schedule_batch_process)  # 30ms后处理
+                        # 使用threading.Timer替代page.after（因为Page没有after方法）
+                        timer = threading.Timer(0.03, self._schedule_batch_process)  # 30ms后处理
+                        timer.start()
                     except:
-                        # 如果page.after不可用，则直接安排处理
+                        # 如果定时器设置失败，则直接安排处理
                         self._schedule_batch_process()
             
         except (TypeError, IndexError, AttributeError) as e:
@@ -629,20 +659,11 @@ class UniUI():
                     ]),
                     ft.Text("监听端口一般情况下不需要修改，请勿乱动", size=14, color=ft.Colors.BLUE_400),
                     ft.Switch(
-                        label="启用请求代理",
-                        value=self.stcfg.proxy_enabled,
-                        on_change=self.ui_event.proxy_changed,
+                        label="自动设置请求代理",
+                        value=self.config_manager.get("auto_proxy", False),
+                        on_change=self.ui_event.auto_proxy_changed,
                     ),
-                    ft.Text("开启后酒馆的请求会走下方填入的代理", size=14, color=ft.Colors.BLUE_400),
-                    ft.Row([
-                        self.proxy_url_field,
-                        ft.IconButton(
-                            icon=ft.Icons.SAVE,
-                            tooltip="保存代理设置",
-                            on_click=lambda e: self.ui_event.save_proxy_url(self.proxy_url_field.value)
-                        )
-                    ]),
-                    ft.Text("请填入有效的代理URL，支持http, https, socks, socks5, socks4, pac", size=14, color=ft.Colors.BLUE_400),
+                    ft.Text("开启后酒馆的请求会走启动器自动识别的系统代理", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
                     ft.Text("启动器功能设置", size=18, weight=ft.FontWeight.BOLD),
                     ft.Switch(
