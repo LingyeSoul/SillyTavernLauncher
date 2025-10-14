@@ -9,6 +9,7 @@ import subprocess
 import json
 import asyncio
 from packaging import version
+import urllib.request
 
 
 class UiEvent:
@@ -51,8 +52,11 @@ class UiEvent:
             if self.terminal.is_running:
                 self.terminal.stop_processes()
             self.page.window.visible = False
-            self.page.window.destroy()
-        
+            self.page.window.prevent_close = False
+            self.page.update()
+            self.page.window.close()
+
+
     def exit_app_with_tray(self, e):
         # 停止所有运行的进程
         if self.terminal.is_running:
@@ -911,6 +915,65 @@ class UiEvent:
             self.stCfg.create_whitelist()
         self.stCfg.save_config()
         self.showMsg('配置文件已保存')
+
+    def auto_proxy_changed(self, e):
+        """处理自动代理设置开关变化事件"""
+        auto_proxy = e.control.value
+        self.config_manager.set("auto_proxy", auto_proxy)
+        self.config_manager.save_config()
+        
+        if auto_proxy:
+            # 启用自动代理时，自动检测并设置代理
+            self.auto_detect_and_set_proxy()
+        
+        self.showMsg('自动代理设置已更新')
+
+    def auto_detect_and_set_proxy(self):
+        """自动检测系统代理并设置"""
+        try:
+            # 获取系统代理设置
+            proxies = urllib.request.getproxies()
+            self.terminal.add_log(f"检测到的系统代理: {proxies}")
+            
+            # 查找HTTP或SOCKS代理
+            proxy_url = ""
+            if 'http' in proxies:
+                proxy_url = proxies['http']
+            elif 'https' in proxies:
+                proxy_url = proxies['https']
+            elif 'socks' in proxies:
+                proxy_url = proxies['socks']
+            elif 'socks5' in proxies:
+                proxy_url = proxies['socks5']
+            
+            if proxy_url:
+                # 启用代理
+                self.stCfg.proxy_enabled = True
+                
+                # 设置代理URL
+                self.stCfg.proxy_url = proxy_url
+                
+                # 保存配置
+                self.stCfg.save_config()
+                
+                # 更新UI中的代理URL字段（如果可以访问）
+                try:
+                    # 尝试更新UI中的代理URL字段
+                    if hasattr(self, 'page') and self.page:
+                        # 通过页面会话获取UI实例并更新代理URL字段
+                        self.page.session.set("proxy_url", proxy_url)
+                except:
+                    pass
+                
+                self.terminal.add_log(f"自动设置代理: {proxy_url}")
+                self.showMsg(f"已自动设置代理: {proxy_url}")
+            else:
+                self.terminal.add_log("未检测到有效的系统代理")
+                self.showMsg("未检测到有效的系统代理")
+                
+        except Exception as e:
+            self.terminal.add_log(f"自动检测代理时出错: {str(e)}")
+            self.showMsg(f"自动检测代理失败: {str(e)}")
 
     def proxy_url_changed(self,e):
         self.stCfg.proxy_url = e.control.value

@@ -4,6 +4,7 @@ from ui import UniUI
 from config import ConfigManager
 from version import VersionChecker
 import asyncio
+import urllib.request
 async def main(page: ft.Page):
     page.window.center()
     page.title = "SillyTavernLauncher"
@@ -16,7 +17,7 @@ async def main(page: ft.Page):
     page.window.min_width=800
     page.window.maximizable = False
     page.window.title_bar_hidden = True
-    version='v1.2.6'
+    version='v1.2.7测试版'
 
     # 检查是否为首次启动
     async def check_first_launch():
@@ -75,6 +76,34 @@ async def main(page: ft.Page):
     page.window.center()
     page.window.width = 800
     page.window.height = 644
+
+    # 检查自动代理设置
+    config_manager = ConfigManager()
+    if config_manager.get("auto_proxy", False):
+        # 如果启用了自动代理设置，则自动检测并设置代理
+        try:
+            proxies = urllib.request.getproxies()
+            if proxies:
+                # 查找HTTP或SOCKS代理
+                proxy_url = ""
+                if 'http' in proxies:
+                    proxy_url = proxies['http']
+                elif 'https' in proxies:
+                    proxy_url = proxies['https']
+                elif 'socks' in proxies:
+                    proxy_url = proxies['socks']
+                elif 'socks5' in proxies:
+                    proxy_url = proxies['socks5']
+                
+                if proxy_url:
+                    # 启用代理并设置代理URL
+                    from stconfig import stcfg
+                    st_cfg = stcfg()
+                    st_cfg.proxy_enabled = True
+                    st_cfg.proxy_url = proxy_url
+                    st_cfg.save_config()
+        except Exception as e:
+            print(f"自动设置代理时出错: {str(e)}")
 
     # 初始化时根据配置决定是否创建托盘
     config_manager = ConfigManager()

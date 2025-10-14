@@ -28,12 +28,20 @@ class Tray:
         self.tray.run_detached()
     def open_app(self,icon,query):
         self.page.window.visible = True
-        self.page.update()
+        try:
+            self.page.update()
+        except RuntimeError as e:
+            if "Event loop is closed" in str(e):
+                # 如果事件循环已关闭，则不执行更新操作
+                pass
+            else:
+                raise
     def exit_app(self,icon,query):
         # 确保在退出前停止所有运行的进程
         if self.ui_event.terminal.is_running:
             self.ui_event.terminal.stop_processes()
         self.ui_event.exit_app_with_tray(None)
+
     def restart_st(self, icon, query):
         self.ui_event.restart_sillytavern(None)
     def start_st(self, icon, query):
