@@ -345,6 +345,41 @@ class UiEvent:
             self.terminal.add_log("错误：路径包含空格，请将程序移动到不包含空格的路径下运行")
             return
             
+        # 检查是否开启了自动代理设置
+        auto_proxy = self.config_manager.get("auto_proxy", False)
+        if auto_proxy:
+            try:
+                # 获取系统代理设置
+                proxies = urllib.request.getproxies()
+                self.terminal.add_log(f"检测到的系统代理: {proxies}")
+                
+                # 查找HTTP或SOCKS代理
+                proxy_url = ""
+                if 'http' in proxies:
+                    proxy_url = proxies['http']
+                elif 'https' in proxies:
+                    proxy_url = proxies['https']
+                elif 'socks' in proxies:
+                    proxy_url = proxies['socks']
+                elif 'socks5' in proxies:
+                    proxy_url = proxies['socks5']
+                
+                # 如果没有可用的系统代理，则关闭请求代理
+                if not proxy_url:
+                    self.stCfg.proxy_enabled = False
+                    self.stCfg.save_config()
+                    self.terminal.add_log("未检测到有效的系统代理，已自动关闭请求代理")
+                else:
+                    # 启用代理
+                    self.stCfg.proxy_enabled = True
+                    # 设置代理URL
+                    self.stCfg.proxy_url = proxy_url
+                    # 保存配置
+                    self.stCfg.save_config()
+                    self.terminal.add_log(f"自动设置代理: {proxy_url}")
+            except Exception as ex:
+                self.terminal.add_log(f"自动检测代理时出错: {str(ex)}")
+            
         if self.terminal.is_running:
             self.terminal.add_log("SillyTavern已经在运行中")
             return
@@ -357,7 +392,14 @@ class UiEvent:
                     self.terminal.add_log("SillyTavern进程已退出")
                 
                 # 启动进程并设置退出回调
-                process = self.execute_command(f"\"{self.env.get_node_path()}node\" server.js %*", "SillyTavern")
+                custom_args = self.config_manager.get("custom_args", "")
+                base_command = f"\"{self.env.get_node_path()}node\" server.js"
+                if custom_args:
+                    command = f"{base_command} {custom_args}"
+                else:
+                    command = base_command
+                    
+                process = self.execute_command(command, "SillyTavern")
                 if process:
                     def wait_for_exit():
                         # 创建一个新的事件循环并运行直到完成
@@ -420,7 +462,14 @@ class UiEvent:
                     self.terminal.add_log("SillyTavern进程已退出")
                 
                 # 启动进程并设置退出回调
-                process = self.execute_command(f"\"{self.env.get_node_path()}node\" server.js %*", "SillyTavern")
+                custom_args = self.config_manager.get("custom_args", "")
+                base_command = f"\"{self.env.get_node_path()}node\" server.js"
+                if custom_args:
+                    command = f"{base_command} {custom_args}"
+                else:
+                    command = base_command
+                    
+                process = self.execute_command(command, "SillyTavern")
                 if process:
                     def wait_for_exit():
                         # 创建一个新的事件循环并运行直到完成
@@ -1127,6 +1176,19 @@ class UiEvent:
         self.config_manager.save_config()
         self.showMsg('日志设置已保存')
 
+    def custom_args_changed(self, e):
+        """处理自定义启动参数变化事件"""
+        custom_args = e.control.value
+        self.config_manager.set("custom_args", custom_args)
+        # 保存配置
+        self.config_manager.save_config()
+
+    def save_custom_args(self, value):
+        """保存自定义启动参数"""
+        self.config_manager.set("custom_args", value)
+        self.config_manager.save_config()
+        self.showMsg('自定义启动参数已保存')
+
     def tray_changed(self, e):
         """处理托盘开关变化"""
         # 更新配置
@@ -1205,18 +1267,33 @@ class UiEvent:
             
             # 读取输出的异步方法
             async def read_output_async(stream, is_stderr=False):
+                # 使用更大的缓冲区大小以提高性能
+                buffer_size = 16384  # 增加到16KB
+                buffer = b""
+                delimiter = b'\n'
+                
                 while True:
                     try:
-                        # 从流中读取一行
-                        line = await stream.readline()
-                        if not line:  # 如果没有数据且流已结束，则退出循环
+                        # 使用固定大小读取数据以避免LimitOverrunError
+                        chunk = await stream.read(buffer_size)
+                        if not chunk:  # 如果没有数据且流已结束，则退出循环
+                            # 处理缓冲区中剩余的数据（即使没有换行符）
+                            if buffer:
+                                clean_line = buffer.decode('utf-8', errors='replace').rstrip('\r\n')
+                                if clean_line:  # 只有当文本非空时才添加日志
+                                    self.terminal.add_log(clean_line)
                             break
                         
-                        # 处理读取到的行
-                        # 清理行尾的换行符和回车符
-                        clean_line = line.decode('utf-8', errors='replace').rstrip('\r\n')
-                        if clean_line:  # 只有当文本非空时才添加日志
-                            self.terminal.add_log(clean_line)
+                        # 将新读取的数据添加到缓冲区
+                        buffer += chunk
+                        
+                        # 处理缓冲区中的完整行
+                        while delimiter in buffer:
+                            line, buffer = buffer.split(delimiter, 1)
+                            clean_line = line.decode('utf-8', errors='replace').rstrip('\r\n')
+                            if clean_line:  # 只有当文本非空时才添加日志
+                                self.terminal.add_log(clean_line)
+                    
                     except Exception as ex:
                         import traceback
                         if hasattr(self.terminal, 'view') and self.terminal.view.page:
