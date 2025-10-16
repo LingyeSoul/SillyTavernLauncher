@@ -664,6 +664,21 @@ class UniUI():
                         on_change=self.ui_event.auto_proxy_changed,
                     ),
                     ft.Text("开启后酒馆的请求会走启动器自动识别的系统代理", size=14, color=ft.Colors.BLUE_400),
+                    ft.Row([
+                        ft.TextField(
+                            label="自定义启动参数",
+                            width=610,
+                            value=self.config_manager.get("custom_args", ""),
+                            hint_text="在此输入自定义启动参数，将添加到启动命令中，如果你不清楚，请留空！",
+                            on_change=self.ui_event.custom_args_changed,
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.SAVE,
+                            tooltip="保存自定义启动参数",
+                            on_click=lambda e: self.ui_event.save_custom_args(self.config_manager.get("custom_args", ""))
+                        )
+                    ]),
+                    ft.Text("自定义启动参数将添加到启动命令末尾", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
                     ft.Text("启动器功能设置", size=18, weight=ft.FontWeight.BOLD),
                     ft.Switch(
