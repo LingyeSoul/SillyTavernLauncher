@@ -10,6 +10,7 @@
 ✅ 智能环境检测
 ✅ 实时终端监控
 ✅ 国内镜像加速
+✅ 系统托盘集成
 
 ## 界面预览 🖼️
 
@@ -44,3 +45,8 @@ pip install flet ruamel.yaml packaging pystray aiohttp
 ### 一键更新
 - GitHub检测更新
 - 支持镜像源切换
+
+### 系统托盘集成
+- 最小化到系统托盘
+- 托盘菜单快速操作
+- 后台运行SillyTavern
