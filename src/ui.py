@@ -902,6 +902,19 @@ class UniUI():
             try:
                 page.window.minimized = True
                 page.update()
+            except AssertionError:
+                # 处理Flet框架中可能出现的AssertionError异常
+                try:
+                    # 尝试另一种方式最小化窗口
+                    page.window.visible = False
+                    page.update()
+                    page.window.visible = True
+                    page.window.minimized = True
+                    page.update()
+                except Exception as inner_e:
+                    import traceback
+                    print(f"最小化窗口失败: {str(inner_e)}")
+                    print(f"错误详情: {traceback.format_exc()}")
             except Exception as e:
                 import traceback
                 print(f"最小化窗口失败: {str(e)}")
