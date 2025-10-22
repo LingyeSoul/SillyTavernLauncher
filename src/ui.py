@@ -273,25 +273,6 @@ class AsyncTerminal:
                     except subprocess.TimeoutExpired:
                         self.add_log(f"Taskkill终止进程树超时: {proc_info['pid']}")
                     
-                    # 额外使用PowerShell按名称终止node.exe
-                    try:
-                        result3 = subprocess.run(
-                            f"powershell.exe -WindowStyle Hidden -Command \"Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force\"",
-                            shell=True,
-                            stderr=subprocess.PIPE,
-                            stdout=subprocess.PIPE,
-                            creationflags=subprocess.CREATE_NO_WINDOW,
-                            timeout=10  # 添加10秒超时
-                        )
-                        if result3.stderr and result3.stderr.strip():
-                            error_text = result3.stderr.decode('utf-8', errors='replace').strip()
-                            # 忽略PowerShell的预期错误
-                            ignore_keywords = ["no processes", "not found", "没有找到", "不存在", "无法找到"]
-                            if not any(ignore_text in error_text.lower() for ignore_text in ignore_keywords):
-                                self.add_log(f"PowerShell终止node进程错误: {error_text}")
-                    except subprocess.TimeoutExpired:
-                        self.add_log("PowerShell终止node进程超时")
-                    
                     # 等待进程终止，最多等待5秒
                     import time
                     start_time = time.time()
