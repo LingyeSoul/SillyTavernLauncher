@@ -20,7 +20,7 @@ class ConfigManager:
                 "theme": "dark",
                 "first_run": True,
                 "github": {
-                    "mirror": "gh-proxy.com"
+                    "mirror": "gh-proxy.org"
                 },
                 "log": False,
                 "checkupdate": True,
