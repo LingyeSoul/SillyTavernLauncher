@@ -590,7 +590,7 @@ class UniUI():
                     ft.DropdownM2(
                         options=[
                             ft.dropdown.Option("github", "官方源 (github.com) - 可能较慢"),
-                            ft.dropdown.Option("gh-proxy.com", "镜像站点1 (gh-proxy.com)"),
+                            ft.dropdown.Option("gh-proxy.org", "镜像站点1 (gh-proxy.org)"),
                             ft.dropdown.Option("ghfile.geekertao.top", "镜像站点2 (ghfile.geekertao.top)"),
                             ft.dropdown.Option("gh.dpik.top", "镜像站点3 (gh.dpik.top)"),
                             ft.dropdown.Option("github.dpik.top", "镜像站点4 (github.dpik.top)"),
@@ -600,7 +600,7 @@ class UniUI():
                         value=self.config_manager.get("github.mirror"),
                         on_change=self.ui_event.update_mirror_setting
                     ),
-                    ft.Text("切换后新任务将立即生效，特别感谢Github镜像提供者", size=14, color=ft.Colors.BLUE_400),
+                    ft.Text("当不使用官方源时，将使用镜像源加速下载", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
                     ft.Text("环境设置", size=18, weight=ft.FontWeight.BOLD),
                     ft.Text("懒人包请勿修改", size=14, color=ft.Colors.GREY_600),

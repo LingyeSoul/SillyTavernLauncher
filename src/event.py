@@ -10,6 +10,7 @@ import json
 import asyncio
 from packaging import version
 import urllib.request
+from git_utils import switch_git_remote_to_gitee
 
 
 class UiEvent:
@@ -32,6 +33,19 @@ class UiEvent:
                 self.terminal.add_log(tmp)
         self.stCfg = stcfg()
         self.tray = None  # 添加tray引用
+
+    def run_async_task(self, coroutine):
+        """运行异步任务"""
+        def run_in_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(coroutine)
+            finally:
+                loop.close()
+        
+        thread = threading.Thread(target=run_in_thread, daemon=True)
+        thread.start()
 
     def envCheck(self):
         if os.path.exists(os.path.join(os.getcwd(), "env\\")):
@@ -82,7 +96,8 @@ class UiEvent:
         self.page.update()
 
 
-    def install_sillytavern(self,e):
+    def install_sillytavern(self, e):
+        """安装SillyTavern"""
         git_path = self.env.get_git_path()
         if self.env.checkST():
             self.terminal.add_log("SillyTavern已安装")
@@ -91,246 +106,65 @@ class UiEvent:
                     self.terminal.add_log("依赖项已安装")
                 else:
                     self.terminal.add_log("正在安装依赖...")
-                    def on_npm_complete(process):
-                        if process.returncode == 0:
-                            self.terminal.add_log("依赖安装成功")
-                            self.stCfg=stcfg()
-                        else:
-                            self.terminal.add_log("依赖安装失败，正在重试...")
-                            # 清理npm缓存
-                            cache_process = self.execute_command(
-                                f"\"{self.env.get_node_path()}npm\" cache clean --force",
-                                "SillyTavern"
-                            )
-                            if cache_process:
-                                # 等待异步进程完成
-                                process_obj = None
-                                if asyncio.iscoroutine(cache_process):
-                                    # 正确处理协程对象
-                                    loop = asyncio.new_event_loop()
-                                    asyncio.set_event_loop(loop)
-                                    try:
-                                        process_obj = loop.run_until_complete(cache_process)
-                                        loop.run_until_complete(process_obj.wait())
-                                    finally:
-                                        loop.close()
-                                        asyncio.set_event_loop(None)
-                                else:
-                                    process_obj = cache_process
-                                    process_obj.wait()
-                            # 删除node_modules
-                            node_modules_path = os.path.join(self.env.st_dir, "node_modules")
-                            if os.path.exists(node_modules_path):
-                                try:
-                                    import shutil
-                                    shutil.rmtree(node_modules_path)
-                                except Exception as ex:
-                                    self.terminal.add_log(f"删除node_modules失败: {str(ex)}")
-                            # 重新安装依赖
-                            retry_process = self.execute_command(
-                                f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
-                                "SillyTavern"
-                            )
-                            if retry_process:
-                                def on_retry_complete(p):
-                                    if p.returncode == 0:
-                                        self.terminal.add_log("依赖安装成功")
-                                    else:
-                                        self.terminal.add_log("依赖安装失败")
-                                
-                                def wait_for_retry_process():
-                                    # 等待异步进程完成
-                                    process_obj = None
-                                    if asyncio.iscoroutine(retry_process):
-                                        # 正确处理协程对象
-                                        loop = asyncio.new_event_loop()
-                                        asyncio.set_event_loop(loop)
-                                        try:
-                                            process_obj = loop.run_until_complete(retry_process)
-                                            loop.run_until_complete(process_obj.wait())
-                                        finally:
-                                            loop.close()
-                                            asyncio.set_event_loop(None)
-                                    else:
-                                        process_obj = retry_process
-                                        process_obj.wait()
-                                    on_retry_complete(process_obj)
-                                    
-                                    threading.Thread(
-                                    target=wait_for_retry_process,
-                                    daemon=True
-                                ).start()
+                    # 使用run_async_task处理异步任务
+                    async def install_deps():
+                        process = await self.execute_command(
+                            f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
+                            "SillyTavern"
+                        )
+                        if process:
+                            await process.wait()
+                            self.terminal.add_log("依赖安装完成")
                     
-                    process = self.execute_command(
-                        f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
-                        "SillyTavern"
-                    )
-                    
-                    if process:
-                        def wait_for_process():
-                            # 等待异步进程完成
-                            process_obj = None
-                            if asyncio.iscoroutine(process):
-                                # 正确处理协程对象
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                                try:
-                                    process_obj = loop.run_until_complete(process)
-                                    loop.run_until_complete(process_obj.wait())
-                                finally:
-                                    loop.close()
-                                    asyncio.set_event_loop(None)
-                            else:
-                                process_obj = process
-                                process_obj.wait()
-                            on_npm_complete(process_obj)
-                        
-                        threading.Thread(
-                            target=wait_for_process,
-                            daemon=True
-                        ).start()
+                    self.run_async_task(install_deps())
             else:
                 self.terminal.add_log("未找到nodejs")
         else:
             if git_path:
-                repo_url = "https://github.com/SillyTavern/SillyTavern"
+                # 从配置获取镜像设置
+                mirror_type = self.config_manager.get("github.mirror", "github")
+                
+                # 如果使用官方GitHub源，则使用官方仓库地址
+                # 如果使用镜像源，则使用Gitee
+                if mirror_type == "github":
+                    repo_url = "https://github.com/SillyTavern/SillyTavern.git"
+                else:
+                    # 使用Gitee镜像
+                    repo_url = f"https://gitee.com/lingyesoul/SillyTavern.git"
+                
                 self.terminal.add_log("正在安装SillyTavern...")
-                def on_git_complete(process):
-                    if process.returncode == 0:
-                        self.terminal.add_log("安装成功")
-                        self.stCfg=stcfg()
+                # 使用run_async_task处理异步任务
+                async def install_st():
+                    process = await self.execute_command(
+                        f'\"{git_path}git\" clone {repo_url} -b release', 
+                        "."
+                    )
+                    if process:
+                        await process.wait()
+                        self.terminal.add_log("SillyTavern安装完成")
+                        
+                        # 检查Node.js环境并自动安装依赖
                         if self.env.get_node_path():
-                            self.terminal.add_log("正在安装依赖...")
-                            def on_npm_complete(process):
-                                if process.returncode == 0:
-                                    self.terminal.add_log("依赖安装成功")
-                                else:
-                                    self.terminal.add_log("依赖安装失败，正在重试...")
-                                    # 清理npm缓存
-                                    cache_process = self.execute_command(
-                                        f"\"{self.env.get_node_path()}npm\" cache clean --force",
-                                        "SillyTavern"
-                                    )
-                                    if cache_process:
-                                        # 等待异步进程完成
-                                        if asyncio.iscoroutine(cache_process):
-                                            # 正确处理协程对象
-                                            loop = asyncio.new_event_loop()
-                                            asyncio.set_event_loop(loop)
-                                            try:
-                                                process_obj = loop.run_until_complete(cache_process)
-                                                loop.run_until_complete(process_obj.wait())
-                                            finally:
-                                                loop.close()
-                                                asyncio.set_event_loop(None)
-                                        else:
-                                            cache_process.wait()
-                                    # 删除node_modules
-                                    node_modules_path = os.path.join(self.env.st_dir, "node_modules")
-                                    if os.path.exists(node_modules_path):
-                                        try:
-                                            import shutil
-                                            shutil.rmtree(node_modules_path)
-                                        except Exception as ex:
-                                            self.terminal.add_log(f"删除node_modules失败: {str(ex)}")
-                                    # 重新安装依赖
-                                    retry_process = self.execute_command(
-                                        f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
-                                        "SillyTavern"
-                                    )
-                                    if retry_process:
-                                        def on_retry_complete(p):
-                                            if p.returncode == 0:
-                                                self.terminal.add_log("依赖安装成功")
-                                            else:
-                                                self.terminal.add_log("依赖安装失败")
-                                        
-                                        def wait_for_retry_process():
-                                            # 等待异步进程完成
-                                            process_obj = None
-                                            if asyncio.iscoroutine(retry_process):
-                                                # 正确处理协程对象
-                                                loop = asyncio.new_event_loop()
-                                                asyncio.set_event_loop(loop)
-                                                try:
-                                                    process_obj = loop.run_until_complete(retry_process)
-                                                    loop.run_until_complete(process_obj.wait())
-                                                finally:
-                                                    loop.close()
-                                                    asyncio.set_event_loop(None)
-                                            else:
-                                                process_obj = retry_process
-                                                process_obj.wait()
-                                            on_retry_complete(process_obj)
-                                        
-                                        threading.Thread(
-                                            target=wait_for_retry_process,
-                                            daemon=True
-                                        ).start()
-                            
-                            process = self.execute_command(
-                                f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
-                                "SillyTavern"
-                            )
-                            
-                            if process:
-                                def wait_for_process():
-                                    # 等待异步进程完成
-                                    process_obj = None
-                                    if asyncio.iscoroutine(process):
-                                        # 正确处理协程对象
-                                        loop = asyncio.new_event_loop()
-                                        asyncio.set_event_loop(loop)
-                                        try:
-                                            process_obj = loop.run_until_complete(process)
-                                            loop.run_until_complete(process_obj.wait())
-                                        finally:
-                                            loop.close()
-                                            asyncio.set_event_loop(None)
-                                    else:
-                                        process_obj = process
-                                        process_obj.wait()
-                                    on_npm_complete(process_obj)
-                                
-                                threading.Thread(
-                                    target=wait_for_process,
-                                    daemon=True
-                                ).start()
+                            if self.env.check_nodemodules():
+                                self.terminal.add_log("依赖项已安装")
+                            else:
+                                self.terminal.add_log("正在安装依赖...")
+                                # 安装npm依赖
+                                dep_process = await self.execute_command(
+                                    f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
+                                    "SillyTavern"
+                                )
+                                if dep_process:
+                                    await dep_process.wait()
+                                    self.terminal.add_log("依赖安装完成")
                         else:
                             self.terminal.add_log("未找到nodejs")
-                    else:
-                        self.terminal.add_log("安装失败")
                 
-                process = self.execute_command(
-                    f'\"{git_path}git\" clone {repo_url} -b release', 
-                    "."
-                )
-                
-                if process:
-                    def wait_for_process():
-                        # 等待异步进程完成
-                        process_obj = None
-                        if asyncio.iscoroutine(process):
-                            # 对于协程对象，先运行它获取进程对象，然后等待进程完成
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            try:
-                                process_obj = loop.run_until_complete(process)
-                                loop.run_until_complete(process_obj.wait())
-                            finally:
-                                loop.close()
-                        else:
-                            process.wait()
-                        on_git_complete(process)
-                    
-                    threading.Thread(
-                        target=wait_for_process,
-                        daemon=True
-                    ).start()
+                self.run_async_task(install_st())
             else:
                 self.terminal.add_log("Error: Git路径未正确配置")
 
-    def start_sillytavern(self,e):
+    def start_sillytavern(self, e):
         # 检查路径是否包含中文或空格
         current_path = os.getcwd()
         
@@ -399,34 +233,20 @@ class UiEvent:
                 else:
                     command = base_command
                     
-                process = self.execute_command(command, "SillyTavern")
-                if process:
-                    def wait_for_exit():
-                        # 创建一个新的事件循环并运行直到完成
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        try:
-                            # 如果process是一个协程对象，我们需要运行它直到完成以获取进程对象
-                            if asyncio.iscoroutine(process):
-                                process_obj = loop.run_until_complete(process)
-                            else:
-                                process_obj = process
-                            
-                            # 等待进程完成
-                            loop.run_until_complete(process_obj.wait())
-                        finally:
-                            loop.close()
-                        on_process_exit()
-                    
-                    threading.Thread(target=wait_for_exit, daemon=True).start()
-                    self.terminal.add_log("SillyTavern已启动")
-                else:
-                    self.terminal.add_log("启动失败")
+                # 使用异步方式执行命令
+                async def start_st():
+                    process = await self.execute_command(command, "SillyTavern")
+                    if process:
+                        # 等待进程完成
+                        await process.wait()
+                        # 在主线程中执行回调
+                        self.page.invoke(on_process_exit)
+                
+                self.run_async_task(start_st())
             else:
-                self.terminal.add_log("依赖项未安装")
+                self.terminal.add_log("依赖未安装，请先安装依赖")
         else:
-            self.terminal.add_log("SillyTavern未安装")
-        
+            self.terminal.add_log("SillyTavern未安装，请先安装SillyTavern")
 
     def stop_sillytavern(self,e):
         self.terminal.add_log("正在停止SillyTavern进程...")
@@ -498,7 +318,7 @@ class UiEvent:
             self.terminal.add_log("SillyTavern未安装")
 
     
-    def update_sillytavern(self,e):
+    def update_sillytavern(self, e):
         git_path = self.env.get_git_path()
         if self.env.checkST():
             self.terminal.add_log("正在更新SillyTavern...")
@@ -515,27 +335,17 @@ class UiEvent:
                                 else:
                                     self.terminal.add_log("依赖安装失败")
                             
-                            process = self.execute_command(f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", "SillyTavern")
-                            if process:
-                                def wait_for_process():
-                                    # 等待异步进程完成
-                                    process_obj = None
-                                    if asyncio.iscoroutine(process):
-                                        # 正确处理协程对象
-                                        loop = asyncio.new_event_loop()
-                                        asyncio.set_event_loop(loop)
-                                        try:
-                                            process_obj = loop.run_until_complete(process)
-                                            loop.run_until_complete(process_obj.wait())
-                                        finally:
-                                            loop.close()
-                                            asyncio.set_event_loop(None)
-                                    else:
-                                        process_obj = process
-                                        process_obj.wait()
-                                    on_npm_complete(process_obj)
-                                
-                                threading.Thread(target=wait_for_process,daemon=True).start()
+                            # 使用异步方式执行npm install
+                            async def install_deps():
+                                process = await self.execute_command(
+                                    f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
+                                    "SillyTavern"
+                                )
+                                if process:
+                                    await process.wait()
+                                    on_npm_complete(process)
+                            
+                            self.run_async_task(install_deps())
                         else:
                             self.terminal.add_log("未找到nodejs")
                     else:
@@ -555,30 +365,15 @@ class UiEvent:
                             if reset_process.returncode == 0:
                                 self.terminal.add_log("已重置package-lock.json，重新尝试更新...")
                                 # 重新执行git pull
-                                retry_process = self.execute_command(
-                                    f'\"{git_path}git\" pull --rebase --autostash', 
-                                    "SillyTavern"
-                                )
-                                
-                                if retry_process:
-                                    def wait_for_retry_process():
-                                        # 等待异步进程完成
-                                        process_obj = None
-                                        if asyncio.iscoroutine(retry_process):
-                                            # 正确处理协程对象
-                                            loop = asyncio.new_event_loop()
-                                            asyncio.set_event_loop(loop)
-                                            try:
-                                                process_obj = loop.run_until_complete(retry_process)
-                                                loop.run_until_complete(process_obj.wait())
-                                            finally:
-                                                loop.close()
-                                                asyncio.set_event_loop(None)
-                                        else:
-                                            process_obj = retry_process
-                                            process_obj.wait()
+                                async def retry_update():
+                                    retry_process = await self.execute_command(
+                                        f'\"{git_path}git\" pull --rebase --autostash', 
+                                        "SillyTavern"
+                                    )
+                                    if retry_process:
+                                        await retry_process.wait()
                                         # 避免递归调用，直接处理结果
-                                        if process_obj.returncode == 0:
+                                        if retry_process.returncode == 0:
                                             self.terminal.add_log("Git更新成功")
                                             if self.env.get_node_path():
                                                 self.terminal.add_log("正在安装依赖...")
@@ -588,63 +383,38 @@ class UiEvent:
                                                     else:
                                                         self.terminal.add_log("依赖安装失败")
                                                 
-                                                process = self.execute_command(f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", "SillyTavern")
-                                                if process:
-                                                    def wait_for_process():
-                                                        # 等待异步进程完成
-                                                        process_obj = None
-                                                        if asyncio.iscoroutine(process):
-                                                            # 正确处理协程对象
-                                                            loop = asyncio.new_event_loop()
-                                                            asyncio.set_event_loop(loop)
-                                                            try:
-                                                                process_obj = loop.run_until_complete(process)
-                                                                loop.run_until_complete(process_obj.wait())
-                                                            finally:
-                                                                loop.close()
-                                                                asyncio.set_event_loop(None)
-                                                        else:
-                                                            process_obj = process
-                                                            process_obj.wait()
-                                                        on_npm_complete(process_obj)
-                                                    
-                                                    threading.Thread(target=wait_for_process,daemon=True).start()
+                                                async def install_deps():
+                                                    process = await self.execute_command(
+                                                        f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
+                                                        "SillyTavern"
+                                                    )
+                                                    if process:
+                                                        await process.wait()
+                                                        on_npm_complete(process)
+                                                
+                                                self.run_async_task(install_deps())
                                             else:
                                                 self.terminal.add_log("未找到nodejs")
                                         else:
                                             self.terminal.add_log("重试更新失败")
-                                    
-                                    threading.Thread(target=wait_for_retry_process, daemon=True).start()
-                                else:
-                                    self.terminal.add_log("重试更新失败")
+                                
+                                self.run_async_task(retry_update())
                             else:
                                 self.terminal.add_log("无法解决package-lock.json冲突，需要手动处理")
                         except Exception as ex:
                             self.terminal.add_log(f"处理package-lock.json冲突时出错: {str(ex)}")
-            
-                process = self.execute_command(f'\"{git_path}git\" pull --rebase --autostash', "SillyTavern")
                 
-                # 添加git操作完成后的回调
-                if process:
-                    def wait_for_process():
-                        # 等待异步进程完成
-                        process_obj = None
-                        if asyncio.iscoroutine(process):
-                            # 正确处理协程对象
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            try:
-                                process_obj = loop.run_until_complete(process)
-                                loop.run_until_complete(process_obj.wait())
-                            finally:
-                                loop.close()
-                                asyncio.set_event_loop(None)
-                        else:
-                            process_obj = process
-                            process_obj.wait()
-                        on_git_complete(process_obj)
-                    
-                    threading.Thread(target=wait_for_process,daemon=True).start()
+                # 使用异步方式执行git pull
+                async def git_pull():
+                    process = await self.execute_command(
+                        f'\"{git_path}git\" pull --rebase --autostash', 
+                        "SillyTavern"
+                    )
+                    if process:
+                        await process.wait()
+                        on_git_complete(process)
+                
+                self.run_async_task(git_pull())
             else:
                 self.terminal.add_log("未找到Git路径，请手动更新SillyTavern")
 
@@ -670,93 +440,50 @@ class UiEvent:
                                     if npm_retry_count < 2:
                                         self.terminal.add_log(f"依赖安装失败，正在重试... (尝试次数: {npm_retry_count + 1}/2)")
                                         # 清理npm缓存
-                                        cache_process = self.execute_command(
-                                            f"\"{self.env.get_node_path()}npm\" cache clean --force",
-                                            "SillyTavern"
-                                        )
-                                        if cache_process:
-                                            # 等待异步进程完成
-                                            if asyncio.iscoroutine(cache_process):
-                                                # 正确处理协程对象
-                                                loop = asyncio.new_event_loop()
-                                                asyncio.set_event_loop(loop)
-                                                try:
-                                                    process_obj = loop.run_until_complete(cache_process)
-                                                    loop.run_until_complete(process_obj.wait())
-                                                finally:
-                                                    loop.close()
-                                                    asyncio.set_event_loop(None)
-                                            else:
-                                                cache_process.wait()
-                                        # 删除node_modules
-                                        node_modules_path = os.path.join(self.env.st_dir, "node_modules")
-                                        if os.path.exists(node_modules_path):
-                                            try:
-                                                import shutil
-                                                shutil.rmtree(node_modules_path)
-                                            except Exception as ex:
-                                                self.terminal.add_log(f"删除node_modules失败: {str(ex)}")
-                                        # 重新安装依赖
-                                        retry_process = self.execute_command(
-                                            f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
-                                            "SillyTavern"
-                                        )
-                                        if retry_process:
-                                            def on_retry_complete(p):
-                                                # 等待异步进程完成
-                                                process_obj = None
-                                                if asyncio.iscoroutine(retry_process):
-                                                    # 正确处理协程对象
-                                                    loop = asyncio.new_event_loop()
-                                                    asyncio.set_event_loop(loop)
+                                        async def clean_cache():
+                                            cache_process = await self.execute_command(
+                                                f"\"{self.env.get_node_path()}npm\" cache clean --force",
+                                                "SillyTavern"
+                                            )
+                                            if cache_process:
+                                                await cache_process.wait()
+                                                # 删除node_modules
+                                                node_modules_path = os.path.join(self.env.st_dir, "node_modules")
+                                                if os.path.exists(node_modules_path):
                                                     try:
-                                                        process_obj = loop.run_until_complete(retry_process)
-                                                        loop.run_until_complete(process_obj.wait())
-                                                    finally:
-                                                        loop.close()
-                                                        asyncio.set_event_loop(None)
-                                                else:
-                                                    process_obj = retry_process
-                                                    process_obj.wait()
-                                                on_npm_complete(process_obj, npm_retry_count + 1)
-                                            
-                                            threading.Thread(
-                                                target=on_retry_complete,
-                                                args=(retry_process,),
-                                                daemon=True
-                                            ).start()
+                                                        import shutil
+                                                        shutil.rmtree(node_modules_path)
+                                                    except Exception as ex:
+                                                        self.terminal.add_log(f"删除node_modules失败: {str(ex)}")
+                                                # 重新安装依赖
+                                                async def retry_install():
+                                                    retry_process = await self.execute_command(
+                                                        f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
+                                                        "SillyTavern"
+                                                    )
+                                                    if retry_process:
+                                                        await retry_process.wait()
+                                                        # 在主线程中调用回调
+                                                        self.page.invoke(lambda: on_npm_complete(retry_process, npm_retry_count + 1))
+                                                
+                                                self.run_async_task(retry_install())
+                                        
+                                        self.run_async_task(clean_cache())
                                     else:
                                         self.terminal.add_log("依赖安装失败，正在启动SillyTavern...")
                                         self.start_sillytavern(None)
                             
-                            process = self.execute_command(
-                                f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
-                                "SillyTavern"
-                            )
+                            async def install_deps():
+                                process = await self.execute_command(
+                                    f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
+                                    "SillyTavern"
+                                )
+                                if process:
+                                    await process.wait()
+                                    # 在主线程中调用回调
+                                    self.page.invoke(lambda: on_npm_complete(process, 0))
                             
-                            if process:
-                                def wait_for_process():
-                                    # 等待异步进程完成
-                                    process_obj = None
-                                    if asyncio.iscoroutine(process):
-                                        # 正确处理协程对象
-                                        loop = asyncio.new_event_loop()
-                                        asyncio.set_event_loop(loop)
-                                        try:
-                                            process_obj = loop.run_until_complete(process)
-                                            loop.run_until_complete(process_obj.wait())
-                                        finally:
-                                            loop.close()
-                                            asyncio.set_event_loop(None)
-                                    else:
-                                        process_obj = process
-                                        process_obj.wait()
-                                    on_npm_complete(process_obj, 0)
-                                
-                                threading.Thread(
-                                    target=wait_for_process,
-                                    daemon=True
-                                ).start()
+                            self.run_async_task(install_deps())
                         else:
                             self.terminal.add_log("未找到nodejs，正在启动SillyTavern...")
                             self.start_sillytavern(None)
@@ -778,178 +505,37 @@ class UiEvent:
                                 if reset_process.returncode == 0:
                                     self.terminal.add_log("已重置package-lock.json，重新尝试更新...")
                                     # 重新执行git pull
-                                    retry_process = self.execute_command(
-                                        f'\"{git_path}git\" pull --rebase --autostash', 
-                                        "SillyTavern"
-                                    )
-                                    
-                                    if retry_process:
-                                        def wait_for_retry_process():
-                                            # 等待异步进程完成
-                                            process_obj = None
-                                            if asyncio.iscoroutine(retry_process):
-                                                # 正确处理协程对象
-                                                loop = asyncio.new_event_loop()
-                                                asyncio.set_event_loop(loop)
-                                                try:
-                                                    process_obj = loop.run_until_complete(retry_process)
-                                                    loop.run_until_complete(process_obj.wait())
-                                                finally:
-                                                    loop.close()
-                                                    asyncio.set_event_loop(None)
-                                            else:
-                                                process_obj = retry_process
-                                                process_obj.wait()
+                                    async def retry_update():
+                                        retry_process = await self.execute_command(
+                                            f'\"{git_path}git\" pull --rebase --autostash', 
+                                            "SillyTavern"
+                                        )
+                                        if retry_process:
+                                            await retry_process.wait()
                                             # 避免递归调用，直接处理结果
-                                            if process_obj.returncode == 0:
-                                                self.terminal.add_log("Git更新成功")
-                                                if self.env.get_node_path():
-                                                    self.terminal.add_log("正在安装依赖...")
-                                                    def on_npm_complete(process, npm_retry_count=0):
-                                                        if process.returncode == 0:
-                                                            self.terminal.add_log("依赖安装成功，正在启动SillyTavern...")
-                                                            self.start_sillytavern(None)
-                                                        else:
-                                                            if npm_retry_count < 2:
-                                                                self.terminal.add_log(f"依赖安装失败，正在重试... (尝试次数: {npm_retry_count + 1}/2)")
-                                                                # 清理npm缓存
-                                                                cache_process = self.execute_command(
-                                                                    f"\"{self.env.get_node_path()}npm\" cache clean --force",
-                                                                    "SillyTavern"
-                                                                )
-                                                                if cache_process:
-                                                                    # 等待异步进程完成
-                                                                    if asyncio.iscoroutine(cache_process):
-                                                                        # 正确处理协程对象
-                                                                        loop = asyncio.new_event_loop()
-                                                                        asyncio.set_event_loop(loop)
-                                                                        try:
-                                                                            process_obj = loop.run_until_complete(cache_process)
-                                                                            loop.run_until_complete(process_obj.wait())
-                                                                        finally:
-                                                                            loop.close()
-                                                                            asyncio.set_event_loop(None)
-                                                                    else:
-                                                                        cache_process.wait()
-                                                                # 删除node_modules
-                                                                node_modules_path = os.path.join(self.env.st_dir, "node_modules")
-                                                                if os.path.exists(node_modules_path):
-                                                                    try:
-                                                                        import shutil
-                                                                        shutil.rmtree(node_modules_path)
-                                                                    except Exception as ex:
-                                                                        self.terminal.add_log(f"删除node_modules失败: {str(ex)}")
-                                                                # 重新安装依赖
-                                                                retry_process = self.execute_command(
-                                                                    f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
-                                                                    "SillyTavern"
-                                                                )
-                                                                if retry_process:
-                                                                    def on_retry_complete(p):
-                                                                        # 等待异步进程完成
-                                                                        process_obj = None
-                                                                        if asyncio.iscoroutine(retry_process):
-                                                                            # 正确处理协程对象
-                                                                            loop = asyncio.new_event_loop()
-                                                                            asyncio.set_event_loop(loop)
-                                                                            try:
-                                                                                process_obj = loop.run_until_complete(retry_process)
-                                                                                loop.run_until_complete(process_obj.wait())
-                                                                            finally:
-                                                                                loop.close()
-                                                                                asyncio.set_event_loop(None)
-                                                                        else:
-                                                                            process_obj = retry_process
-                                                                            process_obj.wait()
-                                                                        on_npm_complete(process_obj, npm_retry_count + 1)
-                                                                    
-                                                                    threading.Thread(
-                                                                        target=on_retry_complete,
-                                                                        args=(retry_process,),
-                                                                        daemon=True
-                                                                    ).start()
-                                                            else:
-                                                                self.terminal.add_log("依赖安装失败，正在启动SillyTavern...")
-                                                                self.start_sillytavern(None)
-                                                    
-                                                    process = self.execute_command(
-                                                        f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
-                                                        "SillyTavern"
-                                                    )
-                                                    
-                                                    if process:
-                                                        def wait_for_process():
-                                                            # 等待异步进程完成
-                                                            process_obj = None
-                                                            if asyncio.iscoroutine(process):
-                                                                # 正确处理协程对象
-                                                                loop = asyncio.new_event_loop()
-                                                                asyncio.set_event_loop(loop)
-                                                                try:
-                                                                    process_obj = loop.run_until_complete(process)
-                                                                    loop.run_until_complete(process_obj.wait())
-                                                                finally:
-                                                                    loop.close()
-                                                                    asyncio.set_event_loop(None)
-                                                            else:
-                                                                process_obj = process
-                                                                process_obj.wait()
-                                                            on_npm_complete(process_obj, 0)
-                                                        
-                                                        threading.Thread(
-                                                            target=wait_for_process,
-                                                            daemon=True
-                                                        ).start()
-                                                else:
-                                                    self.terminal.add_log("未找到nodejs，正在启动SillyTavern...")
-                                                    self.start_sillytavern(None)
-                                            else:
-                                                # 递增retry_count并再次尝试
-                                                on_git_complete(process_obj, retry_count + 1)
-                                        
-                                        threading.Thread(target=wait_for_retry_process, daemon=True).start()
-                                    else:
-                                        self.terminal.add_log("重试更新失败")
-                                        self.start_sillytavern(None)
+                                            # 在主线程中调用回调
+                                            self.page.invoke(lambda: on_git_complete(retry_process, retry_count + 1))
+                                    
+                                    self.run_async_task(retry_update())
                                 else:
                                     self.terminal.add_log("无法解决package-lock.json冲突，需要手动处理")
-                                    self.start_sillytavern(None)
                             except Exception as ex:
                                 self.terminal.add_log(f"处理package-lock.json冲突时出错: {str(ex)}")
-                                self.start_sillytavern(None)
                         else:
-                            self.terminal.add_log("Git更新失败，已达到最大重试次数")
+                            self.terminal.add_log("Git更新失败，正在启动SillyTavern...")
                             self.start_sillytavern(None)
                 
-                process = self.execute_command(
-                    f'\"{git_path}git\" pull --rebase --autostash', 
-                    "SillyTavern"
-                )
+                async def git_pull():
+                    process = await self.execute_command(
+                        f'\"{git_path}git\" pull --rebase --autostash', 
+                        "SillyTavern"
+                    )
+                    if process:
+                        await process.wait()
+                        # 在主线程中调用回调
+                        self.page.invoke(lambda: on_git_complete(process, 0))
                 
-                # 添加git操作完成后的回调
-                if process:
-                    def wait_for_process():
-                        # 等待异步进程完成
-                        process_obj = None
-                        if asyncio.iscoroutine(process):
-                            # 正确处理协程对象
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            try:
-                                process_obj = loop.run_until_complete(process)
-                                loop.run_until_complete(process_obj.wait())
-                            finally:
-                                loop.close()
-                                asyncio.set_event_loop(None)
-                        else:
-                            process_obj = process
-                            process_obj.wait()
-                        on_git_complete(process_obj)
-                    
-                    threading.Thread(
-                        target=wait_for_process,
-                        daemon=True
-                    ).start()
+                self.run_async_task(git_pull())
             else:
                 self.terminal.add_log("未找到Git路径，请手动更新SillyTavern")
 
@@ -1096,47 +682,59 @@ class UiEvent:
         mirror_type = e.data  # DropdownM2使用data属性获取选中值
         # 保存设置到配置文件
         self.config_manager.set("github.mirror", mirror_type)
-        
-        # 保存配置文件
         self.config_manager.save_config()
             
-        if (self.config_manager.get("use_sys_env", False) and self.config_manager.get("patchgit", False)) or not self.config_manager.get("use_sys_env", False):
-            # 处理gitconfig文件
-            if self.env.git_dir and os.path.exists(self.env.git_dir):
-                gitconfig_path = os.path.join(self.env.gitroot_dir, "etc", "gitconfig")
-                try:
-                    import configparser
-
-                    gitconfig = configparser.ConfigParser()
-                    if os.path.exists(gitconfig_path):
-                        gitconfig.read(gitconfig_path)
-                    
-                    # 读取当前所有insteadof配置
-                    current_mirrors = {}
-                    for section in gitconfig.sections():
-                        if 'insteadof' in gitconfig[section]:
-                            target = gitconfig.get(section, 'insteadof')
-                            current_mirrors[section] = target
-                    
-                    # 精准删除旧的GitHub镜像配置
-                    for section, target in current_mirrors.items():
+        # 判断是否应修改内部Git配置（仅限内置Git或启用了patchgit的系统Git）
+        should_patch = (
+            (self.config_manager.get("use_sys_env", False) and self.config_manager.get("patchgit", False)) 
+            or not self.config_manager.get("use_sys_env", False)
+        )
+        
+        if should_patch and hasattr(self.env, 'git_dir') and self.env.git_dir and os.path.exists(self.env.git_dir):
+            gitconfig_path = os.path.join(self.env.gitroot_dir, "etc", "gitconfig")
+            try:
+                import configparser
+                gitconfig = configparser.ConfigParser()
+                if os.path.exists(gitconfig_path):
+                    gitconfig.read(gitconfig_path)
+                
+                # 收集所有指向 https://github.com/ 的 insteadof 规则并删除
+                sections_to_remove = []
+                for section in gitconfig.sections():
+                    if gitconfig.has_option(section, 'insteadof'):
+                        target = gitconfig.get(section, 'insteadof')
                         if target == "https://github.com/":
-                            gitconfig.remove_section(section)
-                    
-                    # 添加新镜像配置（如果需要）
-                    if mirror_type != "github":
-                        mirror_url = f"https://{mirror_type}/https://github.com/"
-                        mirror_section = f'url "{mirror_url}"'
-                        if not gitconfig.has_section(mirror_section):
-                            gitconfig.add_section(mirror_section)
-                        gitconfig.set(mirror_section, "insteadof", "https://github.com/")
-                    
-                    # 写入修改后的配置
-                    with open(gitconfig_path, 'w') as configfile:
-                        gitconfig.write(configfile)
-                        
-                except Exception as ex:
-                    self.terminal.add_log(f"更新gitconfig失败: {str(ex)}")
+                            sections_to_remove.append(section)
+                
+                for section in sections_to_remove:
+                    gitconfig.remove_section(section)
+                    self.terminal.add_log(f"移除旧镜像映射: {section}")
+
+                # 仅当选择非GitHub镜像时才添加镜像映射
+                if mirror_type != "github":
+                    # 使用镜像站作为GitHub的镜像源
+                    mirror_url = f"https://{mirror_type}/https://github.com/"
+                    new_section = f'url "{mirror_url}"'
+                    if not gitconfig.has_section(new_section):
+                        gitconfig.add_section(new_section)
+                    gitconfig.set(new_section, "insteadof", "https://github.com/")
+                    self.terminal.add_log(f"添加镜像映射: {new_section} -> https://github.com/")
+
+                # 写回配置文件
+                with open(gitconfig_path, 'w', encoding='utf-8') as f:
+                    gitconfig.write(f)
+                self.terminal.add_log("gitconfig 已成功更新")
+
+            except Exception as ex:
+                self.terminal.add_log(f"更新gitconfig失败: {str(ex)}")
+
+        # 若使用镜像且SillyTavern已存在，同步切换其远程地址
+        if mirror_type != "github" and self.env.checkST():
+            success, message = switch_git_remote_to_gitee()
+            if success:
+                self.terminal.add_log(f"已将SillyTavern仓库远程地址切换到Gitee镜像: {message}")
+            else:
+                self.terminal.add_log(f"切换SillyTavern仓库远程地址失败: {message}")
 
     def save_port(self, value):
         """保存监听端口设置"""
