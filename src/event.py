@@ -691,42 +691,32 @@ class UiEvent:
         )
         
         if should_patch and hasattr(self.env, 'git_dir') and self.env.git_dir and os.path.exists(self.env.git_dir):
-            gitconfig_path = os.path.join(self.env.gitroot_dir, "etc", "gitconfig")
             try:
-                import configparser
-                gitconfig = configparser.ConfigParser()
-                if os.path.exists(gitconfig_path):
-                    gitconfig.read(gitconfig_path)
+                # 获取正确的Git路径
+                git_executable = os.path.join(self.env.get_git_path(), "git")
                 
-                # 收集所有指向 https://github.com/ 的 insteadof 规则并删除
-                sections_to_remove = []
-                for section in gitconfig.sections():
-                    if gitconfig.has_option(section, 'insteadof'):
-                        target = gitconfig.get(section, 'insteadof')
-                        if target == "https://github.com/":
-                            sections_to_remove.append(section)
-                
-                for section in sections_to_remove:
-                    gitconfig.remove_section(section)
-                    self.terminal.add_log(f"移除旧镜像映射: {section}")
-
-                # 仅当选择非GitHub镜像时才添加镜像映射
+                # 清除现有的GitHub镜像配置
+                clear_result = subprocess.run(
+                        [git_executable, "config", "--global", "--unset-all", "url.*.insteadof", "https://github.com/"],
+                        capture_output=True, text=True
+                    )
+                    
+                # 如果使用镜像且不是官方源，则配置Git全局镜像
                 if mirror_type != "github":
-                    # 使用镜像站作为GitHub的镜像源
+                    # 配置GitHub镜像
                     mirror_url = f"https://{mirror_type}/https://github.com/"
-                    new_section = f'url "{mirror_url}"'
-                    if not gitconfig.has_section(new_section):
-                        gitconfig.add_section(new_section)
-                    gitconfig.set(new_section, "insteadof", "https://github.com/")
-                    self.terminal.add_log(f"添加镜像映射: {new_section} -> https://github.com/")
+                    subprocess.run(
+                        [git_executable, "config", "--global", f"url.{mirror_url}.insteadof", "https://github.com/"],
+                        check=True, capture_output=True, text=True
+                    )
+                    self.terminal.add_log(f"已设置GitHub镜像: {mirror_url}")
+                else:
+                    self.terminal.add_log("已恢复使用官方GitHub源")
 
-                # 写回配置文件
-                with open(gitconfig_path, 'w', encoding='utf-8') as f:
-                    gitconfig.write(f)
-                self.terminal.add_log("gitconfig 已成功更新")
-
+            except subprocess.CalledProcessError as ex:
+                self.terminal.add_log(f"更新Git配置失败: {str(ex)}")
             except Exception as ex:
-                self.terminal.add_log(f"更新gitconfig失败: {str(ex)}")
+                self.terminal.add_log(f"更新Git配置时发生错误: {str(ex)}")
 
         # 若使用镜像且SillyTavern已存在，同步切换其远程地址
         if mirror_type != "github" and self.env.checkST():
