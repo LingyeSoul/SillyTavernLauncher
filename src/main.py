@@ -2,9 +2,11 @@ import flet as ft
 from time import sleep
 from ui import UniUI
 from config import ConfigManager
-from version import VersionChecker
+from update import VersionChecker
 import asyncio
 import urllib.request
+from version import VERSION
+
 async def main(page: ft.Page):
     page.window.center()
     page.title = "SillyTavernLauncher"
@@ -17,7 +19,7 @@ async def main(page: ft.Page):
     page.window.min_width=800
     page.window.maximizable = False
     page.window.title_bar_hidden = True
-    version='v1.2.9测试版1'
+    version=VERSION
 
     # 检查是否为首次启动
     async def check_first_launch():
@@ -60,7 +62,7 @@ async def main(page: ft.Page):
         page.open(welcome_dialog)
 
     # 检查更新
-    version_checker = VersionChecker(version,page)
+    version_checker = VersionChecker(page)
     async def check_for_updates():
         """检查更新并在有新版本时提示用户"""
         # 直接执行检查更新操作
