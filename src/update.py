@@ -64,10 +64,10 @@ class VersionChecker:
         
         # 构建RAW URL
         if mirror == "github":
-            raw_url = "https://raw.githubusercontent.com/LingyeSoul/SillyTavernLauncher/main/src/version.py"
+            raw_url = "https://raw.githubusercontent.com/LingyeSoul/SillyTavernLauncher/refs/heads/main/src/version.py"
         else:
             # 使用镜像站
-            raw_url = f"https://{mirror}/https://raw.githubusercontent.com/LingyeSoul/SillyTavernLauncher/main/src/version.py"
+            raw_url = "https://gitee.com/lingyesoul/SillyTavernLauncher/raw/main/src/version.py"
         
         try:
             async with aiohttp.ClientSession() as session:
@@ -241,7 +241,7 @@ class VersionChecker:
         Returns:
             dict: 包含检查结果的字典
         """
-        latest_version = await self.get_latest_release_version()
+        latest_version = await self.get_latest_release_version_from_raw()
         
         if latest_version is None:
             return {
