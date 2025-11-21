@@ -724,32 +724,109 @@ class UiEvent:
         )
         
         if should_patch and hasattr(self.env, 'git_dir') and self.env.git_dir and os.path.exists(self.env.git_dir):
+            # 使用配置文件直接操作方式
             try:
-                # 获取正确的Git路径
-                git_executable = os.path.join(self.env.get_git_path(), "git")
-                
-                # 清除现有的GitHub镜像配置
-                clear_result = subprocess.run(
-                        [git_executable, "config", "--global", "--unset-all", "url.*.insteadof", "https://github.com/"],
-                        capture_output=True, text=True
-                    )
+                if not self.config_manager.get("use_sys_env", False):
+                    # 内置Git使用etc/gitconfig文件
+                    gitconfig_path = os.path.join(self.env.git_dir, "..", "etc", "gitconfig")
+                    # 处理可能的路径问题（git_dir可能是bin或cmd目录）
+                    if not os.path.exists(gitconfig_path):
+                        gitconfig_path = os.path.join(self.env.git_dir, "etc", "gitconfig")
+                    if not os.path.exists(gitconfig_path):
+                        gitconfig_path = os.path.join(os.path.dirname(self.env.git_dir), "etc", "gitconfig")
                     
-                # 如果使用镜像且不是官方源，则配置Git全局镜像
-                if mirror_type != "github":
-                    # 配置GitHub镜像
-                    mirror_url = f"https://{mirror_type}/https://github.com/"
-                    subprocess.run(
-                        [git_executable, "config", "--global", f"url.{mirror_url}.insteadof", "https://github.com/"],
-                        check=True, capture_output=True, text=True
-                    )
-                    self.terminal.add_log(f"已设置GitHub镜像: {mirror_url}")
+                    # 验证最终路径是否存在
+                    if not os.path.exists(os.path.dirname(gitconfig_path)):
+                        self.terminal.add_log(f"错误: 无法找到Git配置目录: {os.path.dirname(gitconfig_path)}")
+                        return
                 else:
-                    self.terminal.add_log("已恢复使用官方GitHub源")
+                    # 系统Git使用internal配置文件
+                    gitconfig_path = os.path.join(os.path.expanduser("~"), ".gitconfig_internal")
+                
+                import configparser
+                # 创建不进行插值处理的配置解析器
+                gitconfig = configparser.ConfigParser(interpolation=None)
+                
+                # 为了保持配置文件格式，设置选项使键名不转换为小写
+                gitconfig.optionxform = str
+                
+                # 读取现有配置
+                if os.path.exists(gitconfig_path):
+                    # 尝试不同的编码方式读取配置文件
+                    try:
+                        gitconfig.read(gitconfig_path, encoding='utf-8')
+                    except UnicodeDecodeError:
+                        try:
+                            gitconfig.read(gitconfig_path, encoding='gbk')
+                        except UnicodeDecodeError:
+                            gitconfig.read(gitconfig_path, encoding='latin1')
+                
+                # 收集所有指向 https://github.com/ 的 insteadof 规则并删除
+                sections_to_remove = []
+                for section in gitconfig.sections():
+                    if section.startswith('url "') and section.endswith('"'):
+                        if gitconfig.has_option(section, 'insteadof'):
+                            target = gitconfig.get(section, 'insteadof')
+                            if target == "https://github.com/":
+                                sections_to_remove.append(section)
+                
+                removed_count = 0
+                for section in sections_to_remove:
+                    if gitconfig.remove_section(section):
+                        self.terminal.add_log(f"移除旧镜像映射: {section}")
+                        removed_count += 1
+                
+                if removed_count > 0:
+                    self.terminal.add_log(f"共移除 {removed_count} 个旧的镜像映射")
 
-            except subprocess.CalledProcessError as ex:
-                self.terminal.add_log(f"更新Git配置失败: {str(ex)}")
+                # 仅当选择非GitHub镜像时才添加镜像映射
+                added = False
+                if mirror_type != "github":
+                    # 使用镜像站作为GitHub的镜像源
+                    mirror_url = f"https://{mirror_type}/https://github.com/"
+                    new_section = f'url "{mirror_url}"'
+                    if not gitconfig.has_section(new_section):
+                        gitconfig.add_section(new_section)
+                        added = True
+                    elif not gitconfig.has_option(new_section, "insteadof"):
+                        added = True
+                        
+                    gitconfig.set(new_section, "insteadof", "https://github.com/")
+                    
+                    if added:
+                        self.terminal.add_log(f"添加镜像映射: {new_section} -> https://github.com/")
+                    else:
+                        self.terminal.add_log(f"更新镜像映射: {new_section} -> https://github.com/")
+
+                # 如果没有配置项且文件不存在，则不创建空文件
+                if (not gitconfig.sections()) and (not os.path.exists(gitconfig_path)):
+                    self.terminal.add_log("未添加任何镜像配置，无需创建配置文件")
+                    return
+
+                # 确保目录存在
+                os.makedirs(os.path.dirname(gitconfig_path), exist_ok=True)
+                
+                # 写回配置文件
+                with open(gitconfig_path, 'w', encoding='utf-8', newline='') as f:
+                    # 手动写入文件以确保格式正确
+                    for section in gitconfig.sections():
+                        f.write(f"[{section}]\n")
+                        for option in gitconfig.options(section):
+                            value = gitconfig.get(section, option)
+                            # 转义可能引起问题的字符
+                            value = value.replace('%', '%%')
+                            f.write(f"{option} = {value}\n")
+                        f.write("\n")
+                        
+                if mirror_type == "github":
+                    self.terminal.add_log("已恢复使用官方GitHub源")
+                else:
+                    self.terminal.add_log("Git镜像配置已成功更新")
+                
             except Exception as ex:
-                self.terminal.add_log(f"更新Git配置时发生错误: {str(ex)}")
+                self.terminal.add_log(f"更新Git配置失败: {str(ex)}")
+                import traceback
+                self.terminal.add_log(f"详细错误信息: {traceback.format_exc()}")
 
         # 若使用镜像且SillyTavern已存在，同步切换其远程地址
         if mirror_type != "github" and self.env.checkST():
