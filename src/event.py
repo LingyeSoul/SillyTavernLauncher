@@ -124,15 +124,14 @@ class UiEvent:
                 # 从配置获取镜像设置
                 mirror_type = self.config_manager.get("github.mirror", "github")
                 
-                # 如果使用官方GitHub源，则使用官方仓库地址
-                # 如果使用镜像源，则使用Gitee
+                # 根据镜像设置选择仓库地址
                 if mirror_type == "github":
                     repo_url = "https://github.com/SillyTavern/SillyTavern.git"
                 else:
                     # 使用Gitee镜像
-                    repo_url = f"https://gitee.com/lingyesoul/SillyTavern.git"
+                    repo_url = "https://gitee.com/lingyesoul/SillyTavern.git"
                 
-                self.terminal.add_log("正在安装SillyTavern...")
+                self.terminal.add_log(f"正在从 {repo_url} 安装SillyTavern...")
                 # 使用run_async_task处理异步任务
                 async def install_st():
                     process = await self.execute_command(
@@ -323,6 +322,40 @@ class UiEvent:
         if self.env.checkST():
             self.terminal.add_log("正在更新SillyTavern...")
             if git_path:
+                # 检查当前远程仓库地址是否正确
+                mirror_type = self.config_manager.get("github.mirror", "github")
+                
+                # 确保远程仓库地址正确
+                if mirror_type == "github":
+                    expected_remote = "https://github.com/SillyTavern/SillyTavern.git"
+                else:
+                    expected_remote = "https://gitee.com/lingyesoul/SillyTavern.git"
+                
+                try:
+                    # 获取当前远程仓库地址
+                    current_remote_process = subprocess.run(
+                        f'\"{git_path}git\" remote get-url origin',
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        cwd=self.env.st_dir,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                    
+                    if current_remote_process.returncode == 0:
+                        current_remote = current_remote_process.stdout.strip()
+                        if current_remote != expected_remote:
+                            # 更新远程仓库地址
+                            self.terminal.add_log(f"更新远程仓库地址: {expected_remote}")
+                            subprocess.run(
+                                f'\"{git_path}git\" remote set-url origin {expected_remote}',
+                                shell=True,
+                                cwd=self.env.st_dir,
+                                creationflags=subprocess.CREATE_NO_WINDOW
+                            )
+                except Exception as ex:
+                    self.terminal.add_log(f"检查/更新远程仓库地址时出错: {str(ex)}")
+                
                 # 执行git pull
                 def on_git_complete(process):
                     if process.returncode == 0:
