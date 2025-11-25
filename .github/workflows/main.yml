@@ -125,11 +125,9 @@ jobs:
           $mainDistPath = Join-Path $env:DIST_PATH "main.dist"
           if (Test-Path $mainDistPath) {
             Write-Host "📦 Detected Nuitka packaging structure, compressing main.dist directory"
-            # If main.dist exists, compress its contents
             Compress-Archive -Path "$mainDistPath\*" -DestinationPath $zipName -Force
           } else {
             Write-Host "📦 Standard packaging structure, compressing entire dist directory"
-            # Otherwise compress the entire dist directory
             Compress-Archive -Path "$env:DIST_PATH\*" -DestinationPath $zipName -Force
           }
           
@@ -167,10 +165,11 @@ jobs:
           "now=$formatted" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
         shell: pwsh
 
-      - name: Generate changelog (last 5 commits)
+      - name: Generate changelog with commit links (last 5 commits)
         id: changelog
         run: |
-          $log = git log --pretty=format:"* [%h] %s (%an)" -n 5
+          $repo = "${{ github.repository }}"
+          $log = git log --pretty=format:"* [`%h`](https://github.com/$repo/commit/%H) %s (%an)" -n 5
           Add-Content -Path $env:GITHUB_OUTPUT -Value "log<<EOF"
           Add-Content -Path $env:GITHUB_OUTPUT -Value "$log"
           Add-Content -Path $env:GITHUB_OUTPUT -Value "EOF"
@@ -178,23 +177,23 @@ jobs:
 
       - name: Create Release and upload ZIP (only on release trigger)
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.compress_dist.outputs.zip_name }}
           tag_name: v${{ env.SEMVER }}
-          name: Release v${{ env.SEMVER }}
+          name: 🚀 酒馆启动器 v${{ env.SEMVER }}
+          generate_release_notes: false
           body: |
-            # 🚀 ${{ env.PRODUCT_NAME }} v${{ env.SEMVER }} 发布！
+            ## 📦 构建信息
+            - **版本号**: v${{ env.SEMVER }}
+            - **打包时间**: ${{ steps.timestamp.outputs.now }}
+            - **构建平台**: Windows (GitHub Actions)
+            - **打包工具**: Flet + Nuitka via custom flet-cli
 
-            ## 🛠️ 更新内容
-
+            ## 🛠️ 最近更新（最近 5 条提交）
             ${{ steps.changelog.outputs.log }}
 
-            ## 📦 构建信息
-
-            - 打包时间：${{ steps.timestamp.outputs.now }}
-            - 版本号：v${{ env.SEMVER }}
-            - 构建系统：Windows
+            > 💡 如需完整变更日志，请查看 [commit 历史](https://github.com/${{ github.repository }}/commits/main)。
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
