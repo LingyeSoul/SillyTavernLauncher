@@ -29,6 +29,9 @@ class ConfigManager:
                 "autostart": False,
                 }
         self.config = self.load_config()
+        # 首次运行时检查环境类型
+        if self.config.get("first_run", True):
+            self._check_and_set_env_type()
         
         
     def load_config(self):
@@ -136,6 +139,15 @@ class ConfigManager:
             return False
         else:
             return True
+    
+    def _check_and_set_env_type(self):
+        """
+        检查并设置环境类型
+        如果没有env文件夹，则自动设置为系统环境模式
+        """
+        use_sys_env = self._detect_env_type()
+        self.set("use_sys_env", use_sys_env)
+        self.save_config()
 
 
 # 全局配置管理器实例

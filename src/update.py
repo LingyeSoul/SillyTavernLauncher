@@ -7,6 +7,7 @@ import ssl
 import asyncio
 import aiohttp
 from version import VERSION
+import threading
 
 class VersionChecker:
     def __init__(self, page):
@@ -43,8 +44,22 @@ class VersionChecker:
             await show_update_dialog(self)
         else:
             self._showMsg("当前已是最新版本")
-
     
+    def run_check_sync(self):
+        """
+        同步版本的运行检查更新功能，用于在线程中调用异步方法
+        """
+        def run_loop():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(self.run_check())
+            finally:
+                loop.close()
+        
+        thread = threading.Thread(target=run_loop)
+        thread.daemon = True
+        thread.start()
 
     def get_github_mirror(self):
         """
@@ -114,14 +129,18 @@ class VersionChecker:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(api_url, headers={'User-Agent': 'SillyTavernLauncher/1.0'}, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                    data = await response.json()
-                    
-                    # 提取版本号
-                    if 'tag_name' in data:
-                        return data['tag_name']
-                    elif 'name' in data:
-                        return data['name']
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        # 提取版本号
+                        if 'tag_name' in data:
+                            return data['tag_name']
+                        elif 'name' in data:
+                            return data['name']
+                        else:
+                            return None
                     else:
+                        print(f"API请求失败，状态码: {response.status}")
                         return None
                 
         except aiohttp.ClientError as e:
@@ -244,15 +263,28 @@ class VersionChecker:
         latest_version = await self.get_latest_release_version_from_raw()
         
         if latest_version is None:
+            # 尝试使用API方式获取
+            latest_version = await self.get_latest_release_version()
+            
+        if latest_version is None:
             return {
                 "has_error": True,
-                "error_message": "无法获取最新版本信息",
+                "error_message": "无法获取最新版本信息，请检查网络连接或稍后重试",
                 "current_version": self.current_version,
                 "latest_version": None,
                 "has_update": False
             }
         
-        comparison = self.compare_versions(self.current_version, latest_version)
+        try:
+            comparison = self.compare_versions(self.current_version, latest_version)
+        except Exception as e:
+            return {
+                "has_error": True,
+                "error_message": f"版本比较时出错: {str(e)}",
+                "current_version": self.current_version,
+                "latest_version": latest_version,
+                "has_update": False
+            }
         
         return {
             "has_error": False,

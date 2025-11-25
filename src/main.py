@@ -6,6 +6,7 @@ from update import VersionChecker
 import asyncio
 import urllib.request
 from version import VERSION
+from sysenv import SysEnv
 
 async def main(page: ft.Page):
     page.window.center()
@@ -61,6 +62,60 @@ async def main(page: ft.Page):
         )
         page.open(welcome_dialog)
 
+    # 显示系统环境缺失对话框
+    def show_system_env_missing_dialog(missing_items):
+        def close_dialog(e):
+            page.close(dialog)
+            # 关闭整个应用程序
+            page.window.visible = False
+            page.window.prevent_close = False
+            page.update()
+            page.window.close()
+            
+        def open_git_download(e):
+            page.launch_url("https://git-scm.com/install/windows")
+            
+        def open_nodejs_download(e):
+            page.launch_url("https://nodejs.org/zh-cn/download")
+            
+        def open_launcher_download(e):
+            page.launch_url("https://sillytavern.lingyesoul.top/update.html")
+
+        dialog = ft.AlertDialog(
+            title=ft.Text("系统环境检查失败"),
+            modal=True,
+            content=ft.Column([
+                ft.Text("检测到您正在使用系统环境模式，但以下必需组件缺失或版本不满足要求:", size=14, color=ft.Colors.RED),
+                ft.Text(missing_items, size=14),
+                ft.Divider(),
+                ft.Text("请安装所需的组件后再运行本程序:", size=14),
+                ft.Text("1. Git", size=14),
+                ft.Text("2. Node.js 18.x 或更高版本", size=14),
+                ft.Divider(),
+                ft.Text("注意：安装完成后需要重启启动器才能生效，不会安装请前往启动器官网重新下载懒人包", size=14, weight=ft.FontWeight.BOLD),
+            ], width=400, height=250),
+            actions=[
+                ft.TextButton("下载Git", on_click=open_git_download),
+                ft.TextButton("下载Node.js", on_click=open_nodejs_download),
+                ft.TextButton("下载懒人包", on_click=open_launcher_download),
+                ft.TextButton("关闭程序", on_click=close_dialog)
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        page.open(dialog)
+    # 检查系统环境
+    def check_system_environment():
+        config_manager = ConfigManager()
+        # 检查是否使用系统环境
+        if config_manager.get("use_sys_env", False):
+            sys_env = SysEnv()
+            env_check_result = sys_env.checkSysEnv()
+            if env_check_result is not True:
+                # 显示系统环境缺失对话框
+                show_system_env_missing_dialog(env_check_result)
+                return False
+        return True
+
     # 检查更新
     version_checker = VersionChecker(page)
     async def check_for_updates():
@@ -107,6 +162,14 @@ async def main(page: ft.Page):
         except Exception as e:
             print(f"自动设置代理时出错: {str(e)}")
 
+    # 检查系统环境（必须在UI初始化之后，但在显示窗口之前）
+    if not check_system_environment():
+        # 如果系统环境检查失败，则不显示主窗口
+        page.window.visible = False
+    else:
+        page.window.visible = True
+    page.update()
+
     # 初始化时根据配置决定是否创建托盘
     config_manager = ConfigManager()
     if config_manager.get("tray", True):
@@ -122,13 +185,14 @@ async def main(page: ft.Page):
         asyncio.create_task(create_tray_delayed())
     
     
-    if not config_manager.get("autostart", False):
+    if not config_manager.get("autostart", False) and page.window.visible:
         page.window.visible = True
     page.update()
     # 启动时检查更新（根据设置决定是否检查）
     config_manager = ConfigManager()
     if config_manager.get("checkupdate", True):
-        asyncio.create_task(check_for_updates())
+        # 使用同步方式调用更新检查
+        version_checker.run_check_sync()
     asyncio.create_task(check_first_launch())
 
 ft.app(target=main, view=ft.AppView.FLET_APP_HIDDEN)

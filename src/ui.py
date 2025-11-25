@@ -766,7 +766,8 @@ class UniUI():
         # 创建版本检查函数
         def check_for_updates(e):
             import threading
-            update_thread = threading.Thread(target=self.version_checker.run_check())
+            # 使用同步方法进行更新检查
+            update_thread = threading.Thread(target=self.version_checker.run_check_sync)
             update_thread.daemon = True
             update_thread.start()
 
