@@ -14,3 +14,4 @@ logs
 nuitka-crash-report.xml
 .vscode
 .flet
+.claude/settings.local.json
