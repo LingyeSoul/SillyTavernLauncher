@@ -48,16 +48,45 @@ class DataSyncManager:
         self.sync_status = "idle"  # idle, syncing, server, error
         self.last_sync_info = {}
 
-        # Load sync configuration
-        self._load_config()
-
         # Cache for local IP to avoid repeated system calls
         self._cached_local_ip = None
         self._last_ip_check_time = 0
         self._ip_cache_duration = 300  # Cache IP for 5 minutes (reduced frequency)
 
+        # UI callback for log messages
+        self._ui_log_callback = None
+
+        # Load sync configuration (now after cache variables are initialized)
+        self._load_config()
+
         # Don't print initialization messages here - they block the UI
         # Messages will be printed in async_initialize() method
+
+    def set_ui_log_callback(self, callback):
+        """
+        Set UI callback for log messages
+
+        Args:
+            callback: Function to call with log messages (message, level)
+        """
+        self._ui_log_callback = callback
+
+    def _log(self, message: str, level: str = 'info'):
+        """
+        Log message to UI if callback is available, otherwise print
+
+        Args:
+            message: Log message
+            level: Log level ('info', 'success', 'warning', 'error')
+        """
+        if self._ui_log_callback:
+            try:
+                self._ui_log_callback(message, level)
+            except Exception:
+                # Fallback to print if UI callback fails
+                print(message)
+        else:
+            print(message)
 
     async def async_initialize(self):
         """Asynchronous initialization that can print messages without blocking UI"""
@@ -71,11 +100,15 @@ class DataSyncManager:
         if self.config_manager:
             self.server_enabled = self.config_manager.get("sync.enabled", False)
             self.server_port = self.config_manager.get("sync.port", 9999)
-            self.server_host = self.config_manager.get("sync.host", "0.0.0.0")
+            # 获取局域网IP作为默认主机地址，确保只在局域网内工作
+            default_lan_ip = self._get_local_ip() or "192.168.1.100"
+            self.server_host = self.config_manager.get("sync.host", default_lan_ip)
         else:
             self.server_enabled = False
             self.server_port = 9999
-            self.server_host = "0.0.0.0"
+            # 在没有配置管理器时，也使用局域网IP而不是0.0.0.0
+            fallback_lan_ip = self._get_local_ip() or "192.168.1.100"
+            self.server_host = fallback_lan_ip
 
     def _save_config(self):
         """Save sync configuration"""
@@ -103,7 +136,7 @@ class DataSyncManager:
         Returns:
             List of (server_url, server_info) tuples
         """
-        print("正在扫描局域网中的 SillyTavern 同步服务器...")
+        self._log("正在扫描局域网中的 SillyTavern 同步服务器...", 'info')
 
         try:
             import requests
@@ -111,7 +144,7 @@ class DataSyncManager:
             # Get local IP and network range using multiple fallback methods
             local_ip = self._get_local_ip()
             if not local_ip:
-                print("无法获取本机IP地址")
+                self._log("无法获取本机IP地址", 'error')
                 return []
 
             # Extract network segment
@@ -119,9 +152,9 @@ class DataSyncManager:
             network_base = '.'.join(ip_parts[:3])
             scan_port = port or self.server_port
 
-            print(f"本地IP地址: {local_ip}")
-            print(f"扫描网络段: {network_base}.0/24")
-            print(f"扫描端口: {scan_port}")
+            self._log(f"本地IP地址: {local_ip}", 'info')
+            self._log(f"扫描网络段: {network_base}.0/24", 'info')
+            self._log(f"扫描端口: {scan_port}", 'info')
 
             # Scan network range
             result_queue = []
@@ -169,22 +202,22 @@ class DataSyncManager:
                     servers.append((f"http://{ip}:{scan_port}", data))
 
             if servers:
-                print(f"\n发现 {len(servers)} 个 SillyTavern 同步服务器:")
+                self._log(f"发现 {len(servers)} 个 SillyTavern 同步服务器:", 'success')
                 for i, (server_url, data) in enumerate(servers, 1):
                     data_path = data.get('data_path', 'N/A')
                     timestamp = data.get('timestamp', 'N/A')
-                    print(f"  {i}. {server_url} - 数据路径: {data_path} - 时间: {timestamp}")
+                    self._log(f"  {i}. {server_url} - 数据路径: {data_path} - 时间: {timestamp}", 'info')
             else:
-                print("\n未发现 SillyTavern 同步服务器")
-                print("请确保:")
-                print("  1. 目标设备已启动 SillyTavern 同步服务")
-                print("  2. 设备在同一局域网内")
-                print("  3. 防火墙允许端口访问")
+                self._log("未发现 SillyTavern 同步服务器", 'warning')
+                self._log("请确保:", 'warning')
+                self._log("  1. 目标设备已启动 SillyTavern 同步服务", 'warning')
+                self._log("  2. 设备在同一局域网内", 'warning')
+                self._log("  3. 防火墙允许端口访问", 'warning')
 
             return servers
 
         except Exception as e:
-            print(f"网络扫描失败: {e}")
+            self._log(f"网络扫描失败: {e}", 'error')
             return []
 
     def start_sync_server(self, port: int = None, host: str = None) -> bool:
@@ -199,11 +232,11 @@ class DataSyncManager:
             bool: Success status
         """
         if self.is_server_running:
-            print("数据同步服务已在运行")
+            self._log("数据同步服务已在运行", 'warning')
             return True
 
         if not os.path.exists(self.data_dir):
-            print(f"错误: 数据目录不存在: {self.data_dir}")
+            self._log(f"错误: 数据目录不存在: {self.data_dir}", 'error')
             return False
 
         try:
@@ -216,6 +249,9 @@ class DataSyncManager:
                 port=self.server_port,
                 host=self.server_host
             )
+
+            # Set log callback to pass through messages to UI
+            self.sync_server.set_ui_log_callback(self._log)
 
             # Start server in background thread
             def run_server():
@@ -236,22 +272,22 @@ class DataSyncManager:
             self._save_config()
 
             local_ip = self._get_local_ip()
-            print(f"数据同步服务已启动!")
-            print(f"服务器地址: http://{local_ip}:{self.server_port}")
-            print(f"本地地址: http://localhost:{self.server_port}")
-            print(f"数据路径: {self.data_dir}")
+            self._log(f"数据同步服务已启动!", 'success')
+            self._log(f"服务器地址: http://{local_ip}:{self.server_port}", 'info')
+            self._log(f"本地地址: http://localhost:{self.server_port}", 'info')
+            self._log(f"数据路径: {self.data_dir}", 'info')
 
             return True
 
         except Exception as e:
-            print(f"启动同步服务器失败: {e}")
+            self._log(f"启动同步服务器失败: {e}", 'error')
             self.sync_status = "error"
             return False
 
     def stop_sync_server(self) -> bool:
         """Stop sync server"""
         if not self.is_server_running:
-            print("数据同步服务未运行")
+            self._log("数据同步服务未运行", 'info')
             return True
 
         try:
@@ -267,11 +303,11 @@ class DataSyncManager:
             # Save configuration
             self._save_config()
 
-            print("数据同步服务已停止")
+            self._log("数据同步服务已停止", 'info')
             return True
 
         except Exception as e:
-            print(f"停止同步服务器失败: {e}")
+            self._log(f"停止同步服务器失败: {e}", 'error')
             return False
 
     def sync_from_server(self, server_url: str, method: str = 'auto', backup: bool = True) -> bool:
@@ -424,11 +460,11 @@ class DataSyncManager:
 
         try:
             # 只有在缓存过期时才执行ipconfig命令获取网络配置信息
-            print(f"IP缓存已过期，执行ipconfig命令获取新IP...")
+            self._log("IP缓存已过期，执行ipconfig命令获取新IP...", 'info')
             result = subprocess.run(['ipconfig'], capture_output=True, text=True, shell=True)
 
             if result.returncode != 0:
-                print(f"ipconfig命令执行失败: {result.stderr}")
+                self._log(f"ipconfig命令执行失败: {result.stderr}", 'error')
                 return self._fallback_get_local_ip()
 
             output = result.stdout
@@ -450,7 +486,7 @@ class DataSyncManager:
                     # 缓存结果并更新时间戳
                     self._cached_local_ip = ip
                     self._last_ip_check_time = current_time
-                    print(f"通过ipconfig获取内网IP: {ip}")
+                    self._log(f"通过ipconfig获取内网IP: {ip}", 'success')
                     return ip
 
             # 如果没找到合适的内网IP，返回第一个有效的IP
@@ -459,11 +495,11 @@ class DataSyncManager:
                     # 缓存结果并更新时间戳
                     self._cached_local_ip = ip
                     self._last_ip_check_time = current_time
-                    print(f"通过ipconfig获取IP: {ip}")
+                    self._log(f"通过ipconfig获取IP: {ip}", 'info')
                     return ip
 
         except Exception as e:
-            print(f"使用ipconfig获取IP失败: {e}")
+            self._log(f"使用ipconfig获取IP失败: {e}", 'error')
 
         # 如果ipconfig失败，使用备用方法
         fallback_ip = self._fallback_get_local_ip()
@@ -490,10 +526,10 @@ class DataSyncManager:
             s.close()
 
             if self._is_valid_ip(local_ip):
-                print(f"通过备用方法获取IP: {local_ip}")
+                self._log(f"通过备用方法获取IP: {local_ip}", 'info')
                 return local_ip
         except Exception as e:
-            print(f"备用方法获取IP失败: {e}")
+            self._log(f"备用方法获取IP失败: {e}", 'error')
 
         return None
 
