@@ -3,3 +3,5 @@ flet==0.28.3
 packaging==25.0
 pystray==0.19.5
 ruamel.yaml
+flask==3.1.0
+requests==2.32.3

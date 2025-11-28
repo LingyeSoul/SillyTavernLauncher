@@ -14,9 +14,10 @@ from git_utils import switch_git_remote_to_gitee
 
 
 class UiEvent:
-    def __init__(self, page, terminal):
+    def __init__(self, page, terminal, uni_ui=None):
         self.page = page
         self.terminal = terminal
+        self.uni_ui = uni_ui
         self.config_manager = ConfigManager()
         self.config = self.config_manager.config
         
@@ -54,6 +55,13 @@ class UiEvent:
             return True
         
     def exit_app(self, e):
+        # 销毁同步UI以清理定时器
+        if self.uni_ui and hasattr(self.uni_ui, 'sync_ui'):
+            try:
+                self.uni_ui.sync_ui.destroy()
+            except Exception as ex:
+                print(f"销毁同步UI时出错: {ex}")
+
         # 检查是否启用了托盘功能
         if self.config_manager.get("tray", True):
             # 启用托盘时，停止所有运行的进程并隐藏窗口
@@ -72,10 +80,17 @@ class UiEvent:
 
 
     def exit_app_with_tray(self, e):
+        # 销毁同步UI以清理定时器
+        if self.uni_ui and hasattr(self.uni_ui, 'sync_ui'):
+            try:
+                self.uni_ui.sync_ui.destroy()
+            except Exception as ex:
+                print(f"销毁同步UI时出错: {ex}")
+
         # 停止所有运行的进程
         if self.terminal.is_running:
             self.terminal.stop_processes()
-        
+
         # 如果启用了托盘功能，则先停止托盘
         if self.config_manager.get("tray", True) and self.tray is not None:
             self.tray.tray.stop()
@@ -239,7 +254,11 @@ class UiEvent:
                         # 等待进程完成
                         await process.wait()
                         # 在主线程中执行回调
-                        self.page.invoke(on_process_exit)
+                        try:
+                            self.page.run_task(on_process_exit)
+                        except AttributeError:
+                            # Fallback for older versions of flet
+                            on_process_exit()
                 
                 self.run_async_task(start_st())
             else:
@@ -497,7 +516,10 @@ class UiEvent:
                                                     if retry_process:
                                                         await retry_process.wait()
                                                         # 在主线程中调用回调
-                                                        self.page.invoke(lambda: on_npm_complete(retry_process, npm_retry_count + 1))
+                                                        try:
+                                                            self.page.run_task(lambda: on_npm_complete(retry_process, npm_retry_count + 1))
+                                                        except AttributeError:
+                                                            on_npm_complete(retry_process, npm_retry_count + 1)
                                                 
                                                 self.run_async_task(retry_install())
                                         
@@ -514,7 +536,10 @@ class UiEvent:
                                 if process:
                                     await process.wait()
                                     # 在主线程中调用回调
-                                    self.page.invoke(lambda: on_npm_complete(process, 0))
+                                    try:
+                                        self.page.run_task(lambda: on_npm_complete(process, 0))
+                                    except AttributeError:
+                                        on_npm_complete(process, 0)
                             
                             self.run_async_task(install_deps())
                         else:
@@ -547,7 +572,10 @@ class UiEvent:
                                             await retry_process.wait()
                                             # 避免递归调用，直接处理结果
                                             # 在主线程中调用回调
-                                            self.page.invoke(lambda: on_git_complete(retry_process, retry_count + 1))
+                                            try:
+                                                self.page.run_task(lambda: on_git_complete(retry_process, retry_count + 1))
+                                            except AttributeError:
+                                                on_git_complete(retry_process, retry_count + 1)
                                     
                                     self.run_async_task(retry_update())
                                 else:
@@ -566,7 +594,10 @@ class UiEvent:
                     if process:
                         await process.wait()
                         # 在主线程中调用回调
-                        self.page.invoke(lambda: on_git_complete(process, 0))
+                        try:
+                            self.page.run_task(lambda: on_git_complete(process, 0))
+                        except AttributeError:
+                            on_git_complete(process, 0)
                 
                 self.run_async_task(git_pull())
             else:

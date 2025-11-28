@@ -21,7 +21,6 @@ async def main(page: ft.Page):
     page.window.maximizable = False
     page.window.title_bar_hidden = True
     version=VERSION
-
     # 检查是否为首次启动
     async def check_first_launch():
         config_manager = ConfigManager()
@@ -128,12 +127,6 @@ async def main(page: ft.Page):
 
     uniUI=UniUI(page,version,version_checker)
     uniUI.setMainView(page)
-    #ui_event = UiEvent(page, uniUI.terminal)
-
-    page.window.center()
-    page.window.width = 800
-    page.window.height = 644
-
     # 检查自动代理设置
     config_manager = ConfigManager()
     if config_manager.get("auto_proxy", False):
@@ -162,16 +155,16 @@ async def main(page: ft.Page):
         except Exception as e:
             print(f"自动设置代理时出错: {str(e)}")
 
-    # 检查系统环境（必须在UI初始化之后，但在显示窗口之前）
-    if not check_system_environment():
-        # 如果系统环境检查失败，则不显示主窗口
-        page.window.visible = False
-    else:
-        page.window.visible = True
-    page.update()
+    # 异步检查系统环境（必须在UI初始化之后，但在显示窗口之前）
+    async def check_system_environment_async():
+        try:
+            check_system_environment()
+        except Exception as e:
+            print(f"系统环境检查时出错: {e}")
+
+    asyncio.create_task(check_system_environment_async())
 
     # 初始化时根据配置决定是否创建托盘
-    config_manager = ConfigManager()
     if config_manager.get("tray", True):
         async def create_tray_delayed():
             from tray import Tray
@@ -181,18 +174,10 @@ async def main(page: ft.Page):
                 page.window.visible = False
                 page.update()
                 uniUI.ui_event.start_sillytavern(None)
-        
+
         asyncio.create_task(create_tray_delayed())
-    
-    
-    if not config_manager.get("autostart", False) and page.window.visible:
-        page.window.visible = True
-    page.update()
-    # 启动时检查更新（根据设置决定是否检查）
-    config_manager = ConfigManager()
-    if config_manager.get("checkupdate", True):
-        # 使用同步方式调用更新检查
-        version_checker.run_check_sync()
     asyncio.create_task(check_first_launch())
+    page.window.visible = True
+    page.update()
 
 ft.app(target=main, view=ft.AppView.FLET_APP_HIDDEN)

@@ -12,11 +12,6 @@ import re
 import threading
 import queue
 import time
-import datetime
-import subprocess
-import platform
-import flet as ft
-from config import ConfigManager
 
 # ANSI颜色代码正则表达式
 ANSI_ESCAPE_REGEX = re.compile(r'\x1b\[[0-9;]*m')
@@ -564,7 +559,7 @@ class UniUI():
         self.terminal = AsyncTerminal(page)  # 使用异步终端替换高性能终端
         self.config_manager = ConfigManager()
         self.config = self.config_manager.config
-        self.ui_event = UiEvent(self.page, self.terminal)
+        self.ui_event = UiEvent(self.page, self.terminal, self)
         self.BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
         self.port_field = ft.TextField(
             label="监听端口",
@@ -824,62 +819,26 @@ class UniUI():
     
     def setMainView(self, page):
         if self.platform == "Windows":
-            settings_view = self.getSettingView()
-            about_view = self.getAboutView()
-            rail = ft.NavigationRail(
-            selected_index=0,
-            label_type=ft.NavigationRailLabelType.ALL,
-            min_width=50,
-            min_extended_width=50,
-            extended=False, 
-            destinations=[
-                ft.NavigationRailDestination(
-                icon=ft.Icons.TERMINAL,
-                selected_icon=ft.Icons.TERMINAL,
-                label="终端"
-                ),
-                ft.NavigationRailDestination(
-                icon=ft.Icons.SETTINGS,
-                selected_icon=ft.Icons.SETTINGS,
-                label="设置"
-                ),
-                ft.NavigationRailDestination(
-                icon=ft.Icons.INFO,
-                selected_icon=ft.Icons.INFO,
-                label="关于"
-                ),
-            ],
-            on_change=lambda e: switch_view(e.control.selected_index)
-        )
-            terminal_view=self.getTerminalView()
-            content = ft.Column(terminal_view, expand=True)
-            def switch_view(index):
-                content.controls.clear()
-                if index == 0:
-                    content.controls.extend(terminal_view)
-                elif index == 1:
-                    content.controls.append(settings_view)
-                else:
-                    content.controls.append(about_view)
-                page.update()
-            page.add(
-            ft.Row(
-                [   
-                    rail,
-                    ft.VerticalDivider(width=1),
-                    content
-                ],
-                expand=True,  # 确保Row扩展填充可用空间
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,  # 更好的对齐方式
-                vertical_alignment=ft.CrossAxisAlignment.STRETCH  # 垂直方向拉伸
-            )
-        )
-        
-    # 设置主题图标
+            # 创建简化的初始UI - 非阻塞
+            self._create_minimal_ui(page)
+
+            # 异步加载复杂视图
+            import threading
+            threading.Thread(target=self._load_views_async, args=(page,), daemon=True).start()
+
+    def _create_minimal_ui(self, page):
+        """创建最小化初始UI - 优先加载主题和Appbar控制"""
+
+        # 优先设置主题模式
+        page.theme_mode = self.config_manager.get("theme")
+
+        # 优先创建主题图标
         if not self.config_manager.get("theme") == "light":
-            themeIcon=ft.Icons.SUNNY
+            themeIcon = ft.Icons.SUNNY
         else:
-            themeIcon=ft.Icons.MODE_NIGHT        
+            themeIcon = ft.Icons.MODE_NIGHT
+
+        # 优先创建最小化函数
         def minisize(e):
             try:
                 page.window.minimized = True
@@ -901,28 +860,263 @@ class UniUI():
                 import traceback
                 print(f"最小化窗口失败: {str(e)}")
                 print(f"错误详情: {traceback.format_exc()}")
-        page.theme_mode = self.config_manager.get("theme")
-        page.appbar = ft.AppBar(
-        #leading=ft.Icon(ft.Icons.PALETTE),
-        leading_width=40,
-        title=ft.WindowDragArea(content=ft.Text("SillyTavernLauncher"), width=800),
-        center_title=False,
-        bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
-        actions=[
-            ft.IconButton(ft.Icons.MINIMIZE,on_click=minisize,icon_size=30),
-            ft.IconButton(icon=themeIcon,on_click=self.ui_event.switch_theme,icon_size=30),
-            ft.IconButton(ft.Icons.CANCEL_OUTLINED,on_click=self.ui_event.exit_app,icon_size=30),
-        ],
-    )
+
+        # 设置窗口事件
         def window_event(e):
             if e.data == "close":
                 # 检查是否启用了托盘功能
                 if self.config_manager.get("tray", True):
                     # 启用托盘时，只隐藏窗口
-                    self.page.window.visible = False
-                    self.page.update()
+                    page.window.visible = False
+                    page.update()
                 else:
                     # 未启用托盘时，正常退出程序
                     self.ui_event.exit_app(e)
         page.window.prevent_close = True
         page.window.on_event = window_event
+
+        # 优先设置Appbar
+        page.appbar = ft.AppBar(
+            #leading=ft.Icon(ft.Icons.PALETTE),
+            leading_width=40,
+            title=ft.WindowDragArea(content=ft.Text("SillyTavernLauncher"), width=800),
+            center_title=False,
+            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+            actions=[
+                ft.IconButton(ft.Icons.MINIMIZE, on_click=minisize, icon_size=30),
+                ft.IconButton(icon=themeIcon, on_click=self.ui_event.switch_theme, icon_size=30),
+                ft.IconButton(ft.Icons.CANCEL_OUTLINED, on_click=self.ui_event.exit_app, icon_size=30),
+            ],
+        )
+
+        # 创建导航栏（简化版）
+        rail = ft.NavigationRail(
+            selected_index=0,
+            label_type=ft.NavigationRailLabelType.ALL,
+            min_width=50,
+            min_extended_width=50,
+            extended=False,
+            destinations=[
+                ft.NavigationRailDestination(
+                    icon=ft.Icons.TERMINAL,
+                    selected_icon=ft.Icons.TERMINAL,
+                    label="终端"
+                ),
+                ft.NavigationRailDestination(
+                    icon=ft.Icons.SYNC,
+                    selected_icon=ft.Icons.SYNC,
+                    label="同步"
+                ),
+                ft.NavigationRailDestination(
+                    icon=ft.Icons.SETTINGS,
+                    selected_icon=ft.Icons.SETTINGS,
+                    label="设置"
+                ),
+                ft.NavigationRailDestination(
+                    icon=ft.Icons.INFO,
+                    selected_icon=ft.Icons.INFO,
+                    label="关于"
+                ),
+            ],
+            on_change=lambda e: self._handle_view_change(e.control.selected_index)
+        )
+
+        # 初始只显示终端视图
+        terminal_view = self.getTerminalView()
+        content = ft.Column(terminal_view, expand=True)
+
+        # 存储引用供异步加载使用
+        self._page = page
+        self._rail = rail
+        self._content = content
+        self._terminal_view = terminal_view
+        self._views_loaded = False
+
+        # 添加到页面
+        page.add(
+            ft.Row(
+                [
+                    rail,
+                    ft.VerticalDivider(width=1),
+                    content
+                ],
+                expand=True,
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                vertical_alignment=ft.CrossAxisAlignment.STRETCH
+            )
+        )
+
+    def _handle_view_change(self, index):
+        """处理视图切换 - 支持延迟加载"""
+        if not hasattr(self, '_views_loaded') or not self._views_loaded:
+            # 如果视图还未加载完成，显示加载提示
+            self._content.controls.clear()
+            loading_content = ft.Container(
+                ft.Column([
+                    ft.Text("正在加载...", size=16, weight=ft.FontWeight.BOLD),
+                    ft.ProgressBar(visible=True)
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                height=400,
+                alignment=ft.alignment.center
+            )
+            self._content.controls.append(loading_content)
+            self._page.update()
+            return
+
+        # 正常切换视图
+        self._content.controls.clear()
+        if index == 0:
+            self._content.controls.extend(self._terminal_view)
+        elif index == 1 and hasattr(self, 'sync_view'):
+            self._content.controls.append(self.sync_view)
+        elif index == 2 and hasattr(self, 'settings_view'):
+            self._content.controls.append(self.settings_view)
+        elif index == 3 and hasattr(self, 'about_view'):
+            self._content.controls.append(self.about_view)
+
+        self._page.update()
+
+    def _load_views_async(self, page):
+        """异步加载复杂视图 - 主题和Appbar已优先加载，此处跳过"""
+        try:
+            # 延迟创建同步管理器 - 带错误处理
+            try:
+                from sync_ui import DataSyncUI
+                import os
+                data_dir = os.path.join(os.getcwd(), "SillyTavern", "data", "default-user")
+                self.sync_ui = DataSyncUI(data_dir, self.config_manager)
+                self.sync_view = self.sync_ui.create_ui(page)
+            except Exception as e:
+                print(f"同步功能初始化失败，将显示简化界面: {e}")
+                # 创建简化的同步界面
+                self.sync_view = self._create_simple_sync_view()
+            
+            # 延迟创建设置视图（最复杂）
+            self.settings_view = self.getSettingView()
+
+            # 延迟创建关于视图
+            self.about_view = self.getAboutView()
+
+            # 标记加载完成
+            self._views_loaded = True
+
+            # 如果当前正在显示加载界面，切换到对应视图
+            if page and hasattr(self, '_rail'):
+                def update_ui():
+                    try:
+                        # 获取当前选中的索引
+                        current_index = self._rail.selected_index
+                        # 重新处理视图切换
+                        self._handle_view_change(current_index)
+                    except Exception as e:
+                        print(f"更新UI失败: {e}")
+
+                # 在主线程中更新UI
+                if page:
+                    update_ui()
+
+        except Exception as e:
+            print(f"异步加载视图失败: {e}")
+            import traceback
+            traceback.print_exc()
+            # 如果加载失败，确保UI仍然可用
+            def show_error():
+                if page:
+                    self._content.controls.clear()
+                    error_content = ft.Container(
+                        ft.Column([
+                            ft.Text("加载部分界面失败", size=16, color=ft.Colors.RED_500),
+                            ft.Text(str(e), size=14),
+                            ft.Text("请重启应用或联系开发者", size=14),
+                            ft.ElevatedButton(
+                                "重试",
+                                on_click=lambda _: threading.Thread(
+                                    target=self._load_views_async,
+                                    args=(page,),
+                                    daemon=True
+                                ).start()
+                            )
+                        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                        height=400,
+                        alignment=ft.alignment.center
+                    )
+                    self._content.controls.append(error_content)
+                    page.update()
+
+            if page:
+                show_error()
+
+    def _create_simple_sync_view(self):
+        """Create a simplified sync view when full sync initialization fails"""
+        return ft.Column([
+            ft.Text("数据同步", size=24, weight=ft.FontWeight.BOLD),
+            ft.Divider(),
+            ft.Container(
+                ft.Column([
+                    ft.Icon(ft.Icons.SYNC_PROBLEM, size=48, color=ft.Colors.ORANGE_400),
+                    ft.Text("同步功能暂时不可用", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE_600),
+                    ft.Text("可能的原因:", size=14),
+                    ft.Text("• 缺少Flask或requests依赖", size=12, color=ft.Colors.GREY_700),
+                    ft.Text("• 请运行: pip install flask requests", size=12, color=ft.Colors.BLUE_600, selectable=True),
+                    ft.Text("• 或运行: pip install -r requirements.txt", size=12, color=ft.Colors.BLUE_600, selectable=True),
+                    ft.Divider(),
+                    ft.Text("功能说明:", size=14, weight=ft.FontWeight.BOLD),
+                    ft.Text("数据同步功能允许您在多台设备间同步SillyTavern的数据，包括:", size=12),
+                    ft.Text("• 角色卡和聊天记录", size=12),
+                    ft.Text("• 用户设置和偏好", size=12),
+                    ft.Text("• 自定义人物设定", size=12),
+                    ft.Divider(),
+                    ft.Text("解决方法:", size=14, weight=ft.FontWeight.BOLD),
+                    ft.ElevatedButton(
+                        "安装依赖",
+                        icon=ft.Icons.DOWNLOAD,
+                        on_click=lambda _: self._install_sync_dependencies(),
+                        style=self.BSytle
+                    ),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
+                padding=20,
+                border_radius=10,
+                bgcolor=ft.Colors.SURFACE_CONTAINER_LOWEST
+            )
+        ], scroll=ft.ScrollMode.AUTO, expand=True, spacing=15)
+
+    def _install_sync_dependencies(self):
+        """Install sync dependencies"""
+        import subprocess
+        import threading
+
+        def install_deps():
+            try:
+                self.terminal.add_log("正在安装同步功能依赖...")
+                result = subprocess.run(
+                    ["pip", "install", "flask", "requests"],
+                    capture_output=True,
+                    text=True,
+                    shell=True
+                )
+                if result.returncode == 0:
+                    self.terminal.add_log("依赖安装成功！请重启启动器以启用同步功能。")
+                    # 显示重启提示
+                    if self.page:
+                        self.page.snack_bar = ft.SnackBar(
+                            content=ft.Text("依赖安装成功！请重启启动器以启用同步功能。"),
+                            bgcolor=ft.Colors.GREEN_500
+                        )
+                        self.page.snack_bar.open = True
+                        self.page.update()
+                else:
+                    self.terminal.add_log(f"依赖安装失败: {result.stderr}")
+                    if self.page:
+                        self.page.snack_bar = ft.SnackBar(
+                            content=ft.Text("依赖安装失败，请查看终端日志"),
+                            bgcolor=ft.Colors.RED_500
+                        )
+                        self.page.snack_bar.open = True
+                        self.page.update()
+            except Exception as e:
+                self.terminal.add_log(f"安装依赖时出错: {e}")
+
+        # 在后台线程中安装
+        threading.Thread(target=install_deps, daemon=True).start()
+
+            
