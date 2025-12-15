@@ -112,6 +112,12 @@ class DataSyncUI:
         self._log_file_thread = None
         self._log_file_stop_event = threading.Event()
 
+        # 首次启动对话框相关属性
+        self._first_server_dialog = None
+        self._dialog_countdown_timer = None
+        self._dialog_countdown = 60  # 60秒倒计时
+        self._dialog_countdown_active = False
+
         # 读取配置文件中的日志设置
         self.enable_logging = True  # 默认启用日志
         try:
@@ -592,15 +598,25 @@ class DataSyncUI:
                         host = host_input.value.strip()
                     else:
                         host = self._get_default_lan_ip()
-                    success = self.sync_manager.start_sync_server(port, host)
-                    if success:
-                        self._add_log(f"同步服务已启动: {self.sync_manager.get_server_url()}")
+
+                    # 先检查是否需要显示首次启动对话框
+                    should_show = self._should_show_first_server_dialog()
+
+                    if should_show:
+                        # 需要显示首次对话框，不启动服务器
+                        self._show_first_server_dialog(port, host)  # 传递端口和主机信息
                     else:
-                        self._add_log("启动同步服务失败")
-                        if self.page:
-                            self.page.snack_bar = ft.SnackBar(content=ft.Text("启动同步服务失败"), bgcolor=ft.Colors.RED_500)
-                            self.page.snack_bar.open = True
-                            self.page.update()
+                        # 不需要显示对话框，直接启动服务器
+                        success = self.sync_manager.start_sync_server(port, host)
+
+                        if success:
+                            self._add_log(f"同步服务已启动: {self.sync_manager.get_server_url()}")
+                        else:
+                            self._add_log("启动同步服务失败")
+                            if self.page:
+                                self.page.snack_bar = ft.SnackBar(content=ft.Text("启动同步服务失败"), bgcolor=ft.Colors.RED_500)
+                                self.page.snack_bar.open = True
+                                self.page.update()
                 else:
                     success = self.sync_manager.stop_sync_server()
                     if success:
@@ -615,6 +631,206 @@ class DataSyncUI:
 
         # Run in background thread to avoid blocking UI
         threading.Thread(target=toggle_server, daemon=True).start()
+
+    def _should_show_first_server_dialog(self):
+        """检查是否应该显示首次启动服务器对话框"""
+        try:
+            if self.config_manager:
+                # 检查是否已经显示过首次启动对话框
+                return not self.config_manager.get("sync.first_shown", False)
+            return True  # 如果没有配置管理器，默认显示
+        except:
+            return True  # 出错时默认显示
+
+    def _mark_first_server_dialog_shown(self):
+        """标记首次启动对话框已显示"""
+        try:
+            if self.config_manager:
+                self.config_manager.set("sync.first_shown", True)
+        except:
+            pass  # 出错时忽略
+
+    def _show_first_server_dialog(self, port=None, host=None):
+        """显示首次启动服务器的不可关闭对话框"""
+        # 倒计时文本
+        countdown_text = ft.Text(
+            f"请仔细阅读以下内容（{self._dialog_countdown}秒后可关闭）",
+            size=16,
+            weight=ft.FontWeight.BOLD,
+            color=ft.Colors.RED_500
+        )
+
+        # 警告内容
+        warning_content = ft.Column([
+            ft.Text("⚠️ 安全提醒", size=20, weight=ft.FontWeight.BOLD, color=ft.Colors.RED_600),
+            ft.Divider(),
+            ft.Text(
+                "您正在启动 SillyTavern 数据同步服务器，请务必注意以下几点：",
+                size=14
+            ),
+            ft.Text("• 请仅在信任的局域网内使用本功能", size=13, color=ft.Colors.RED_500),
+            ft.Text("• 确保您的网络环境安全可靠", size=13, color=ft.Colors.RED_500),
+            ft.Text("• 同步数据包含您的聊天记录和各种设置以及密钥！！！", size=13, color=ft.Colors.RED_500),
+            ft.Text("• 建议定期备份重要数据", size=13, color=ft.Colors.RED_500),
+            ft.Divider(),
+            ft.Text(
+                "服务器启动后，局域网内的其他设备可以通过您的IP地址和端口访问同步服务。",
+                size=13
+            ),
+            ft.Text(
+                f"默认端口: 9999，访问地址格式: http://您的IP:9999",
+                size=12,
+                color=ft.Colors.GREY_600
+            ),
+        ], scroll=ft.ScrollMode.AUTO, tight=True)
+
+        # 不再显示按钮状态
+        dont_show_state = {"clicked": False}
+
+        def toggle_dont_show(e):
+            """切换不再显示状态"""
+            dont_show_state["clicked"] = not dont_show_state["clicked"]
+            if dont_show_state["clicked"]:
+                dont_show_button.text = "已设置不再显示"
+                dont_show_button.icon = ft.Icons.CHECK
+                dont_show_button.style = ft.ButtonStyle(
+                    bgcolor=ft.Colors.GREEN_500,
+                    color=ft.Colors.WHITE
+                )
+            else:
+                dont_show_button.text = "不再显示此提醒"
+                dont_show_button.icon = ft.Icons.BOOKMARK_REMOVE
+                dont_show_button.style = ft.ButtonStyle(
+                    bgcolor=ft.Colors.BLUE_500,
+                    color=ft.Colors.WHITE
+                )
+            if self.page:
+                self.page.update()
+
+        # 不再显示按钮（与关闭按钮样式一致）
+        dont_show_button = ft.ElevatedButton(
+            "不再显示此提醒",
+            icon=ft.Icons.BOOKMARK_REMOVE,
+            style=ft.ButtonStyle(
+                bgcolor=ft.Colors.BLUE_500,
+                color=ft.Colors.WHITE
+            ),
+            on_click=toggle_dont_show
+        )
+
+        # 关闭按钮（初始禁用）
+        close_button = ft.ElevatedButton(
+            "关闭",
+            icon=ft.Icons.CLOSE,
+            disabled=True,
+            style=ft.ButtonStyle(
+                bgcolor=ft.Colors.RED_500,
+                color=ft.Colors.WHITE
+            )
+        )
+
+        def update_countdown():
+            """更新倒计时"""
+            if self._dialog_countdown > 0:
+                self._dialog_countdown -= 1
+                countdown_text.value = f"请仔细阅读以下内容（{self._dialog_countdown}秒后可关闭）"
+
+                # 倒计时结束，启用关闭按钮
+                if self._dialog_countdown == 0:
+                    close_button.disabled = False
+                    countdown_text.value = "您可以关闭此窗口了"
+                    countdown_text.color = ft.Colors.GREEN_500
+
+                if self._first_server_dialog and self.page:
+                    try:
+                        self.page.update()
+                    except RuntimeError:
+                        # 页面已关闭，停止倒计时
+                        self._dialog_countdown_active = False
+
+        def start_countdown():
+            """启动倒计时"""
+            def countdown_worker():
+                while self._dialog_countdown > 0 and self._dialog_countdown_active:
+                    time.sleep(1)
+                    if self._dialog_countdown_active and self.page:
+                        # 调用UI更新，Flet会自动处理线程调度
+                        update_countdown()
+
+            self._dialog_countdown_active = True
+            self._dialog_countdown = 60  # 重置为60秒
+            countdown_thread = threading.Thread(target=countdown_worker, daemon=True)
+            countdown_thread.start()
+
+        def on_close(e=None):
+            """关闭对话框"""
+            # 停止倒计时
+            self._dialog_countdown_active = False
+
+            # 如果点击了"不再显示"，保存到配置
+            if dont_show_state["clicked"]:
+                self._mark_first_server_dialog_shown()
+
+            # 关闭对话框
+            if self.page and self._first_server_dialog:
+                self._first_server_dialog.open = False
+                self.page.update()
+
+            # 关闭对话框后启动服务器
+            if port is not None and host is not None:
+                # 在后台线程中启动服务器以避免阻塞UI
+                def start_server_after_dialog():
+                    success = self.sync_manager.start_sync_server(port, host)
+                    if success:
+                        self._add_log(f"同步服务已启动: {self.sync_manager.get_server_url()}")
+                    else:
+                        self._add_log("启动同步服务失败")
+                        if self.page:
+                            self.page.snack_bar = ft.SnackBar(content=ft.Text("启动同步服务失败"), bgcolor=ft.Colors.RED_500)
+                            self.page.snack_bar.open = True
+                            self.page.update()
+                    self._update_ui()
+
+                threading.Thread(target=start_server_after_dialog, daemon=True).start()
+
+        # 创建对话框
+        self._first_server_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Row([
+                ft.Icon(ft.Icons.WARNING, color=ft.Colors.RED_500),
+                ft.Text("启动同步服务器提醒", weight=ft.FontWeight.BOLD)
+            ]),
+            content=ft.Container(
+                content=ft.Column([
+                    countdown_text,
+                    ft.Container(height=10),
+                    warning_content,
+                ], scroll=ft.ScrollMode.AUTO, tight=True),
+                width=500,
+                height=350,
+                padding=20
+            ),
+            actions=[
+                dont_show_button,
+                close_button,
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+            on_dismiss=None  # 禁用ESC键和点击外部关闭
+        )
+
+        # 设置按钮事件
+        close_button.on_click = on_close
+
+        try:
+            # 显示对话框
+            self.page.open(self._first_server_dialog) 
+            self._first_server_dialog.open = True
+            self.page.update()
+
+            # 启动倒计时
+            start_countdown()
+        except Exception as ex:
+            self._add_log(f"显示对话框时出错: {ex}")
 
     def _scan_servers(self, e):
         """Scan for servers on network"""
@@ -735,6 +951,9 @@ class DataSyncUI:
         if self.refresh_timer:
             self.refresh_timer.cancel()
             self.refresh_timer = None
+
+        # Stop dialog countdown
+        self._dialog_countdown_active = False
 
         # Stop async logging system
         self._stop_async_logging()
