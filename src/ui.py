@@ -1071,69 +1071,9 @@ class UniUI():
             ft.Container(
                 ft.Column([
                     ft.Icon(ft.Icons.SYNC_PROBLEM, size=48, color=ft.Colors.ORANGE_400),
-                    ft.Text("同步功能暂时不可用", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE_600),
-                    ft.Text("可能的原因:", size=14),
-                    ft.Text("• 缺少Flask或requests依赖", size=12, color=ft.Colors.GREY_700),
-                    ft.Text("• 请运行: pip install flask requests", size=12, color=ft.Colors.BLUE_600, selectable=True),
-                    ft.Text("• 或运行: pip install -r requirements.txt", size=12, color=ft.Colors.BLUE_600, selectable=True),
-                    ft.Divider(),
-                    ft.Text("功能说明:", size=14, weight=ft.FontWeight.BOLD),
-                    ft.Text("数据同步功能允许您在多台设备间同步SillyTavern的数据，包括:", size=12),
-                    ft.Text("• 角色卡和聊天记录", size=12),
-                    ft.Text("• 用户设置和偏好", size=12),
-                    ft.Text("• 自定义人物设定", size=12),
-                    ft.Divider(),
-                    ft.Text("解决方法:", size=14, weight=ft.FontWeight.BOLD),
-                    ft.ElevatedButton(
-                        "安装依赖",
-                        icon=ft.Icons.DOWNLOAD,
-                        on_click=lambda _: self._install_sync_dependencies(),
-                        style=self.BSytle
-                    ),
-                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
+                    ft.Text("同步功能初始化失败", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE_600),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=15),
                 padding=20,
                 border_radius=10,
-                bgcolor=ft.Colors.SURFACE_CONTAINER_LOWEST
             )
-        ], scroll=ft.ScrollMode.AUTO, expand=True, spacing=15)
-
-    def _install_sync_dependencies(self):
-        """Install sync dependencies"""
-        import subprocess
-        import threading
-
-        def install_deps():
-            try:
-                self.terminal.add_log("正在安装同步功能依赖...")
-                result = subprocess.run(
-                    ["pip", "install", "flask", "requests"],
-                    capture_output=True,
-                    text=True,
-                    shell=True
-                )
-                if result.returncode == 0:
-                    self.terminal.add_log("依赖安装成功！请重启启动器以启用同步功能。")
-                    # 显示重启提示
-                    if self.page:
-                        self.page.snack_bar = ft.SnackBar(
-                            content=ft.Text("依赖安装成功！请重启启动器以启用同步功能。"),
-                            bgcolor=ft.Colors.GREEN_500
-                        )
-                        self.page.snack_bar.open = True
-                        self.page.update()
-                else:
-                    self.terminal.add_log(f"依赖安装失败: {result.stderr}")
-                    if self.page:
-                        self.page.snack_bar = ft.SnackBar(
-                            content=ft.Text("依赖安装失败，请查看终端日志"),
-                            bgcolor=ft.Colors.RED_500
-                        )
-                        self.page.snack_bar.open = True
-                        self.page.update()
-            except Exception as e:
-                self.terminal.add_log(f"安装依赖时出错: {e}")
-
-        # 在后台线程中安装
-        threading.Thread(target=install_deps, daemon=True).start()
-
-            
+        ], scroll=ft.ScrollMode.AUTO, expand=True, spacing=15)    

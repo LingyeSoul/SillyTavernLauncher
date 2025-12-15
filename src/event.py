@@ -209,8 +209,8 @@ class UiEvent:
             ' ', '\t', '\n', '\r',
             # 特殊符号（Windows路径不支持或NPM容易出错的）
             '!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',',
-            ':', ';', '<', '=', '>', '?', '@', '[', '\\', ']', '^', '`',
-            '{', '|', '}', '~',
+            ';', '<', '=', '>', '?', '@', '[', ']', '^', '`',
+            '{', '|', '}', '~',"-",
             # 中文标点
             '，', '。', '！', '？', '；', '：', '（', '）', '【', '】',
             '、', '《', '》', '"', '"', ''', ''', '…', '——',
@@ -265,9 +265,14 @@ class UiEvent:
         if len(path) > 250:
             self.terminal.add_log(f"警告：路径长度过长（{len(path)}字符），建议缩短路径以避免潜在问题")
 
-        # 检查是否为网络路径或特殊路径
-        if path.startswith('\\\\') or ':' in path[1:]:
-            self.terminal.add_log("警告：检测到网络路径或特殊驱动器路径，可能影响NPM正常运行")
+        # 检查是否为网络路径（UNC路径）
+        if path.startswith('\\\\'):
+            self.terminal.add_log("警告：检测到网络路径（UNC），可能影响NPM正常运行")
+
+        # 检查是否包含非常规的驱动器路径（排除正常的Windows驱动器格式，如 C:）
+        if len(path) > 2 and ':' in path[2:]:
+            # 跳过正常的Windows驱动器路径（第二个字符及以后不应包含冒号）
+            self.terminal.add_log("警告：检测到非常规的驱动器路径格式，可能影响NPM正常运行")
 
         if show_success:
             self.terminal.add_log(f"路径验证通过：{path}")
@@ -321,7 +326,7 @@ class UiEvent:
         if self.env.checkST():
             if self.env.check_nodemodules():
                 self.terminal.is_running = True
-                def on_process_exit():
+                async def on_process_exit():
                     self.terminal.is_running = False
                     self.terminal.add_log("SillyTavern进程已退出")
                 
@@ -381,7 +386,7 @@ class UiEvent:
         if self.env.checkST():
             if self.env.check_nodemodules():
                 self.terminal.is_running = True
-                def on_process_exit():
+                async def on_process_exit():
                     self.terminal.is_running = False
                     self.terminal.add_log("SillyTavern进程已退出")
                 
