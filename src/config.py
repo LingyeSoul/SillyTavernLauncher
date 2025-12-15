@@ -1,15 +1,34 @@
 import json
 import os
+import threading
+import atexit
 
 
 class ConfigManager:
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls, config_path=None):
+        """
+        单例模式实现
+        """
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self, config_path=None):
         """
         初始化配置管理器
-        
+
         Args:
             config_path (str, optional): 配置文件路径，默认为当前目录下的config.json
         """
+        # 避免重复初始化
+        if hasattr(self, '_initialized'):
+            return
+
         if config_path is None:
             self.config_path = os.path.join(os.getcwd(), "config.json")
         else:
@@ -27,26 +46,37 @@ class ConfigManager:
                 "stcheckupdate": False,
                 "tray": False,
                 "autostart": False,
+                "sync": {
+                    "first_shown": False,
+                    "enabled": False,
+                    "port": 9999,
+                    "host": "192.168.96.111"
+                }
                 }
         self.config = self.load_config()
         # 首次运行时检查环境类型
         if self.config.get("first_run", True):
             self._check_and_set_env_type()
+
+        # 标记为已初始化
+        self._initialized = True
+
+        # 注册退出时保存配置的函数
+        atexit.register(self._save_on_exit)
         
         
     def load_config(self):
         """
         加载配置文件
-        
+
         Returns:
             dict: 配置字典
         """
         # 如果配置文件不存在，创建默认配置
         if not os.path.exists(self.config_path):
-
-            self.save_config(self.default_config)
+            # 不在此时保存，只在内存中创建
             return self.default_config
-        
+
         # 读取现有配置
         try:
             with open(self.config_path, "r") as f:
@@ -57,19 +87,29 @@ class ConfigManager:
     
     def save_config(self, config_data=None):
         """
-        保存配置到文件
-        
+        保存配置到文件（仅在程序退出时调用）
+
         Args:
             config_data (dict, optional): 要保存的配置数据，默认使用实例中的config
         """
         if config_data is None:
             config_data = self.config
-            
+
         try:
             with open(self.config_path, "w") as f:
                 json.dump(config_data, f, indent=4)
         except Exception as e:
             raise Exception(f"保存配置文件失败: {str(e)}")
+
+    def _save_on_exit(self):
+        """
+        程序退出时自动保存配置
+        """
+        try:
+            self.save_config()
+        except Exception as e:
+            # 退出时如果保存失败，不抛出异常
+            print(f"警告：配置保存失败: {str(e)}")
     
     def get(self, key, default=None):
         """
@@ -147,7 +187,7 @@ class ConfigManager:
         """
         use_sys_env = self._detect_env_type()
         self.set("use_sys_env", use_sys_env)
-        self.save_config()
+        # 移除立即保存，配置将在程序退出时保存
 
 
 # 全局配置管理器实例
