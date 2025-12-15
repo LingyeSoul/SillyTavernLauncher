@@ -113,6 +113,9 @@ class UiEvent:
 
     def install_sillytavern(self, e):
         """安装SillyTavern"""
+        # 验证路径是否适合NPM运行
+        if not self.validate_path_for_npm():
+            return
         git_path = self.env.get_git_path()
         if self.env.checkST():
             self.terminal.add_log("SillyTavern已安装")
@@ -178,19 +181,102 @@ class UiEvent:
             else:
                 self.terminal.add_log("Error: Git路径未正确配置")
 
+    def validate_path_for_npm(self, path=None, show_success=True):
+        """
+        验证路径是否适合NPM运行
+
+        Args:
+            path (str, optional): 要验证的路径，默认为当前工作目录
+            show_success (bool): 是否在验证通过时显示成功信息
+
+        Returns:
+            bool: True表示路径有效，False表示路径有问题
+        """
+        if path is None:
+            path = os.getcwd()
+
+        # 定义NPM不支持的字符集
+        # 包括：中文、日文、韩文、空格、特殊符号等
+        problematic_chars = {
+            # 中文字符（CJK统一汉字）
+            '\u4e00', '\u9fff',  # 中文范围
+            # 日文字符
+            '\u3040', '\u309f',  # 平假名
+            '\u30a0', '\u30ff',  # 片假名
+            # 韩文字符
+            '\uac00', '\ud7af',  # 韩文音节
+            # 空格和空白字符
+            ' ', '\t', '\n', '\r',
+            # 特殊符号（Windows路径不支持或NPM容易出错的）
+            '!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',',
+            ':', ';', '<', '=', '>', '?', '@', '[', '\\', ']', '^', '`',
+            '{', '|', '}', '~',
+            # 中文标点
+            '，', '。', '！', '？', '；', '：', '（', '）', '【', '】',
+            '、', '《', '》', '"', '"', ''', ''', '…', '——',
+            # 全角字符
+            '　', '！', '＂', '＃', '＄', '％', '＆', '＇', '（', '）',
+            '＊', '＋', '，', '－', '．', '／', '：', '；', '＜', '＝',
+            '＞', '？', '＠', '［', '＼', '］', '＾', '＿', '｀', '｛',
+            '｜', '｝', '～'
+        }
+
+        # 检查路径中的每个字符
+        found_problematic_chars = []
+        for char in path:
+            # 检查中文字符
+            if '\u4e00' <= char <= '\u9fff':
+                found_problematic_chars.append(f"中文字符 '{char}'")
+            # 检查日文字符
+            elif '\u3040' <= char <= '\u309f' or '\u30a0' <= char <= '\u30ff':
+                found_problematic_chars.append(f"日文字符 '{char}'")
+            # 检查韩文字符
+            elif '\uac00' <= char <= '\ud7af':
+                found_problematic_chars.append(f"韩文字符 '{char}'")
+            # 检查其他特殊字符
+            elif char in problematic_chars:
+                char_type = "空格" if char == ' ' else f"特殊字符 '{char}'"
+                found_problematic_chars.append(char_type)
+
+        # 如果发现问题字符，显示详细错误信息
+        if found_problematic_chars:
+            error_msg = "错误：当前路径包含以下NPM不支持的字符：\n"
+            # 去重并格式化错误信息
+            unique_chars = list(set(found_problematic_chars))
+            if len(unique_chars) <= 5:
+                error_msg += "  " + "\n  ".join(unique_chars)
+            else:
+                error_msg += "  " + "\n  ".join(unique_chars[:5]) + f"\n  ... 还有{len(unique_chars) - 5}个其他问题字符"
+
+            error_msg += f"\n\n当前路径：{path}"
+            error_msg += "\n\n建议：请将程序移动到纯英文路径下（不包含空格和特殊字符）"
+            self.terminal.add_log(error_msg)
+            return False
+
+        # 额外检查：确保路径是有效的ASCII路径
+        try:
+            # 尝试编码检查
+            path.encode('ascii')
+        except UnicodeEncodeError:
+            self.terminal.add_log(f"错误：路径包含非ASCII字符，可能导致NPM运行失败\n当前路径：{path}")
+            return False
+
+        # 检查路径长度（Windows路径限制）
+        if len(path) > 250:
+            self.terminal.add_log(f"警告：路径长度过长（{len(path)}字符），建议缩短路径以避免潜在问题")
+
+        # 检查是否为网络路径或特殊路径
+        if path.startswith('\\\\') or ':' in path[1:]:
+            self.terminal.add_log("警告：检测到网络路径或特殊驱动器路径，可能影响NPM正常运行")
+
+        if show_success:
+            self.terminal.add_log(f"路径验证通过：{path}")
+
+        return True
+
     def start_sillytavern(self, e):
-        # 检查路径是否包含中文或空格
-        current_path = os.getcwd()
-        
-        # 检查是否包含中文字符（使用Python内置方法）
-        has_chinese = any('\u4e00' <= char <= '\u9fff' for char in current_path)
-        if has_chinese:
-            self.terminal.add_log("错误：路径包含中文字符，请将程序移动到不包含中文字符的路径下运行")
-            return
-            
-        # 检查是否包含空格
-        if ' ' in current_path:
-            self.terminal.add_log("错误：路径包含空格，请将程序移动到不包含空格的路径下运行")
+        # 验证路径是否适合NPM运行
+        if not self.validate_path_for_npm():
             return
             
         # 检查是否开启了自动代理设置
@@ -337,6 +423,10 @@ class UiEvent:
 
     
     def update_sillytavern(self, e):
+        # 验证路径是否适合NPM运行
+        if not self.validate_path_for_npm():
+            return
+
         git_path = self.env.get_git_path()
         if self.env.checkST():
             self.terminal.add_log("正在更新SillyTavern...")
@@ -474,6 +564,10 @@ class UiEvent:
         """
         更新SillyTavern并在完成后自动启动
         """
+        # 验证路径是否适合NPM运行
+        if not self.validate_path_for_npm():
+            return
+
         git_path = self.env.get_git_path()
         if self.env.checkST():
             self.terminal.add_log("正在更新SillyTavern...")

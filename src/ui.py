@@ -5,6 +5,7 @@ from sysenv import SysEnv
 from stconfig import stcfg
 from event import UiEvent
 from config import ConfigManager
+from network import get_local_ip
 import os
 import subprocess
 import datetime
@@ -12,6 +13,7 @@ import re
 import threading
 import queue
 import time
+import stconfig
 
 # ANSI颜色代码正则表达式
 ANSI_ESCAPE_REGEX = re.compile(r'\x1b\[[0-9;]*m')
@@ -75,9 +77,24 @@ class AsyncTerminal:
         )
         # 初始化启动时间戳
         self.launch_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # 读取配置以确定是否启用局域网访问
+        stcfg_manager = stcfg()
+        local_enabled = stconfig.stcfg().listen
+
         if page.platform == ft.PagePlatform.WINDOWS:
+            # 只在启用局域网访问时获取并显示IP
+            if local_enabled:
+                local_ip = get_local_ip()
+                title_text = f"局域网IP：{local_ip}"
+            else:
+                title_text = ""
             self.view = ft.Column([
-                ft.Text("终端", size=24, weight=ft.FontWeight.BOLD),
+                ft.Row([
+                        ft.Text("终端", size=24, weight=ft.FontWeight.BOLD),
+                        ft.Text(title_text, size=16,color=ft.Colors.BLUE_300),
+                        ], alignment=ft.CrossAxisAlignment.CENTER),
+
                 ft.Container(
                     content=self.logs,
                     border=ft.border.all(1, ft.Colors.GREY_400),

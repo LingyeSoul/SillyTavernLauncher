@@ -28,6 +28,13 @@ except ImportError as e:
         def __init__(self, *args, **kwargs):
             raise ImportError("requests未安装，无法使用同步客户端功能")
 
+try:
+    from network import get_network_manager
+except ImportError as e:
+    print(f"警告: 无法导入网络模块: {e}")
+    def get_network_manager():
+        return None
+
 
 class DataSyncManager:
     """Unified data sync manager for PC Launcher"""
@@ -48,10 +55,10 @@ class DataSyncManager:
         self.sync_status = "idle"  # idle, syncing, server, error
         self.last_sync_info = {}
 
-        # Cache for local IP to avoid repeated system calls
-        self._cached_local_ip = None
-        self._last_ip_check_time = 0
-        self._ip_cache_duration = 300  # Cache IP for 5 minutes (reduced frequency)
+        # Get the global network manager
+        self.network_manager = get_network_manager()
+        if self.network_manager:
+            self.network_manager._log_callback = self._log
 
         # UI callback for log messages
         self._ui_log_callback = None
@@ -101,13 +108,15 @@ class DataSyncManager:
             self.server_enabled = self.config_manager.get("sync.enabled", False)
             self.server_port = self.config_manager.get("sync.port", 9999)
             # 获取局域网IP作为默认主机地址，确保只在局域网内工作
-            default_lan_ip = self._get_local_ip() or "192.168.1.100"
+            default_lan_ip = self.network_manager.get_local_ip() if self.network_manager else None
+            default_lan_ip = default_lan_ip or "192.168.1.100"
             self.server_host = self.config_manager.get("sync.host", default_lan_ip)
         else:
             self.server_enabled = False
             self.server_port = 9999
             # 在没有配置管理器时，也使用局域网IP而不是0.0.0.0
-            fallback_lan_ip = self._get_local_ip() or "192.168.1.100"
+            fallback_lan_ip = self.network_manager.get_local_ip() if self.network_manager else None
+            fallback_lan_ip = fallback_lan_ip or "192.168.1.100"
             self.server_host = fallback_lan_ip
 
     def _save_config(self):
@@ -121,7 +130,7 @@ class DataSyncManager:
     def get_server_url(self) -> str:
         """Get current server URL"""
         if self.server_enabled:
-            local_ip = self._get_local_ip()
+            local_ip = self.network_manager.get_local_ip() if self.network_manager else "localhost"
             return f"http://{local_ip}:{self.server_port}"
         return ""
 
@@ -142,7 +151,7 @@ class DataSyncManager:
             import requests
 
             # Get local IP and network range using multiple fallback methods
-            local_ip = self._get_local_ip()
+            local_ip = self.network_manager.get_local_ip() if self.network_manager else None
             if not local_ip:
                 self._log("无法获取本机IP地址", 'error')
                 return []
@@ -271,7 +280,7 @@ class DataSyncManager:
             # Save configuration
             self._save_config()
 
-            local_ip = self._get_local_ip()
+            local_ip = self.network_manager.get_local_ip() if self.network_manager else "localhost"
             self._log(f"数据同步服务已启动!", 'success')
             self._log(f"服务器地址: http://{local_ip}:{self.server_port}", 'info')
             self._log(f"本地地址: http://localhost:{self.server_port}", 'info')
@@ -421,7 +430,7 @@ class DataSyncManager:
             'server_host': self.server_host,
             'server_port': self.server_port,
             'server_url': self.get_server_url() if self.server_enabled else "",
-            'local_ip': self._get_local_ip(),
+            'local_ip': self.network_manager.get_local_ip() if self.network_manager else None,
             'last_sync': self.last_sync_info,
             'data_info': self.get_data_info()
         }
@@ -439,165 +448,4 @@ class DataSyncManager:
 
         return f"{size_bytes:.1f}{size_names[i]}"
 
-    def _get_local_ip(self):
-        """
-        使用ipconfig命令获取本机局域网IP地址（带缓存）
-
-        Returns:
-            str: 本机局域网IP地址，如果获取失败则返回None
-        """
-        import time
-        import subprocess
-        import re
-
-        current_time = time.time()
-
-        # 如果缓存仍然有效，直接返回缓存的IP
-        if (self._cached_local_ip and
-            current_time - self._last_ip_check_time < self._ip_cache_duration):
-            # 缓存有效，直接返回（不打印任何信息避免干扰）
-            return self._cached_local_ip
-
-        try:
-            # 只有在缓存过期时才执行ipconfig命令获取网络配置信息
-            self._log("IP缓存已过期，执行ipconfig命令获取新IP...", 'info')
-            result = subprocess.run(['ipconfig'], capture_output=True, text=True, shell=True)
-
-            if result.returncode != 0:
-                self._log(f"ipconfig命令执行失败: {result.stderr}", 'error')
-                return self._fallback_get_local_ip()
-
-            output = result.stdout
-
-            # 使用正则表达式查找IPv4地址
-            # 匹配模式：IPv4 地址 . . . . . . . . . . . : 192.168.1.100
-            ipv4_pattern = r'IPv4 地址[\. ]+\: ([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})'
-            # 备用匹配模式：IP Address. . . . . . . . . . . : 192.168.1.100
-            ipv4_pattern_en = r'IP Address[\. ]+\: ([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})'
-
-            # 查找所有匹配的IP地址
-            ips_chinese = re.findall(ipv4_pattern, output)
-            ips_english = re.findall(ipv4_pattern_en, output)
-            all_ips = ips_chinese + ips_english
-
-            # 过滤并选择最佳的内网IP
-            for ip in all_ips:
-                if self._is_valid_lan_ip(ip):
-                    # 缓存结果并更新时间戳
-                    self._cached_local_ip = ip
-                    self._last_ip_check_time = current_time
-                    self._log(f"通过ipconfig获取内网IP: {ip}", 'success')
-                    return ip
-
-            # 如果没找到合适的内网IP，返回第一个有效的IP
-            for ip in all_ips:
-                if self._is_valid_ip(ip) and not ip.startswith("127.") and not ip.startswith("169.254."):
-                    # 缓存结果并更新时间戳
-                    self._cached_local_ip = ip
-                    self._last_ip_check_time = current_time
-                    self._log(f"通过ipconfig获取IP: {ip}", 'info')
-                    return ip
-
-        except Exception as e:
-            self._log(f"使用ipconfig获取IP失败: {e}", 'error')
-
-        # 如果ipconfig失败，使用备用方法
-        fallback_ip = self._fallback_get_local_ip()
-        if fallback_ip:
-            self._cached_local_ip = fallback_ip
-            self._last_ip_check_time = current_time
-        return fallback_ip
-
-    def _fallback_get_local_ip(self):
-        """
-        备用方法获取本机IP地址
-
-        Returns:
-            str: 本机IP地址，如果获取失败则返回None
-        """
-        import socket
-
-        try:
-            # 方法1: 连接外部DNS获取IP
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.settimeout(3)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
-
-            if self._is_valid_ip(local_ip):
-                self._log(f"通过备用方法获取IP: {local_ip}", 'info')
-                return local_ip
-        except Exception as e:
-            self._log(f"备用方法获取IP失败: {e}", 'error')
-
-        return None
-
-    def _is_valid_lan_ip(self, ip):
-        """
-        验证是否为有效的局域网IP地址
-
-        Args:
-            ip (str): 要验证的IP地址
-
-        Returns:
-            bool: 是否为有效的局域网IP地址
-        """
-        try:
-            parts = ip.split('.')
-            if len(parts) != 4:
-                return False
-
-            for part in parts:
-                num = int(part)
-                if num < 0 or num > 255:
-                    return False
-
-            # 排除特殊地址
-            if ip.startswith("127.") or ip.startswith("169.254."):
-                return False
-
-            # 检查是否为内网地址
-            first_octet = int(parts[0])
-            second_octet = int(parts[1])
-
-            # 私有IP地址范围：
-            # 10.0.0.0 - 10.255.255.255 (Class A)
-            # 172.16.0.0 - 172.31.255.255 (Class B)
-            # 192.168.0.0 - 192.168.255.255 (Class C)
-            if (first_octet == 10) or \
-               (first_octet == 172 and 16 <= second_octet <= 31) or \
-               (first_octet == 192 and second_octet == 168):
-                return True
-
-            return False
-        except (ValueError, AttributeError, IndexError):
-            return False
-
-    def _is_valid_ip(self, ip):
-        """
-        验证IP地址格式是否有效
-
-        Args:
-            ip (str): 要验证的IP地址
-
-        Returns:
-            bool: IP地址是否有效
-        """
-        try:
-            parts = ip.split('.')
-            if len(parts) != 4:
-                return False
-
-            for part in parts:
-                num = int(part)
-                if num < 0 or num > 255:
-                    return False
-
-            # 排除特殊地址
-            if ip.startswith("127.") or ip.startswith("169.254."):
-                return False
-
-            return True
-        except (ValueError, AttributeError):
-            return False
+    
