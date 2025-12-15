@@ -12,6 +12,8 @@ import re
 import queue
 from typing import Optional
 import flet as ft
+import network
+from network import get_network_manager
 # ANSI颜色代码正则表达式
 ANSI_ESCAPE_REGEX = re.compile(r'\x1b\[[0-9;]*m')
 COLOR_MAP = {
@@ -269,95 +271,80 @@ class DataSyncUI:
         """Create the complete UI layout"""
         return ft.Column(
             [
-                # Header
+                # Main title
                 ft.Row(
                     [
                         self._controls['status_text'],
                         ft.Container(
                             self._controls['current_status'],
                             margin=ft.margin.only(left=20)
-                        )
-                    ],
+                        ),
+                        ft.Container(
+                            ft.Text("请仅在信任的网络上使用本功能！", size=18, weight=ft.FontWeight.BOLD,color=ft.Colors.RED_500),
+                            margin=ft.margin.only(left=20)
+                        ),
+                  ],     
                 ),
                 ft.Divider(),
 
                 # Server configuration
-                ft.Container(
-                    ft.Column([
-                        ft.Text("服务器配置", size=16, weight=ft.FontWeight.BOLD),
-                        ft.Row([
-                            self._controls['server_switch'],
-                            ft.Container(
-                                ft.Row([
-                                    self._controls['host_input'],
-                                    self._controls['port_input']
-                                ]),
-                                margin=ft.margin.only(left=20)
-                            )
-                        ]),
-                        self._controls['server_url_text'],
-
+                ft.Column([
+                    ft.Text("服务器配置", size=18, weight=ft.FontWeight.BOLD),
+                    ft.Row([
+                        self._controls['server_switch'],
+                        ft.Container(
+                            ft.Row([
+                                self._controls['host_input'],
+                                self._controls['port_input']
+                            ]),
+                            margin=ft.margin.only(left=20)
+                        )
                     ]),
-                    margin=ft.margin.symmetric(vertical=10)
-                ),
+                    self._controls['server_url_text'],
+                ]),
                 ft.Divider(),
 
                 # Client configuration
-                ft.Container(
-                    ft.Column([
-                        ft.Text("客户端配置", size=16, weight=ft.FontWeight.BOLD),
-                        ft.Row([
-                            self._controls['server_url_input'],
-                            self._controls['scan_button']
-                        ]),
-                        ft.Row([
-                            self._controls['method_dropdown'],
-                            self._controls['backup_switch'],
-                            self._controls['sync_button']
-                        ])
+                ft.Column([
+                    ft.Text("客户端配置", size=18, weight=ft.FontWeight.BOLD),
+                    ft.Row([
+                        self._controls['server_url_input'],
+                        self._controls['scan_button']
                     ]),
-                    margin=ft.margin.symmetric(vertical=10)
-                ),
+                    ft.Row([
+                        self._controls['method_dropdown'],
+                        self._controls['backup_switch'],
+                        self._controls['sync_button']
+                    ])
+                ]),
                 ft.Divider(),
 
                 # Server list
-                ft.Container(
-                    ft.Column([
-                        ft.Text("发现的服务器", size=14, weight=ft.FontWeight.BOLD),
-                        self._controls['server_list']
-                    ]),
-                    margin=ft.margin.symmetric(vertical=10)
-                ),
+                ft.Column([
+                    ft.Text("发现的服务器", size=18, weight=ft.FontWeight.BOLD),
+                    self._controls['server_list']
+                ]),
 
                 # Progress
-                ft.Container(
-                    ft.Column([
-                        self._controls['progress_bar'],
-                        self._controls['sync_progress']
-                    ]),
-                    margin=ft.margin.symmetric(vertical=10)
-                ),
+                ft.Column([
+                    self._controls['progress_bar'],
+                    self._controls['sync_progress']
+                ]),
 
                 # Data info
-                ft.Container(
-                    self._controls['data_info_text'],
-                    margin=ft.margin.symmetric(vertical=10)
-                ),
+                self._controls['data_info_text'],
 
                 # Log area
-                ft.Container(
-                    ft.Column([
-                        ft.Text("日志", size=14, weight=ft.FontWeight.BOLD),
-                        ft.Container(
-                            self._controls['log_area'],
-                            border=ft.border.all(1, ft.Colors.OUTLINE),
-                            border_radius=5,
-                            padding=10,
-                            width=730
-                        )
-                    ]),
-                    margin=ft.margin.symmetric(vertical=10)
-                )
+                ft.Column([
+                    ft.Text("日志", size=18, weight=ft.FontWeight.BOLD),
+                    ft.Container(
+                        self._controls['log_area'],
+                        border=ft.border.all(1, ft.Colors.OUTLINE),
+                        border_radius=5,
+                        padding=10,
+                        width=730
+                    )
+                ])
             ],
             scroll=ft.ScrollMode.AUTO,
             expand=True
@@ -778,43 +765,12 @@ class DataSyncUI:
             str: 本机局域网IP地址，如果获取失败则返回默认值
         """
         try:
-            import socket
-            import subprocess
-            import re
+            # 使用network.py中的NetworkManager获取IP
+            network_manager = get_network_manager()
+            local_ip = network_manager.get_local_ip()
 
-            # 方法1: 尝试连接外部DNS获取IP
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.settimeout(3)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
-
-            if self._is_valid_lan_ip(local_ip):
+            if local_ip:
                 return local_ip
-
-        except Exception:
-            pass
-
-        try:
-            # 方法2: 使用ipconfig命令
-            result = subprocess.run(['ipconfig'], capture_output=True, text=True, shell=True)
-            if result.returncode == 0:
-                # 查找IPv4地址
-                ipv4_pattern = r'IPv4 地址[\. ]+\: ([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})'
-                ips = re.findall(ipv4_pattern, result.stdout)
-
-                for ip in ips:
-                    if self._is_valid_lan_ip(ip):
-                        return ip
-
-                # 备用英文模式
-                ipv4_pattern_en = r'IP Address[\. ]+\: ([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})'
-                ips_en = re.findall(ipv4_pattern_en, result.stdout)
-
-                for ip in ips_en:
-                    if self._is_valid_lan_ip(ip):
-                        return ip
-
         except Exception:
             pass
 
@@ -832,26 +788,10 @@ class DataSyncUI:
             bool: 是否为有效的局域网IP地址
         """
         try:
-            parts = ip.split('.')
-            if len(parts) != 4:
-                return False
-
-            # 排除特殊地址
-            if ip.startswith("127.") or ip.startswith("169.254."):
-                return False
-
-            first_octet = int(parts[0])
-            second_octet = int(parts[1])
-
-            # 私有IP地址范围：
-            # 10.0.0.0 - 10.255.255.255 (Class A)
-            # 172.16.0.0 - 172.31.255.255 (Class B)
-            # 192.168.0.0 - 192.168.255.255 (Class C)
-            return (first_octet == 10) or \
-                   (first_octet == 172 and 16 <= second_octet <= 31) or \
-                   (first_octet == 192 and second_octet == 168)
-
-        except (ValueError, AttributeError, IndexError):
+            # 使用network.py中的NetworkManager验证IP
+            network_manager = get_network_manager()
+            return network_manager._is_valid_lan_ip(ip)
+        except Exception:
             return False
 
     # ================ AsyncTerminal 相关方法 ================
