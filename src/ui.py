@@ -615,7 +615,7 @@ class UniUI():
                     ft.Text("当不使用官方源时，将使用镜像源加速下载", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
                     ft.Text("环境设置", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Text("懒人包请勿修改", size=14, color=ft.Colors.GREY_600),
+                    ft.Text("懒人包请勿修改，此处供已安装Git和Nodejs的用户修改", size=14, color=ft.Colors.GREY_600),
                     ft.Row(
                         controls=[
                             ft.Switch(
@@ -632,7 +632,7 @@ class UniUI():
                         spacing=5,
                         scroll=ft.ScrollMode.AUTO
                     ),
-                    ft.Text("懒人包请勿修改 | 开启后修改系统环境的Git配置文件", size=14, color=ft.Colors.BLUE_400),
+                    ft.Text("懒人包请勿修改，修改后重启生效 | 开启后修改系统环境的Git配置文件", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
                     ft.Text("酒馆网络设置", size=18, weight=ft.FontWeight.BOLD),
                     ft.Text("调整酒馆网络设置，重启酒馆生效", size=14, color=ft.Colors.GREY_600),
