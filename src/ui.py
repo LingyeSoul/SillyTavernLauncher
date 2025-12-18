@@ -721,6 +721,13 @@ class UniUI():
                                 style=self.BSytle,
                                 on_click=self.ui_event.in_env_check,
                                 height=40
+                            ),
+                            ft.ElevatedButton(
+                                "启动命令行",
+                                icon=ft.Icons.SETTINGS,
+                                style=self.BSytle,
+                                on_click=self.ui_event.start_cmd,
+                                height=40
                             )
                         ],
                         spacing=5,
