@@ -1257,3 +1257,55 @@ class UiEvent:
         else:
             self.terminal.add_log("未找到Git路径，直接启动SillyTavern...")
             self.start_sillytavern(None)
+
+    def start_cmd(self, e):
+        """启动命令行窗口，设置预设的环境变量"""
+        import os
+        import subprocess
+        import platform
+
+        try:
+            if platform.system() != "Windows":
+                self.terminal.add_log("启动命令行功能仅支持Windows系统")
+                self.showMsg("仅支持Windows系统")
+                return
+
+            # 预设环境变量
+            env_vars = {
+                "MY_VAR": "hello",
+                "ANOTHER_VAR": "world"
+            }
+
+            # 构建新环境
+            new_env = os.environ.copy()
+            new_env.update(env_vars)
+
+            # 如果不使用系统环境，添加 Node.js 和 Git 路径
+            if not self.config_manager.get("use_sys_env", False):
+                node_path = self.env.get_node_path()
+                git_path = self.env.get_git_path()
+                if node_path or git_path:
+                    paths_to_add = [p for p in [node_path, git_path] if p]
+                    current_path = new_env.get('PATH', '')
+                    new_env['PATH'] = ';'.join(paths_to_add) + (';' + current_path if current_path else '')
+
+            # 构造要执行的命令（一次性设置所有变量并启动交互式 cmd）
+                    cmd_script = (
+                        "chcp 65001 >nul && " +
+                        " && ".join([f"set {k}={v}" for k, v in env_vars.items()]) +
+                        " && echo 环境变量已加载，欢迎使用！ && cmd /k"
+                    )
+
+            # 关键：不使用 shell=True，而是直接调用 cmd.exe
+            subprocess.Popen(
+                ["cmd.exe", "/k", cmd_script],
+                env=new_env,
+                creationflags=subprocess.CREATE_NEW_CONSOLE
+            )
+
+            self.terminal.add_log("命令行窗口已启动")
+            self.showMsg("命令行窗口已启动")
+
+        except Exception as ex:
+            self.terminal.add_log(f"启动命令行失败: {str(ex)}")
+            self.showMsg(f"启动命令行失败: {str(ex)}")
