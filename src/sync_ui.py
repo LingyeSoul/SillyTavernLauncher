@@ -1109,6 +1109,8 @@ class DataSyncUI:
 
         except Exception as e:
             print(f"批量处理日志时出错: {str(e)}")
+            import traceback
+            print(f"详细错误信息: {traceback.format_exc()}")
         finally:
             self._processing = False
 
@@ -1178,12 +1180,25 @@ class DataSyncUI:
                 keep_count = self._max_log_entries // 2
                 self._controls['log_area'].controls = self._controls['log_area'].controls[-keep_count:]
 
-            # 更新UI
-            if self.page:
-                self.page.update()
+            # 更新UI - 添加更健壮的错误处理
+            try:
+                if self.page:
+                    self.page.update()
+            except RuntimeError as e:
+                if "Event loop is closed" in str(e):
+                    # 页面已关闭，不再尝试更新
+                    self.page = None
+                else:
+                    print(f"更新页面时出错: {e}")
+            except Exception as e:
+                print(f"添加日志批量到UI时出错: {str(e)}")
+                import traceback
+                print(f"详细错误信息: {traceback.format_exc()}")
 
         except Exception as e:
             print(f"添加日志批量到UI时出错: {str(e)}")
+            import traceback
+            print(f"详细错误信息: {traceback.format_exc()}")
 
     def _get_level_color(self, level: str):
         """根据日志级别返回对应的颜色"""
