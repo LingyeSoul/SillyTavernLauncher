@@ -8,6 +8,7 @@ import asyncio
 import aiohttp
 from version import VERSION
 import threading
+import re
 
 class VersionChecker:
     def __init__(self, page):
@@ -99,6 +100,7 @@ class VersionChecker:
                 
         except aiohttp.ClientError as e:
             print(f"网络错误: {e}")
+            print(f"网络错误: {e}")
             return None
         except Exception as e:
             print(f"获取版本信息时出错: {e}")
@@ -150,6 +152,41 @@ class VersionChecker:
             print(f"获取版本信息时出错: {e}")
             return None
 
+    def is_beta_version(self, version_str):
+        """
+        检查版本是否为测试版
+        
+        Args:
+            version_str (str): 版本字符串
+            
+        Returns:
+            bool: 如果是测试版则返回True，否则返回False
+        """
+        # 检查是否包含"测试版"、"beta"、"Beta"、"BETA"等标识
+        beta_patterns = [
+            r'测试版',      # 中文"测试版"
+            r'beta',       # 英文小写
+            r'Beta',       # 英文首字母大写
+            r'BETA',       # 英文全大写
+            r'test',       # 测试版本
+            r'Test',       # 测试版本
+            r'TEST',       # 测试版本
+            r'alpha',      # alpha版本
+            r'Alpha',      # alpha版本
+            r'ALPHA',      # alpha版本
+            r'rc',         # release candidate
+            r'RC',         # release candidate
+            r'pre',        # preview
+            r'Preview',    # preview
+            r'dev',        # development
+            r'Dev'         # development
+        ]
+        
+        for pattern in beta_patterns:
+            if re.search(pattern, version_str):
+                return True
+        return False
+
     def compare_versions(self, local_version, remote_version):
         """
         比较两个版本号
@@ -161,7 +198,9 @@ class VersionChecker:
         Returns:
             int: 1表示本地版本更新，-1表示远程版本更新，0表示版本相同
         """
-        import re
+        # 如果远程版本是测试版，无论本地版本是什么，都不认为有更新
+        if self.is_beta_version(remote_version):
+            return 0  # 认为版本相同，不提示更新
         
         # 移除版本号中的前缀"v"
         local_clean = local_version.replace("v", "")
@@ -208,13 +247,9 @@ class VersionChecker:
         local_has_suffix = len(local_suffix) > 0
         remote_has_suffix = len(remote_suffix) > 0
         
-        # 检查后缀是否是测试版
-        local_is_beta = bool(re.match(r'^测试版\s*(\d*)$', local_suffix))
-        remote_is_beta = bool(re.match(r'^测试版\s*(\d*)$', remote_suffix))
-        
-        # 如果远程版本是测试版，无论本地版本是什么，都不认为有更新
-        if remote_is_beta:
-            return 0  # 认为版本相同，不提示更新
+        # 检查后缀是否是测试版（这个检查现在应该不会执行，因为远程测试版已经被上面的逻辑处理了）
+        local_is_beta = self.is_beta_version(local_suffix)
+        remote_is_beta = self.is_beta_version(remote_suffix)
         
         # 如果远程版本不是测试版，但本地版本是测试版，则远程版本更新
         if local_is_beta and not remote_is_beta:
@@ -228,14 +263,18 @@ class VersionChecker:
             return 1
         # 如果两者都有后缀，则比较后缀
         elif local_has_suffix and remote_has_suffix:
-            # 如果都是测试版，比较测试版号（虽然前面已经处理了远程是测试版的情况，这里仍然保留逻辑完整性）
-            local_beta_match = re.match(r'^测试版\s*(\d*)$', local_suffix)
-            remote_beta_match = re.match(r'^测试版\s*(\d*)$', remote_suffix)
+            # 如果都是测试版格式
+            local_beta_match = re.search(r'测试版\s*(\d*)|beta\s*(\d*)|Beta\s*(\d*)', local_suffix, re.IGNORECASE)
+            remote_beta_match = re.search(r'测试版\s*(\d*)|beta\s*(\d*)|Beta\s*(\d*)', remote_suffix, re.IGNORECASE)
             
             # 如果都是测试版格式
             if local_beta_match and remote_beta_match:
-                local_beta_num = local_beta_match.group(1)
-                remote_beta_num = remote_beta_match.group(1)
+                # 提取数字部分
+                local_beta_nums = [g for g in local_beta_match.groups() if g is not None]
+                remote_beta_nums = [g for g in remote_beta_match.groups() if g is not None]
+                
+                local_beta_num = local_beta_nums[0] if local_beta_nums else ""
+                remote_beta_num = remote_beta_nums[0] if remote_beta_nums else ""
                 
                 # 如果都有测试版号，则比较测试版号
                 if local_beta_num and remote_beta_num:
