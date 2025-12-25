@@ -397,6 +397,11 @@ class AsyncTerminal:
                     # 事件循环已关闭，跳过更新
                     if "Event loop is closed" not in str(e):
                         raise
+                except Exception as e:
+                    # 其他UI更新错误，记录但不停止处理
+                    print(f"UI更新失败: {str(e)}")
+                    import traceback
+                    print(f"详细错误信息: {traceback.format_exc()}")
             
         except Exception as e:
             import traceback

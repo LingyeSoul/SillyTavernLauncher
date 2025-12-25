@@ -208,6 +208,18 @@ class VersionChecker:
         local_has_suffix = len(local_suffix) > 0
         remote_has_suffix = len(remote_suffix) > 0
         
+        # 检查后缀是否是测试版
+        local_is_beta = bool(re.match(r'^测试版\s*(\d*)$', local_suffix))
+        remote_is_beta = bool(re.match(r'^测试版\s*(\d*)$', remote_suffix))
+        
+        # 如果远程版本是测试版，无论本地版本是什么，都不认为有更新
+        if remote_is_beta:
+            return 0  # 认为版本相同，不提示更新
+        
+        # 如果远程版本不是测试版，但本地版本是测试版，则远程版本更新
+        if local_is_beta and not remote_is_beta:
+            return -1  # 远程版本更新
+        
         # 如果本地有后缀而远程没有，则远程版本更新
         if local_has_suffix and not remote_has_suffix:
             return -1
@@ -216,7 +228,7 @@ class VersionChecker:
             return 1
         # 如果两者都有后缀，则比较后缀
         elif local_has_suffix and remote_has_suffix:
-            # 如果都是测试版，比较测试版号
+            # 如果都是测试版，比较测试版号（虽然前面已经处理了远程是测试版的情况，这里仍然保留逻辑完整性）
             local_beta_match = re.match(r'^测试版\s*(\d*)$', local_suffix)
             remote_beta_match = re.match(r'^测试版\s*(\d*)$', remote_suffix)
             
