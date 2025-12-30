@@ -932,6 +932,11 @@ class UniUI():
                     label="终端"
                 ),
                 ft.NavigationRailDestination(
+                    icon=ft.Icons.HISTORY,
+                    selected_icon=ft.Icons.HISTORY,
+                    label="版本"
+                ),
+                ft.NavigationRailDestination(
                     icon=ft.Icons.SYNC,
                     selected_icon=ft.Icons.SYNC,
                     label="同步"
@@ -996,11 +1001,13 @@ class UniUI():
         self._content.controls.clear()
         if index == 0:
             self._content.controls.extend(self._terminal_view)
-        elif index == 1 and hasattr(self, 'sync_view'):
+        elif index == 1 and hasattr(self, 'version_view'):
+            self._content.controls.append(self.version_view)
+        elif index == 2 and hasattr(self, 'sync_view'):
             self._content.controls.append(self.sync_view)
-        elif index == 2 and hasattr(self, 'settings_view'):
+        elif index == 3 and hasattr(self, 'settings_view'):
             self._content.controls.append(self.settings_view)
-        elif index == 3 and hasattr(self, 'about_view'):
+        elif index == 4 and hasattr(self, 'about_view'):
             self._content.controls.append(self.about_view)
 
         self._page.update()
@@ -1025,6 +1032,20 @@ class UniUI():
 
             # 延迟创建关于视图
             self.about_view = self.getAboutView()
+
+            # 延迟创建版本切换视图
+            try:
+                from st_version_ui import create_version_switch_view
+                self.version_view = create_version_switch_view(page, self.terminal, self.ui_event)
+            except Exception as e:
+                print(f"版本切换视图初始化失败: {e}")
+                # 创建简化版本
+                self.version_view = ft.Column([
+                    ft.Text("版本管理", size=24, weight=ft.FontWeight.BOLD),
+                    ft.Divider(),
+                    ft.Text("版本切换功能初始化失败", color=ft.Colors.RED),
+                    ft.Text(f"错误: {str(e)}", size=12, color=ft.Colors.GREY_600)
+                ], spacing=15)
 
             # 标记加载完成
             self._views_loaded = True
