@@ -44,9 +44,65 @@ class UiEvent:
                 loop.run_until_complete(coroutine)
             finally:
                 loop.close()
-        
+
         thread = threading.Thread(target=run_in_thread, daemon=True)
         thread.start()
+
+    def show_error_dialog(self, title, message):
+        """
+        显示错误对话框，带复制按钮
+
+        Args:
+            title (str): 对话框标题
+            message (str): 错误消息
+        """
+        page = self.page
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(title, size=18, color=ft.Colors.RED_600),
+            content=ft.Column([
+                ft.Text(message, size=13),
+            ], tight=True, horizontal_alignment=ft.CrossAxisAlignment.START),
+            actions=[
+                ft.TextButton(
+                    "复制错误信息",
+                    icon=ft.Icons.COPY,
+                    on_click=lambda e: self._copy_error_to_clipboard(message, page, dialog)
+                ),
+                ft.ElevatedButton(
+                    "确定",
+                    on_click=lambda e: page.close(dialog)
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        page.open(dialog)
+
+    def _copy_error_to_clipboard(self, text, page, dialog):
+        """复制错误信息到剪贴板"""
+        try:
+            # 尝试多种方法复制到剪贴板
+            try:
+                import pyperclip
+                pyperclip.copy(text)
+            except ImportError:
+                # 使用 Windows 剪贴板
+                import win32clipboard
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
+                win32clipboard.CloseClipboard()
+            # 显示复制成功提示
+            page.snack_bar = ft.SnackBar(ft.Text("已复制到剪贴板"))
+            page.snack_bar.open = True
+            page.update()
+        except Exception as e:
+            # 如果复制失败，显示错误
+            page.snack_bar = ft.SnackBar(ft.Text(f"复制失败: {str(e)}"))
+            page.snack_bar.open = True
+            page.update()
 
     def envCheck(self):
         if os.path.exists(os.path.join(os.getcwd(), "env\\")):
@@ -971,14 +1027,16 @@ class UiEvent:
         try:
             port = int(value)
             if port < 1 or port > 65535:
-                self.showMsg("端口号必须在1-65535之间")
+                self.show_error_dialog("端口错误", "端口号必须在1-65535之间")
                 return
-            
+
             self.stCfg.port = port
             self.stCfg.save_config()
-            self.showMsg("端口设置已保存")
+            self.page.snack_bar = ft.SnackBar(ft.Text("端口设置已保存"))
+            self.page.snack_bar.open = True
+            self.page.update()
         except ValueError:
-            self.showMsg("请输入有效的端口号")
+            self.show_error_dialog("端口错误", "请输入有效的端口号")
 
     def save_proxy_url(self, value):
         """保存代理URL设置"""
@@ -986,13 +1044,15 @@ class UiEvent:
             # 保留原有requestProxy配置结构
             if 'requestProxy' not in self.stCfg.config_data:
                 self.stCfg.config_data['requestProxy'] = {}
-            
+
             self.stCfg.proxy_url = value
             self.stCfg.config_data['requestProxy']['url'] = value
             self.stCfg.save_config()
-            self.showMsg("代理设置已保存")
+            self.page.snack_bar = ft.SnackBar(ft.Text("代理设置已保存"))
+            self.page.snack_bar.open = True
+            self.page.update()
         except Exception as e:
-            self.showMsg(f"保存代理设置失败: {str(e)}")
+            self.show_error_dialog("保存失败", f"保存代理设置失败: {str(e)}")
 
     def log_changed(self, e):
         """处理日志开关变化事件"""
@@ -1022,27 +1082,34 @@ class UiEvent:
         # 更新配置
         self.config_manager.set("tray", e.control.value)
         self.config_manager.save_config()
-        
+
         # 实时处理托盘功能
         if e.control.value and self.tray is None:
             # 启用托盘功能且托盘未创建，则创建托盘
             try:
                 from tray import Tray
                 self.tray = Tray(self.page, self)
-                self.showMsg("托盘功能已开启")
+                self.page.snack_bar = ft.SnackBar(ft.Text("托盘功能已开启"))
+                self.page.snack_bar.open = True
+                self.page.update()
             except Exception as ex:
-                self.showMsg(f"托盘功能开启失败: {str(ex)}")
+                self.show_error_dialog("托盘错误", f"托盘功能开启失败: {str(ex)}")
         elif not e.control.value and self.tray is not None:
             # 关闭托盘功能且托盘已创建，则停止托盘
             try:
                 self.tray.tray.stop()
                 self.tray = None
-                self.showMsg("托盘功能已关闭")
+                self.page.snack_bar = ft.SnackBar(ft.Text("托盘功能已关闭"))
+                self.page.snack_bar.open = True
+                self.page.update()
             except Exception as ex:
-                self.showMsg(f"托盘功能关闭失败: {str(ex)}")
+                self.show_error_dialog("托盘错误", f"托盘功能关闭失败: {str(ex)}")
         else:
             # 其他情况（已开启再次开启，或已关闭再次关闭）
-            self.showMsg(f"托盘功能已{'开启' if e.control.value else '关闭'}")
+            status = "开启" if e.control.value else "关闭"
+            self.page.snack_bar = ft.SnackBar(ft.Text(f"托盘功能已{status}"))
+            self.page.snack_bar.open = True
+            self.page.update()
 
     def autostart_changed(self, e):
         """处理自动启动开关变化"""
@@ -1267,7 +1334,7 @@ class UiEvent:
         try:
             if platform.system() != "Windows":
                 self.terminal.add_log("启动命令行功能仅支持Windows系统")
-                self.showMsg("仅支持Windows系统")
+                self.show_error_dialog("不支持", "启动命令行功能仅支持Windows系统")
                 return
 
             # 预设环境变量
@@ -1304,8 +1371,189 @@ class UiEvent:
             )
 
             self.terminal.add_log("命令行窗口已启动")
-            self.showMsg("命令行窗口已启动")
+            self.page.snack_bar = ft.SnackBar(ft.Text("命令行窗口已启动"))
+            self.page.snack_bar.open = True
+            self.page.update()
 
         except Exception as ex:
             self.terminal.add_log(f"启动命令行失败: {str(ex)}")
-            self.showMsg(f"启动命令行失败: {str(ex)}")
+            self.show_error_dialog("启动失败", f"启动命令行失败: {str(ex)}")
+
+    # ==================== SillyTavern版本切换相关方法 ====================
+
+    def refresh_version_list(self, e):
+        """
+        刷新版本列表
+        这个方法会在UI层面处理，这里留作占位符
+        """
+        # 实际刷新逻辑在st_version_ui.py中处理
+        pass
+
+    def confirm_version_switch(self, e, version_info, commit_hash):
+        """
+        显示版本切换确认对话框
+        这个方法会在UI层面处理，这里留作占位符
+
+        Args:
+            e: 事件对象
+            version_info (dict): 版本信息
+            commit_hash (str): commit哈希值
+        """
+        # 实际确认对话框在st_version_ui.py中处理
+        pass
+
+    def switch_st_version(self, version_info, commit_hash):
+        """
+        执行SillyTavern版本切换
+
+        Args:
+            version_info (dict): 版本信息 {version, commit, date, source}
+            commit_hash (str): 目标commit hash
+        """
+        from git_utils import checkout_st_version, check_git_status
+        import os
+
+        try:
+            # 1. 检查SillyTavern是否正在运行
+            if self.terminal.is_running:
+                error_msg = "错误: 请先停止SillyTavern后再切换版本"
+                self.terminal.add_log(error_msg)
+                print(error_msg)
+                self.show_error_dialog("切换失败", "请先停止SillyTavern后再切换版本")
+                return
+
+            self.terminal.add_log(f"开始切换到版本 v{version_info['version']}...")
+            print(f"开始切换到版本 v{version_info['version']}...")
+
+            # 2. 检查Git工作区状态
+            is_clean, status_msg = check_git_status()
+            if not is_clean:
+                self.terminal.add_log(f"警告: {status_msg}")
+                print(f"警告: {status_msg}")
+                self.show_error_dialog("警告", f"{status_msg}，切换可能丢失更改")
+
+            # 3. 执行git checkout
+            success, message = checkout_st_version(commit_hash)
+
+            if success:
+                self.terminal.add_log(f"✓ {message}")
+                self.terminal.add_log(f"✓ 成功切换到版本 v{version_info['version']}")
+                print(f"✓ {message}")
+                print(f"✓ 成功切换到版本 v{version_info['version']}")
+
+                # 刷新版本页面显示
+                self._refresh_version_view()
+
+                # 成功消息使用 SnackBar
+                self.page.snack_bar = ft.SnackBar(ft.Text(f"成功切换到版本 v{version_info['version']}"))
+                self.page.snack_bar.open = True
+                self.page.update()
+
+                # 4. 询问是否安装依赖
+                self._ask_install_dependencies()
+
+            else:
+                self.terminal.add_log(f"✗ {message}")
+                print(f"✗ 切换失败: {message}")
+                self.show_error_dialog("切换失败", f"切换版本失败: {message}")
+
+        except Exception as ex:
+            error_msg = f"切换版本时发生错误: {str(ex)}"
+            self.terminal.add_log(error_msg)
+            print(error_msg)
+            self.show_error_dialog("切换失败", f"切换版本时发生错误: {str(ex)}")
+
+    def _refresh_version_view(self):
+        """刷新版本页面的显示"""
+        try:
+            # 通过 uni_ui 访问主UI对象
+            if self.uni_ui and hasattr(self.uni_ui, 'version_view'):
+                version_view = self.uni_ui.version_view
+                if hasattr(version_view, 'refresh'):
+                    # 调用版本视图的刷新方法
+                    version_view.refresh()
+        except Exception as e:
+            print(f"刷新版本视图时出错: {str(e)}")
+
+    def _ask_install_dependencies(self):
+        """
+        询问用户是否安装npm依赖
+        """
+        page = self.page
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("版本切换成功"),
+            content=ft.Column([
+                ft.Text("是否重新安装npm依赖？"),
+                ft.Text(
+                    "建议重新安装以确保兼容性",
+                    size=13,
+                    color=ft.Colors.GREY_600
+                ),
+            ], tight=True),
+            actions=[
+                ft.TextButton("暂不安装", on_click=lambda e: page.close(dialog)),
+                ft.ElevatedButton(
+                    "立即安装",
+                    on_click=lambda e: self._do_install_npm(page, dialog)
+                ),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        page.open(dialog)
+
+    def _do_install_npm(self, page, dialog):
+        """执行npm依赖安装"""
+        page.close(dialog)
+        self.terminal.add_log("正在安装npm依赖...")
+        self.install_npm_dependencies()
+
+    def install_npm_dependencies(self):
+        """
+        安装npm依赖
+        """
+        import os
+
+        try:
+            st_dir = os.path.join(os.getcwd(), "SillyTavern")
+
+            if not os.path.exists(st_dir):
+                self.terminal.add_log("错误: SillyTavern目录不存在")
+                self.show_error_dialog("安装失败", "SillyTavern目录不存在")
+                return
+
+            self.terminal.add_log("正在执行 npm install，这可能需要几分钟...")
+
+            # 执行npm install - 注意：execute_command是异步的，需要在事件循环中运行
+            async def run_install():
+                return await self.execute_command("npm install", workdir=st_dir)
+
+            # 在新线程中运行异步任务
+            def wait_for_install():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    process = loop.run_until_complete(run_install())
+                    if process:
+                        loop.run_until_complete(process.wait())
+                        self.terminal.add_log("✓ npm依赖安装完成")
+                        # 使用对话框显示成功消息
+                        self.page.snack_bar = ft.SnackBar(ft.Text("依赖安装完成"))
+                        self.page.snack_bar.open = True
+                        self.page.update()
+                    else:
+                        self.terminal.add_log("错误: 无法执行npm install")
+                        self.show_error_dialog("安装失败", "无法执行npm install")
+                except Exception as e:
+                    self.terminal.add_log(f"安装依赖时发生错误: {str(e)}")
+                    self.show_error_dialog("安装失败", f"安装依赖时发生错误: {str(e)}")
+                finally:
+                    loop.close()
+
+            threading.Thread(target=wait_for_install, daemon=True).start()
+
+        except Exception as ex:
+            self.terminal.add_log(f"安装依赖时发生错误: {str(ex)}")
+            self.show_error_dialog("安装失败", f"安装依赖时发生错误: {str(ex)}")
