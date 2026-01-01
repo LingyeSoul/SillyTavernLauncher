@@ -224,6 +224,10 @@ class AsyncTerminal:
 
     def stop_processes(self):
         """停止所有由execute_command启动的进程"""
+        # 检查是否有活跃的进程
+        if not self.active_processes:
+            return False  # 没有进程需要停止
+
         self.add_log("正在终止所有进程...")
 
         # 刷新日志缓冲区

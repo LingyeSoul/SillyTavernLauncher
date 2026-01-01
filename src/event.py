@@ -435,9 +435,15 @@ class UiEvent:
     def stop_sillytavern(self, e):
         """停止SillyTavern"""
         try:
+            # 检查是否有活跃的进程
+            if not self.terminal.active_processes:
+                self.terminal.add_log("当前没有运行中的进程")
+                return
+
             self.terminal.add_log("正在停止SillyTavern进程...")
-            self.terminal.stop_processes()
-            self.terminal.add_log("所有进程已停止")
+            result = self.terminal.stop_processes()
+            if result:
+                self.terminal.add_log("所有进程已停止")
         except Exception as ex:
             error_msg = f"停止进程时出错: {str(ex)}"
             self.terminal.add_log(error_msg)
@@ -1291,6 +1297,10 @@ class UiEvent:
                 # 添加ANSI颜色支持
                 env['FORCE_COLOR'] = '1'
 
+                # 禁用Python和Node.js的输出缓冲，确保实时输出
+                env['PYTHONUNBUFFERED'] = '1'
+                env['NODE_OPTIONS'] = '--no-warnings'  # 禁用警告，减少输出干扰
+
                 self.terminal.add_log(f"{workdir} $ {command}")
                 # 启动进程并记录(优化Windows参数)
                 process = await asyncio.create_subprocess_shell(
@@ -1310,38 +1320,66 @@ class UiEvent:
             
             # 读取输出的异步方法
             async def read_output_async(stream, is_stderr=False):
-                # 使用更大的缓冲区大小以提高性能
-                buffer_size = 16384  # 增加到16KB
+                # 使用更小的缓冲区以提高实时性，特别是对于stderr
+                buffer_size = 1024 if not is_stderr else 512
                 buffer = b""
                 delimiter = b'\n'
-                
+                last_flush_time = asyncio.get_event_loop().time()
+                flush_interval = 0.3  # 每300ms强制刷新一次缓冲区
+
                 while True:
                     try:
-                        # 使用固定大小读取数据以避免LimitOverrunError
-                        chunk = await stream.read(buffer_size)
-                        if not chunk:  # 如果没有数据且流已结束，则退出循环
-                            # 处理缓冲区中剩余的数据（即使没有换行符）
-                            if buffer:
-                                clean_line = buffer.decode('utf-8', errors='replace').rstrip('\r\n')
-                                if clean_line:  # 只有当文本非空时才添加日志
-                                    self.terminal.add_log(clean_line)
-                            break
-                        
-                        # 将新读取的数据添加到缓冲区
-                        buffer += chunk
-                        
+                        # 尝试读取数据，添加超时以实现定期刷新
+                        try:
+                            # 使用较小的超时时间，允许定期刷新缓冲区
+                            chunk = await asyncio.wait_for(stream.read(buffer_size), timeout=0.1)
+                        except asyncio.TimeoutError:
+                            # 超时是正常的，继续处理缓冲区
+                            chunk = None
+
+                        current_time = asyncio.get_event_loop().time()
+
+                        # 如果读取到数据
+                        if chunk:
+                            # 将新读取的数据添加到缓冲区
+                            buffer += chunk
+                            last_flush_time = current_time  # 更新最后刷新时间
+
                         # 处理缓冲区中的完整行
                         while delimiter in buffer:
                             line, buffer = buffer.split(delimiter, 1)
                             clean_line = line.decode('utf-8', errors='replace').rstrip('\r\n')
                             if clean_line:  # 只有当文本非空时才添加日志
                                 self.terminal.add_log(clean_line)
-                    
+
+                        # 定期强制刷新缓冲区（处理没有换行符的输出）
+                        time_since_flush = current_time - last_flush_time
+                        if buffer and time_since_flush > flush_interval:
+                            clean_line = buffer.decode('utf-8', errors='replace').rstrip('\r\n')
+                            if clean_line:
+                                self.terminal.add_log(clean_line)
+                            buffer = b""
+                            last_flush_time = current_time
+
+                        # 如果没有读取到数据且流已关闭，退出
+                        if chunk is None and stream.at_eof():
+                            # 处理缓冲区中剩余的数据
+                            if buffer:
+                                clean_line = buffer.decode('utf-8', errors='replace').rstrip('\r\n')
+                                if clean_line:
+                                    self.terminal.add_log(clean_line)
+                            break
+
+                    except asyncio.CancelledError:
+                        # 任务被取消，清理并退出
+                        if buffer:
+                            clean_line = buffer.decode('utf-8', errors='replace').rstrip('\r\n')
+                            if clean_line:
+                                self.terminal.add_log(clean_line)
+                        break
                     except Exception as ex:
-                        import traceback
                         if hasattr(self.terminal, 'view') and self.terminal.view.page:
                             self.terminal.add_log(f"输出处理错误: {type(ex).__name__}: {str(ex)}")
-                            self.terminal.add_log(f"错误详情: {traceback.format_exc()}")
                         break
 
             # 创建并启动异步输出处理任务

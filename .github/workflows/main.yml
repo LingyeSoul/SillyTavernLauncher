@@ -131,7 +131,7 @@ jobs:
             Compress-Archive -Path "$env:DIST_PATH\*" -DestinationPath $zipName -Force
           }
           
-          echo "zip_name=$zipName" >> $env:GITHUB_OUTPUT
+          "zip_name=$zipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Write-Host "✅ ZIP file created: $zipName"
         shell: pwsh
 
