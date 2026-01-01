@@ -69,6 +69,11 @@ class AsyncTerminal:
     BATCH_SIZE_THRESHOLD = 50  # 批量处理阈值（从30增加到50）
     PROCESS_INTERVAL = 0.05  # 处理间隔50ms（从20ms增加到50ms）
 
+    # ⚡ 新增：日志显示和记录分离
+    MAX_DISPLAY_LOGS = 300  # 终端最多显示300条
+    HIGH_LOAD_THRESHOLD = 200  # 高负载阈值（队列>200条）
+    OVERLOAD_THRESHOLD = 500  # 过载阈值（队列>500条，启用激进截断）
+
     def __init__(self, page, enable_logging=True, local_enabled=False):
         self.logs = ft.ListView(
             expand=True,
@@ -369,7 +374,7 @@ class AsyncTerminal:
         return True
 
     def _process_batch(self):
-        """处理批量日志条目（自适应批量 + 激进日志限制）"""
+        """处理批量日志条目（显示和记录分离）"""
         # 阻止并发处理
         if self._processing:
             return
@@ -414,14 +419,15 @@ class AsyncTerminal:
             # 批量更新日志控件
             self.logs.controls.extend(new_controls)
 
-            # ⚡ 激进限制日志数量：根据当前控件数动态调整
+            # ⚡ 激进限制显示日志数量（确保不超过MAX_DISPLAY_LOGS）
             current_count = len(self.logs.controls)
-            if current_count > 500:
-                # 保留最新300条
-                self.logs.controls = self.logs.controls[-300:]
-            elif current_count > 300:
-                # 保留最新200条
-                self.logs.controls = self.logs.controls[-200:]
+            if current_count > self.MAX_DISPLAY_LOGS:
+                # 只保留最新的MAX_DISPLAY_LOGS条
+                self.logs.controls = self.logs.controls[-self.MAX_DISPLAY_LOGS:]
+            elif current_count > self.MAX_DISPLAY_LOGS * 0.7:
+                # 接近上限时，主动清理到70%
+                keep_count = int(self.MAX_DISPLAY_LOGS * 0.7)
+                self.logs.controls = self.logs.controls[-keep_count:]
 
             # 更新处理时间
             self._last_process_time = time.time()
@@ -502,7 +508,7 @@ class AsyncTerminal:
             self._update_timer.start()
 
     def add_log(self, text: str):
-        """线程安全的日志添加方法（优化版 - 使用背压机制）"""
+        """线程安全的日志添加方法（显示和记录分离）"""
         try:
             # 优先处理空值情况
             if not text:
@@ -512,43 +518,97 @@ class AsyncTerminal:
             processed_text = text[:self.LOG_MAX_LENGTH]
             processed_text = re.sub(r'(\r?\n){3,}', '\n\n', processed_text.strip())
 
-            # 将日志写入文件（通过队列异步处理）
+            # ⭐ 关键：日志文件记录（完整记录，不丢弃）
             if self.enable_logging:
                 timestamp = datetime.datetime.now()
                 try:
                     self._log_file_queue.put_nowait((timestamp, processed_text))
                 except queue.Full:
-                    # 队列满时丢弃（避免阻塞）
-                    pass
+                    # 日志文件队列也满了，阻塞等待（确保不丢失）
+                    try:
+                        self._log_file_queue.put((timestamp, processed_text), block=True, timeout=1.0)
+                    except:
+                        pass  # 超时则丢弃（极端情况）
 
-            # 超长日志特殊处理
-            if len(processed_text) >= self.LOG_MAX_LENGTH:
-                self._clear_logs_async()
+            # ⭐ 终端显示队列（激进丢弃，只保留末尾）
+            current_queue_size = self._log_queue.qsize()
 
-            # 非阻塞添加到队列（带背压）
-            try:
-                self._log_queue.put_nowait(processed_text)
-            except queue.Full:
-                # 队列满时，清空一半旧日志（背压机制）
+            # 过载检测：如果队列过大，启用激进截断模式
+            if current_queue_size > self.OVERLOAD_THRESHOLD:
+                # 激进模式：直接丢弃中间的大部分日志，只保留最新的200条
                 with self._log_queue.mutex:
-                    # 丢弃最老的一半
+                    # 清空队列，只保留最新的200条位置
                     new_queue = queue.Queue(maxsize=self.MAX_QUEUE_SIZE)
-                    items_to_keep = []
-                    # 保留最新的500条
-                    for _ in range(min(500, self._log_queue.qsize())):
+
+                    # 只取最新的200条
+                    temp_list = []
+                    for _ in range(min(200, current_queue_size)):
                         try:
-                            items_to_keep.append(self._log_queue.get_nowait())
+                            temp_list.append(self._log_queue.get_nowait())
                         except queue.Empty:
                             break
-                    # 添加新日志
-                    items_to_keep.append(processed_text)
+
+                    # 如果取了超过200条，只保留最后200条
+                    if len(temp_list) > 200:
+                        temp_list = temp_list[-200:]
+
                     # 放回队列
-                    for item in items_to_keep:
+                    for item in temp_list:
                         new_queue.put_nowait(item)
+
+                    # 添加新日志
+                    new_queue.put_nowait(processed_text)
+
                     # 替换队列
                     self._log_queue = new_queue
 
-            # 主动触发日志处理（确保日志及时显示）
+            elif current_queue_size > self.HIGH_LOAD_THRESHOLD:
+                # 高负载模式：丢弃最老的50%，保留最新的
+                try:
+                    self._log_queue.put_nowait(processed_text)
+                except queue.Full:
+                    # 队列满时，清空一半旧日志
+                    with self._log_queue.mutex:
+                        new_queue = queue.Queue(maxsize=self.MAX_QUEUE_SIZE)
+                        items_to_keep = []
+                        # 保留最新的50%
+                        keep_count = min(self.MAX_QUEUE_SIZE // 2, self._log_queue.qsize())
+                        for _ in range(keep_count):
+                            try:
+                                items_to_keep.append(self._log_queue.get_nowait())
+                            except queue.Empty:
+                                break
+                        # 添加新日志
+                        items_to_keep.append(processed_text)
+                        # 放回队列
+                        for item in items_to_keep:
+                            new_queue.put_nowait(item)
+                        # 替换队列
+                        self._log_queue = new_queue
+            else:
+                # 正常模式：直接添加
+                try:
+                    self._log_queue.put_nowait(processed_text)
+                except queue.Full:
+                    # 队列满时的正常背压处理
+                    with self._log_queue.mutex:
+                        new_queue = queue.Queue(maxsize=self.MAX_QUEUE_SIZE)
+                        items_to_keep = []
+                        # 保留最新的500条
+                        for _ in range(min(500, self._log_queue.qsize())):
+                            try:
+                                items_to_keep.append(self._log_queue.get_nowait())
+                            except queue.Empty:
+                                break
+                        # 添加新日志
+                        items_to_keep.append(processed_text)
+                        # 放回队列
+                        for item in items_to_keep:
+                            new_queue.put_nowait(item)
+                        # 替换队列
+                        self._log_queue = new_queue
+
+            # 主动触发日志处理
             self._trigger_log_processing()
 
         except (TypeError, IndexError, AttributeError) as e:
