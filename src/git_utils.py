@@ -138,10 +138,34 @@ def check_git_status(st_dir=None):
         if not result.stdout.strip():
             return True, "工作区干净"
         else:
-            # 统计修改的文件
+            # 检查修改的文件
             modified_lines = result.stdout.strip().split('\n')
-            modified_count = len([line for line in modified_lines if line.strip()])
-            return False, f"检测到{modified_count}个文件有未提交的更改"
+            # 过滤掉package-lock.json的更改（这是由于使用镜像NPM源导致的）
+            non_package_lock_changes = [
+                line for line in modified_lines
+                if line.strip() and 'package-lock.json' not in line
+            ]
+
+            if not non_package_lock_changes:
+                # 只有package-lock.json被修改，自动恢复它
+                try:
+                    subprocess.run(
+                        f'"{git_path}git" checkout -- package-lock.json',
+                        shell=True,
+                        cwd=st_dir,
+                        capture_output=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                    return True, "工作区干净（已自动恢复package-lock.json）"
+                except:
+                    pass
+
+            # 如果还有其他文件被修改，返回错误
+            modified_count = len(non_package_lock_changes)
+            if modified_count > 0:
+                return False, f"检测到{modified_count}个文件有未提交的更改"
+            else:
+                return True, "工作区干净"
 
     except Exception as e:
         return False, f"检查Git状态时出错: {str(e)}"
