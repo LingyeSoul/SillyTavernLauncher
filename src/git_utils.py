@@ -4,7 +4,7 @@ from env import Env
 
 def checkout_st_version(commit_hash, st_dir=None):
     """
-    切换SillyTavern到指定commit
+    切换SillyTavern到指定commit（保持在release分支上，避免detached HEAD）
 
     Args:
         commit_hash (str): 目标commit的完整hash或前7位
@@ -29,11 +29,9 @@ def checkout_st_version(commit_hash, st_dir=None):
         env = Env()
         git_path = env.get_git_path()
 
-        # 首先尝试正常checkout
-        command = f'"{git_path}git" checkout {commit_hash}'
-
-        result = subprocess.run(
-            command,
+        # 步骤1：检查当前分支状态
+        check_branch = subprocess.run(
+            f'"{git_path}git" rev-parse --abbrev-ref HEAD',
             shell=True,
             capture_output=True,
             text=True,
@@ -41,20 +39,15 @@ def checkout_st_version(commit_hash, st_dir=None):
             creationflags=subprocess.CREATE_NO_WINDOW
         )
 
-        if result.returncode == 0:
-            return True, f"成功切换到commit {commit_hash[:7]}"
+        current_branch = check_branch.stdout.strip() if check_branch.returncode == 0 else ""
 
-        error_msg = result.stderr.strip() if result.stderr else "未知错误"
+        # 步骤2：如果是detached HEAD状态，先切换回release分支
+        if current_branch == "HEAD":
+            print("检测到detached HEAD状态，切换回release分支...")
 
-        # 如果是本地更改冲突，尝试使用 --merge 参数
-        if "would be overwritten by checkout" in error_msg or "local changes" in error_msg.lower():
-            print(f"检测到本地更改冲突，尝试使用--merge参数: {error_msg}")
-
-            # 尝试使用 --merge 参数（保留本地更改）
-            command_merge = f'"{git_path}git" checkout --merge {commit_hash}'
-
-            result_merge = subprocess.run(
-                command_merge,
+            # 尝试切换到release分支
+            checkout_release = subprocess.run(
+                f'"{git_path}git" checkout release',
                 shell=True,
                 capture_output=True,
                 text=True,
@@ -62,13 +55,59 @@ def checkout_st_version(commit_hash, st_dir=None):
                 creationflags=subprocess.CREATE_NO_WINDOW
             )
 
-            if result_merge.returncode == 0:
-                return True, f"成功切换到commit {commit_hash[:7]}（保留了本地更改）"
-            else:
-                # 如果 --merge 也失败，尝试使用 stash
-                print("--merge参数失败，尝试使用stash保存本地更改")
+            if checkout_release.returncode != 0:
+                # 如果本地没有release分支，从远程创建
+                print("本地没有release分支，从远程创建...")
+                checkout_release = subprocess.run(
+                    f'"{git_path}git" checkout -b release origin/release',
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=st_dir,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
 
-                # 先保存本地更改
+                if checkout_release.returncode != 0:
+                    return False, f"无法切换到release分支: {checkout_release.stderr.strip() if checkout_release.stderr else '未知错误'}"
+
+        # 步骤3：确保在release分支上（如果当前在其他分支，切换到release）
+        if current_branch != "release":
+            print(f"当前在 {current_branch} 分支，切换到release分支...")
+
+            checkout_release = subprocess.run(
+                f'"{git_path}git" checkout release',
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=st_dir,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+
+            if checkout_release.returncode != 0:
+                return False, f"切换到release分支失败: {checkout_release.stderr.strip() if checkout_release.stderr else '未知错误'}"
+
+        # 步骤4：检查工作区状态
+        status_result = subprocess.run(
+            f'"{git_path}git" status --porcelain',
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=st_dir,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+
+        # 步骤5：如果有未提交的更改，先保存
+        if status_result.stdout.strip():
+            print("检测到未提交的更改，使用stash保存...")
+
+            # 过滤掉package-lock.json的更改
+            modified_lines = status_result.stdout.strip().split('\n')
+            non_package_lock_changes = [
+                line for line in modified_lines
+                if line.strip() and 'package-lock.json' not in line
+            ]
+
+            if non_package_lock_changes:
                 stash_cmd = f'"{git_path}git" stash push -m "版本切换前保存{commit_hash[:7]}"'
                 stash_result = subprocess.run(
                     stash_cmd,
@@ -81,12 +120,11 @@ def checkout_st_version(commit_hash, st_dir=None):
 
                 if stash_result.returncode != 0:
                     return False, f"保存本地更改失败: {stash_result.stderr.strip() if stash_result.stderr else '未知错误'}"
-
-                print("本地更改已暂存，执行版本切换...")
-
-                # 再次尝试checkout
-                result_final = subprocess.run(
-                    command,
+                print("本地更改已暂存")
+            else:
+                # 只有package-lock.json被修改，恢复它
+                subprocess.run(
+                    f'"{git_path}git" checkout -- package-lock.json',
                     shell=True,
                     capture_output=True,
                     text=True,
@@ -94,16 +132,47 @@ def checkout_st_version(commit_hash, st_dir=None):
                     creationflags=subprocess.CREATE_NO_WINDOW
                 )
 
-                if result_final.returncode == 0:
-                    return True, f"成功切换到commit {commit_hash[:7]}（本地更改已暂存，可用git stash恢复）"
+        # 步骤6：使用git reset --hard切换到指定commit（保持在release分支上）
+        print(f"在release分支上切换到commit {commit_hash[:7]}...")
+        reset_cmd = f'"{git_path}git" reset --hard {commit_hash}'
+
+        reset_result = subprocess.run(
+            reset_cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=st_dir,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        )
+
+        if reset_result.returncode == 0:
+            # 验证当前状态
+            verify_branch = subprocess.run(
+                f'"{git_path}git" rev-parse --abbrev-ref HEAD',
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=st_dir,
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+
+            if verify_branch.returncode == 0:
+                branch_name = verify_branch.stdout.strip()
+                if branch_name == "release":
+                    return True, f"成功切换到版本 {commit_hash[:7]}（在release分支上）"
                 else:
-                    final_error = result_final.stderr.strip() if result_final.stderr else "未知错误"
-                    return False, f"切换失败: {final_error}"
+                    # 理论上不应该发生，但万一发生了
+                    return False, f"切换后未在release分支上，当前在: {branch_name}"
+            else:
+                return True, f"成功切换到版本 {commit_hash[:7]}"
         else:
+            error_msg = reset_result.stderr.strip() if reset_result.stderr else "未知错误"
             return False, f"切换失败: {error_msg}"
 
     except Exception as e:
         print(f"切换过程中发生异常: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return False, f"切换过程中发生错误: {str(e)}"
 
 
