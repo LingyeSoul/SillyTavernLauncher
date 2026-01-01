@@ -42,7 +42,7 @@ class ConfigManager:
                     "mirror": "gh-proxy.org"
                 },
                 "log": False,
-                "checkupdate": True,
+                "checkupdate": False,
                 "stcheckupdate": False,
                 "tray": False,
                 "autostart": False,
