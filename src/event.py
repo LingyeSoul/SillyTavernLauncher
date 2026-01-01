@@ -1320,32 +1320,50 @@ class UiEvent:
             
             # 读取输出的异步方法
             async def read_output_async(stream, is_stderr=False):
-                # 快速响应配置
+                # 自适应批量配置
                 buffer_size = 4096 if not is_stderr else 2048
                 buffer = b""
                 delimiter = b'\n'
                 last_activity_time = asyncio.get_event_loop().time()
-                flush_interval = 0.05  # ⚡ 降低到50ms，快速响应
+                flush_interval = 0.1  # 100ms刷新间隔
 
-                # 小批量快速显示
+                # 自适应批量大小：根据输出速率动态调整
                 log_batch = []
-                batch_size = 1  # ⚡ 立即显示，不等待
+                batch_size = 5  # 默认5条一批
 
                 last_batch_flush = last_activity_time
+                last_rate_check = last_activity_time
+                lines_in_last_second = 0
 
                 while True:
                     try:
-                        # 快速读取，短超时
                         try:
-                            chunk = await asyncio.wait_for(stream.read(buffer_size), timeout=0.05)  # ⚡ 50ms超时
+                            chunk = await asyncio.wait_for(stream.read(buffer_size), timeout=0.08)
                         except asyncio.TimeoutError:
                             chunk = None
 
                         current_time = asyncio.get_event_loop().time()
+                        lines_in_last_second += 1  # 简化的计数
 
                         if chunk:
                             buffer += chunk
                             last_activity_time = current_time
+
+                        # 每秒计算一次输出速率，自适应调整
+                        if current_time - last_rate_check >= 1.0:
+                            lines_per_second = lines_in_last_second
+
+                            # ⚡ 自适应批量大小
+                            if lines_per_second > 100:
+                                batch_size = 10  # 高输出：批量10条
+                            elif lines_per_second > 50:
+                                batch_size = 5  # 中输出：批量5条
+                            else:
+                                batch_size = 2  # 低输出：批量2条
+
+                            # 重置计数
+                            lines_in_last_second = 0
+                            last_rate_check = current_time
 
                         # 处理完整行
                         while delimiter in buffer:
@@ -1354,7 +1372,6 @@ class UiEvent:
                             if clean_line:
                                 log_batch.append(clean_line)
 
-                                # 立即发送到终端（批量大小为1）
                                 if len(log_batch) >= batch_size:
                                     for log_line in log_batch:
                                         self.terminal.add_log(log_line)
@@ -1370,7 +1387,7 @@ class UiEvent:
                             buffer = b""
                             last_activity_time = current_time
 
-                        # 定期刷新log_batch（防止数据积压）
+                        # 定期刷新log_batch
                         time_since_batch_flush = current_time - last_batch_flush
                         if log_batch and time_since_batch_flush > flush_interval:
                             for log_line in log_batch:

@@ -369,18 +369,26 @@ class AsyncTerminal:
         return True
 
     def _process_batch(self):
-        """处理批量日志条目（快速响应版本）"""
+        """处理批量日志条目（自适应批量 + 激进日志限制）"""
         # 阻止并发处理
         if self._processing:
             return
 
         self._processing = True
         try:
-            # 收集队列中的日志条目
-            log_entries = []
-            # ⚡ 降低批量大小，提高响应性
-            batch_limit = min(20, self._log_queue.qsize())  # 从50降低到20
+            queue_size = self._log_queue.qsize()
 
+            # ⚡ 自适应批量大小：根据队列深度动态调整
+            if queue_size > 100:
+                batch_limit = 50  # 高负载：大批量处理
+            elif queue_size > 50:
+                batch_limit = 30  # 中负载：中批量处理
+            else:
+                batch_limit = 15  # 低负载：小批量处理
+
+            batch_limit = min(batch_limit, queue_size)
+
+            log_entries = []
             processed_count = 0
             while processed_count < batch_limit:
                 try:
@@ -393,7 +401,7 @@ class AsyncTerminal:
             if not log_entries:
                 return
 
-            # 创建日志控件 - 批量创建以提高性能
+            # 创建日志控件
             new_controls = []
             for processed_text in log_entries:
                 if ANSI_ESCAPE_REGEX.search(processed_text):
@@ -406,15 +414,24 @@ class AsyncTerminal:
             # 批量更新日志控件
             self.logs.controls.extend(new_controls)
 
-            # 主动限制日志数量
-            if len(self.logs.controls) > self._max_log_entries:
-                self.logs.controls = self.logs.controls[-self._max_log_entries//2:]
+            # ⚡ 激进限制日志数量：根据当前控件数动态调整
+            current_count = len(self.logs.controls)
+            if current_count > 500:
+                # 保留最新300条
+                self.logs.controls = self.logs.controls[-300:]
+            elif current_count > 300:
+                # 保留最新200条
+                self.logs.controls = self.logs.controls[-200:]
 
             # 更新处理时间
             self._last_process_time = time.time()
 
-            # ⚡ 立即更新UI，不等待
-            if len(new_controls) > 0:
+            # ⚡ 自适应UI更新：根据队列深度决定更新方式
+            if queue_size > 100:
+                # 高负载：使用慢速更新（减少UI压力）
+                self._schedule_ui_update()
+            else:
+                # 低负载：使用快速更新（保持响应性）
                 self._schedule_ui_update_fast()
 
         except Exception as e:
@@ -544,21 +561,30 @@ class AsyncTerminal:
             print(f"错误详情: {traceback.format_exc()}")
 
     def _trigger_log_processing(self):
-        """主动触发日志处理（确保日志及时显示）"""
+        """主动触发日志处理（自适应触发）"""
         # 如果正在处理中，不需要重复触发
         if self._processing:
             return
 
-        # 根据队列大小和距离上次处理的时间决定是否立即处理
         queue_size = self._log_queue.qsize()
         current_time = time.time()
         time_since_last_process = current_time - self._last_process_time
 
-        # ⚡ 快速触发：降低阈值，提高响应性
-        # 如果队列中有日志且满足以下条件之一，则立即处理：
-        # 1. 队列中有日志（>=1条，立即处理）
-        # 2. 距离上次处理已经超过50ms（从200ms降低到50ms）
-        if queue_size > 0 and (queue_size >= 1 or time_since_last_process >= 0.05):
+        # ⚡ 自适应触发阈值：根据队列深度动态调整
+        if queue_size > 100:
+            # 高负载：等待积累更多或超时
+            threshold = 50
+            timeout = 0.15  # 150ms
+        elif queue_size > 50:
+            # 中负载：中等阈值
+            threshold = 20
+            timeout = 0.1  # 100ms
+        else:
+            # 低负载：快速响应
+            threshold = 5
+            timeout = 0.05  # 50ms
+
+        if queue_size > 0 and (queue_size >= threshold or time_since_last_process >= timeout):
             if not self._processing:
                 self._process_batch()
 
