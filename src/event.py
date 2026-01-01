@@ -169,73 +169,81 @@ class UiEvent:
 
     def install_sillytavern(self, e):
         """安装SillyTavern"""
-        # 验证路径是否适合NPM运行
-        if not self.validate_path_for_npm():
-            return
-        git_path = self.env.get_git_path()
-        if self.env.checkST():
-            self.terminal.add_log("SillyTavern已安装")
-            if self.env.get_node_path():
-                if self.env.check_nodemodules():
-                    self.terminal.add_log("依赖项已安装")
+        try:
+            # 验证路径是否适合NPM运行
+            if not self.validate_path_for_npm():
+                return
+
+            git_path = self.env.get_git_path()
+            if self.env.checkST():
+                self.terminal.add_log("SillyTavern已安装")
+                if self.env.get_node_path():
+                    if self.env.check_nodemodules():
+                        self.terminal.add_log("依赖项已安装")
+                    else:
+                        self.terminal.add_log("正在安装依赖...")
+                        # 使用run_async_task处理异步任务
+                        async def install_deps():
+                            process = await self.execute_command(
+                                f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
+                                "SillyTavern"
+                            )
+                            if process:
+                                await process.wait()
+                                self.terminal.add_log("依赖安装完成")
+
+                        self.run_async_task(install_deps())
                 else:
-                    self.terminal.add_log("正在安装依赖...")
+                    self.terminal.add_log("未找到nodejs")
+            else:
+                if git_path:
+                    # 从配置获取镜像设置
+                    mirror_type = self.config_manager.get("github.mirror", "github")
+
+                    # 根据镜像设置选择仓库地址
+                    if mirror_type == "github":
+                        repo_url = "https://github.com/SillyTavern/SillyTavern.git"
+                    else:
+                        # 使用Gitee镜像
+                        repo_url = "https://gitee.com/lingyesoul/SillyTavern.git"
+
+                    self.terminal.add_log(f"正在从 {repo_url} 安装SillyTavern...")
                     # 使用run_async_task处理异步任务
-                    async def install_deps():
+                    async def install_st():
                         process = await self.execute_command(
-                            f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
-                            "SillyTavern"
+                            f'\"{git_path}git\" clone {repo_url} -b release',
+                            "."
                         )
                         if process:
                             await process.wait()
-                            self.terminal.add_log("依赖安装完成")
-                    
-                    self.run_async_task(install_deps())
-            else:
-                self.terminal.add_log("未找到nodejs")
-        else:
-            if git_path:
-                # 从配置获取镜像设置
-                mirror_type = self.config_manager.get("github.mirror", "github")
-                
-                # 根据镜像设置选择仓库地址
-                if mirror_type == "github":
-                    repo_url = "https://github.com/SillyTavern/SillyTavern.git"
-                else:
-                    # 使用Gitee镜像
-                    repo_url = "https://gitee.com/lingyesoul/SillyTavern.git"
-                
-                self.terminal.add_log(f"正在从 {repo_url} 安装SillyTavern...")
-                # 使用run_async_task处理异步任务
-                async def install_st():
-                    process = await self.execute_command(
-                        f'\"{git_path}git\" clone {repo_url} -b release', 
-                        "."
-                    )
-                    if process:
-                        await process.wait()
-                        self.terminal.add_log("SillyTavern安装完成")
-                        
-                        # 检查Node.js环境并自动安装依赖
-                        if self.env.get_node_path():
-                            if self.env.check_nodemodules():
-                                self.terminal.add_log("依赖项已安装")
+                            self.terminal.add_log("SillyTavern安装完成")
+
+                            # 检查Node.js环境并自动安装依赖
+                            if self.env.get_node_path():
+                                if self.env.check_nodemodules():
+                                    self.terminal.add_log("依赖项已安装")
+                                else:
+                                    self.terminal.add_log("正在安装依赖...")
+                                    # 安装npm依赖
+                                    dep_process = await self.execute_command(
+                                        f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
+                                        "SillyTavern"
+                                    )
+                                    if dep_process:
+                                        await dep_process.wait()
+                                        self.terminal.add_log("依赖安装完成")
                             else:
-                                self.terminal.add_log("正在安装依赖...")
-                                # 安装npm依赖
-                                dep_process = await self.execute_command(
-                                    f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
-                                    "SillyTavern"
-                                )
-                                if dep_process:
-                                    await dep_process.wait()
-                                    self.terminal.add_log("依赖安装完成")
-                        else:
-                            self.terminal.add_log("未找到nodejs")
-                
-                self.run_async_task(install_st())
-            else:
-                self.terminal.add_log("Error: Git路径未正确配置")
+                                self.terminal.add_log("未找到nodejs")
+
+                    self.run_async_task(install_st())
+                else:
+                    self.terminal.add_log("Error: Git路径未正确配置")
+        except Exception as ex:
+            error_msg = f"安装SillyTavern时出错: {str(ex)}"
+            self.terminal.add_log(error_msg)
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
 
     def validate_path_for_npm(self, path=None, show_success=True):
         """
@@ -336,87 +344,106 @@ class UiEvent:
         return True
 
     def start_sillytavern(self, e):
-        # 验证路径是否适合NPM运行
-        if not self.validate_path_for_npm():
-            return
-            
-        # 检查是否开启了自动代理设置
-        auto_proxy = self.config_manager.get("auto_proxy", False)
-        if auto_proxy:
-            try:
-                # 获取系统代理设置
-                proxies = urllib.request.getproxies()
-                self.terminal.add_log(f"检测到的系统代理: {proxies}")
-                
-                # 查找HTTP或SOCKS代理
-                proxy_url = ""
-                if 'http' in proxies:
-                    proxy_url = proxies['http']
-                elif 'https' in proxies:
-                    proxy_url = proxies['https']
-                elif 'socks' in proxies:
-                    proxy_url = proxies['socks']
-                elif 'socks5' in proxies:
-                    proxy_url = proxies['socks5']
-                
-                # 如果没有可用的系统代理，则关闭请求代理
-                if not proxy_url:
-                    self.stCfg.proxy_enabled = False
-                    self.stCfg.save_config()
-                    self.terminal.add_log("未检测到有效的系统代理，已自动关闭请求代理")
-                else:
-                    # 启用代理
-                    self.stCfg.proxy_enabled = True
-                    # 设置代理URL
-                    self.stCfg.proxy_url = proxy_url
-                    # 保存配置
-                    self.stCfg.save_config()
-                    self.terminal.add_log(f"自动设置代理: {proxy_url}")
-            except Exception as ex:
-                self.terminal.add_log(f"自动检测代理时出错: {str(ex)}")
-            
-        if self.terminal.is_running:
-            self.terminal.add_log("SillyTavern已经在运行中")
-            return
-            
-        if self.env.checkST():
-            if self.env.check_nodemodules():
-                self.terminal.is_running = True
-                async def on_process_exit():
-                    self.terminal.is_running = False
-                    self.terminal.add_log("SillyTavern进程已退出")
-                
-                # 启动进程并设置退出回调
-                custom_args = self.config_manager.get("custom_args", "")
-                base_command = f"\"{self.env.get_node_path()}node\" server.js"
-                if custom_args:
-                    command = f"{base_command} {custom_args}"
-                else:
-                    command = base_command
-                    
-                # 使用异步方式执行命令
-                async def start_st():
-                    process = await self.execute_command(command, "SillyTavern")
-                    if process:
-                        # 等待进程完成
-                        await process.wait()
-                        # 在主线程中执行回调
-                        try:
-                            self.page.run_task(on_process_exit)
-                        except AttributeError:
-                            # Fallback for older versions of flet
-                            on_process_exit()
-                
-                self.run_async_task(start_st())
-            else:
-                self.terminal.add_log("依赖未安装，请先安装依赖")
-        else:
-            self.terminal.add_log("SillyTavern未安装，请先安装SillyTavern")
+        """启动SillyTavern"""
+        try:
+            # 立即输出提示信息
+            self.terminal.add_log("正在启动SillyTavern...")
 
-    def stop_sillytavern(self,e):
-        self.terminal.add_log("正在停止SillyTavern进程...")
-        self.terminal.stop_processes()
-        self.terminal.add_log("所有进程已停止")
+            # 验证路径是否适合NPM运行
+            if not self.validate_path_for_npm():
+                return
+
+            # 检查是否开启了自动代理设置
+            auto_proxy = self.config_manager.get("auto_proxy", False)
+            if auto_proxy:
+                try:
+                    # 获取系统代理设置
+                    proxies = urllib.request.getproxies()
+                    self.terminal.add_log(f"检测到的系统代理: {proxies}")
+
+                    # 查找HTTP或SOCKS代理
+                    proxy_url = ""
+                    if 'http' in proxies:
+                        proxy_url = proxies['http']
+                    elif 'https' in proxies:
+                        proxy_url = proxies['https']
+                    elif 'socks' in proxies:
+                        proxy_url = proxies['socks']
+                    elif 'socks5' in proxies:
+                        proxy_url = proxies['socks5']
+
+                    # 如果没有可用的系统代理，则关闭请求代理
+                    if not proxy_url:
+                        self.stCfg.proxy_enabled = False
+                        self.stCfg.save_config()
+                        self.terminal.add_log("未检测到有效的系统代理，已自动关闭请求代理")
+                    else:
+                        # 启用代理
+                        self.stCfg.proxy_enabled = True
+                        # 设置代理URL
+                        self.stCfg.proxy_url = proxy_url
+                        # 保存配置
+                        self.stCfg.save_config()
+                        self.terminal.add_log(f"自动设置代理: {proxy_url}")
+                except Exception as ex:
+                    self.terminal.add_log(f"自动检测代理时出错: {str(ex)}")
+
+            if self.terminal.is_running:
+                self.terminal.add_log("SillyTavern已经在运行中")
+                return
+
+            if self.env.checkST():
+                if self.env.check_nodemodules():
+                    self.terminal.is_running = True
+                    async def on_process_exit():
+                        self.terminal.is_running = False
+                        self.terminal.add_log("SillyTavern进程已退出")
+
+                    # 启动进程并设置退出回调
+                    custom_args = self.config_manager.get("custom_args", "")
+                    base_command = f"\"{self.env.get_node_path()}node\" server.js"
+                    if custom_args:
+                        command = f"{base_command} {custom_args}"
+                    else:
+                        command = base_command
+
+                    # 使用异步方式执行命令
+                    async def start_st():
+                        process = await self.execute_command(command, "SillyTavern")
+                        if process:
+                            # 等待进程完成
+                            await process.wait()
+                            # 在主线程中执行回调
+                            try:
+                                self.page.run_task(on_process_exit)
+                            except AttributeError:
+                                # Fallback for older versions of flet
+                                on_process_exit()
+
+                    self.run_async_task(start_st())
+                else:
+                    self.terminal.add_log("依赖未安装，请先安装依赖")
+            else:
+                self.terminal.add_log("SillyTavern未安装，请先安装SillyTavern")
+        except Exception as ex:
+            error_msg = f"启动SillyTavern时出错: {str(ex)}"
+            self.terminal.add_log(error_msg)
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
+
+    def stop_sillytavern(self, e):
+        """停止SillyTavern"""
+        try:
+            self.terminal.add_log("正在停止SillyTavern进程...")
+            self.terminal.stop_processes()
+            self.terminal.add_log("所有进程已停止")
+        except Exception as ex:
+            error_msg = f"停止进程时出错: {str(ex)}"
+            self.terminal.add_log(error_msg)
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
 
     def restart_sillytavern(self, e):
         """重启SillyTavern服务"""
@@ -484,226 +511,129 @@ class UiEvent:
 
     
     def update_sillytavern(self, e):
-        # 验证路径是否适合NPM运行
-        if not self.validate_path_for_npm():
-            return
+        """更新SillyTavern"""
+        try:
+            # 验证路径是否适合NPM运行
+            if not self.validate_path_for_npm():
+                return
 
-        git_path = self.env.get_git_path()
-        if self.env.checkST():
-            self.terminal.add_log("正在更新SillyTavern...")
-            if git_path:
-                # 检查当前远程仓库地址是否正确
-                mirror_type = self.config_manager.get("github.mirror", "github")
-                
-                # 确保远程仓库地址正确
-                if mirror_type == "github":
-                    expected_remote = "https://github.com/SillyTavern/SillyTavern.git"
-                else:
-                    expected_remote = "https://gitee.com/lingyesoul/SillyTavern.git"
-                
-                try:
-                    # 获取当前远程仓库地址
-                    current_remote_process = subprocess.run(
-                        f'\"{git_path}git\" remote get-url origin',
-                        shell=True,
-                        capture_output=True,
-                        text=True,
-                        cwd=self.env.st_dir,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-                    
-                    if current_remote_process.returncode == 0:
-                        current_remote = current_remote_process.stdout.strip()
-                        if current_remote != expected_remote:
-                            # 更新远程仓库地址
-                            self.terminal.add_log(f"更新远程仓库地址: {expected_remote}")
-                            subprocess.run(
-                                f'\"{git_path}git\" remote set-url origin {expected_remote}',
-                                shell=True,
-                                cwd=self.env.st_dir,
-                                creationflags=subprocess.CREATE_NO_WINDOW
-                            )
-                except Exception as ex:
-                    self.terminal.add_log(f"检查/更新远程仓库地址时出错: {str(ex)}")
-                
-                # 执行git pull
-                def on_git_complete(process):
-                    if process.returncode == 0:
-                        self.terminal.add_log("Git更新成功")
-                        if self.env.get_node_path():
-                            self.terminal.add_log("正在安装依赖...")
-                            def on_npm_complete(process):
-                                if process.returncode == 0:
-                                    self.terminal.add_log("依赖安装成功")
-                                else:
-                                    self.terminal.add_log("依赖安装失败")
-                            
-                            # 使用异步方式执行npm install
-                            async def install_deps():
-                                process = await self.execute_command(
-                                    f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
-                                    "SillyTavern"
+            git_path = self.env.get_git_path()
+            if self.env.checkST():
+                self.terminal.add_log("正在更新SillyTavern...")
+                if git_path:
+                    # 检查并恢复detached HEAD状态
+                    self.terminal.add_log("检查Git状态...")
+                    try:
+                        # 检查是否处于detached HEAD状态
+                        branch_check = subprocess.run(
+                            f'\"{git_path}git\" rev-parse --abbrev-ref HEAD',
+                            shell=True,
+                            capture_output=True,
+                            text=True,
+                            cwd=self.env.st_dir,
+                            creationflags=subprocess.CREATE_NO_WINDOW
+                        )
+
+                        if branch_check.returncode == 0:
+                            current_branch = branch_check.stdout.strip()
+                            # 如果输出是"HEAD"，说明处于detached状态
+                            if current_branch == 'HEAD':
+                                self.terminal.add_log("检测到detached HEAD状态，正在切换到release分支...")
+
+                                # 先尝试本地checkout，如果失败则从远程创建
+                                checkout_result = subprocess.run(
+                                    f'\"{git_path}git\" checkout -B release origin/release',
+                                    shell=True,
+                                    capture_output=True,
+                                    text=True,
+                                    cwd=self.env.st_dir,
+                                    creationflags=subprocess.CREATE_NO_WINDOW
                                 )
-                                if process:
-                                    await process.wait()
-                                    on_npm_complete(process)
-                            
-                            self.run_async_task(install_deps())
-                        else:
-                            self.terminal.add_log("未找到nodejs")
+
+                                if checkout_result.returncode == 0:
+                                    self.terminal.add_log("成功切换到release分支")
+                                else:
+                                    # 尝试更简单的恢复方式
+                                    self.terminal.add_log("尝试另一种恢复方式...")
+                                    checkout_result2 = subprocess.run(
+                                        f'\"{git_path}git\" checkout release',
+                                        shell=True,
+                                        capture_output=True,
+                                        text=True,
+                                        cwd=self.env.st_dir,
+                                        creationflags=subprocess.CREATE_NO_WINDOW
+                                    )
+
+                                    if checkout_result2.returncode == 0:
+                                        self.terminal.add_log("成功切换到release分支")
+                                    else:
+                                        self.terminal.add_log("切换到release分支失败，请手动处理")
+                                        return
+                    except Exception as ex:
+                        self.terminal.add_log(f"检查detached HEAD状态时出错: {str(ex)}")
+
+                    # 检查当前远程仓库地址是否正确
+                    mirror_type = self.config_manager.get("github.mirror", "github")
+
+                    # 确保远程仓库地址正确
+                    if mirror_type == "github":
+                        expected_remote = "https://github.com/SillyTavern/SillyTavern.git"
                     else:
-                        # 检查是否是由于package-lock.json冲突导致的更新失败
-                        self.terminal.add_log("Git更新失败，检查是否为package-lock.json冲突...")
-                        try:
-                            # 尝试解决package-lock.json冲突
-                            reset_process = subprocess.run(
-                                f'\"{git_path}git\" checkout -- package-lock.json',
-                                shell=True,
-                                cwd=self.env.st_dir,
-                                creationflags=subprocess.CREATE_NO_WINDOW,
-                                capture_output=True,
-                                text=True
-                            )
-                            
-                            if reset_process.returncode == 0:
-                                self.terminal.add_log("已重置package-lock.json，重新尝试更新...")
-                                # 重新执行git pull
-                                async def retry_update():
-                                    retry_process = await self.execute_command(
-                                        f'\"{git_path}git\" pull --rebase --autostash', 
+                        expected_remote = "https://gitee.com/lingyesoul/SillyTavern.git"
+
+                    try:
+                        # 获取当前远程仓库地址
+                        current_remote_process = subprocess.run(
+                            f'\"{git_path}git\" remote get-url origin',
+                            shell=True,
+                            capture_output=True,
+                            text=True,
+                            cwd=self.env.st_dir,
+                            creationflags=subprocess.CREATE_NO_WINDOW
+                        )
+
+                        if current_remote_process.returncode == 0:
+                            current_remote = current_remote_process.stdout.strip()
+                            if current_remote != expected_remote:
+                                # 更新远程仓库地址
+                                self.terminal.add_log(f"更新远程仓库地址: {expected_remote}")
+                                subprocess.run(
+                                    f'\"{git_path}git\" remote set-url origin {expected_remote}',
+                                    shell=True,
+                                    cwd=self.env.st_dir,
+                                    creationflags=subprocess.CREATE_NO_WINDOW
+                                )
+                    except Exception as ex:
+                        self.terminal.add_log(f"检查/更新远程仓库地址时出错: {str(ex)}")
+
+                    # 执行git pull
+                    def on_git_complete(process):
+                        if process.returncode == 0:
+                            self.terminal.add_log("Git更新成功")
+                            if self.env.get_node_path():
+                                self.terminal.add_log("正在安装依赖...")
+                                def on_npm_complete(process):
+                                    if process.returncode == 0:
+                                        self.terminal.add_log("依赖安装成功")
+                                    else:
+                                        self.terminal.add_log("依赖安装失败")
+
+                                # 使用异步方式执行npm install
+                                async def install_deps():
+                                    process = await self.execute_command(
+                                        f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
                                         "SillyTavern"
                                     )
-                                    if retry_process:
-                                        await retry_process.wait()
-                                        # 避免递归调用，直接处理结果
-                                        if retry_process.returncode == 0:
-                                            self.terminal.add_log("Git更新成功")
-                                            if self.env.get_node_path():
-                                                self.terminal.add_log("正在安装依赖...")
-                                                def on_npm_complete(process):
-                                                    if process.returncode == 0:
-                                                        self.terminal.add_log("依赖安装成功")
-                                                    else:
-                                                        self.terminal.add_log("依赖安装失败")
-                                                
-                                                async def install_deps():
-                                                    process = await self.execute_command(
-                                                        f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
-                                                        "SillyTavern"
-                                                    )
-                                                    if process:
-                                                        await process.wait()
-                                                        on_npm_complete(process)
-                                                
-                                                self.run_async_task(install_deps())
-                                            else:
-                                                self.terminal.add_log("未找到nodejs")
-                                        else:
-                                            self.terminal.add_log("重试更新失败")
-                                
-                                self.run_async_task(retry_update())
+                                    if process:
+                                        await process.wait()
+                                        on_npm_complete(process)
+
+                                self.run_async_task(install_deps())
                             else:
-                                self.terminal.add_log("无法解决package-lock.json冲突，需要手动处理")
-                        except Exception as ex:
-                            self.terminal.add_log(f"处理package-lock.json冲突时出错: {str(ex)}")
-                
-                # 使用异步方式执行git pull
-                async def git_pull():
-                    process = await self.execute_command(
-                        f'\"{git_path}git\" pull --rebase --autostash', 
-                        "SillyTavern"
-                    )
-                    if process:
-                        await process.wait()
-                        on_git_complete(process)
-                
-                self.run_async_task(git_pull())
-            else:
-                self.terminal.add_log("未找到Git路径，请手动更新SillyTavern")
-
-    def update_sillytavern_with_callback(self, e):
-        """
-        更新SillyTavern并在完成后自动启动
-        """
-        # 验证路径是否适合NPM运行
-        if not self.validate_path_for_npm():
-            return
-
-        git_path = self.env.get_git_path()
-        if self.env.checkST():
-            self.terminal.add_log("正在更新SillyTavern...")
-            if git_path:
-                # 执行git pull
-                def on_git_complete(process, retry_count=0):
-                    if process.returncode == 0:
-                        self.terminal.add_log("Git更新成功")
-                        if self.env.get_node_path():
-                            self.terminal.add_log("正在安装依赖...")
-                            def on_npm_complete(process, npm_retry_count=0):
-                                if process.returncode == 0:
-                                    self.terminal.add_log("依赖安装成功，正在启动SillyTavern...")
-                                    self.start_sillytavern(None)
-                                else:
-                                    if npm_retry_count < 2:
-                                        self.terminal.add_log(f"依赖安装失败，正在重试... (尝试次数: {npm_retry_count + 1}/2)")
-                                        # 清理npm缓存
-                                        async def clean_cache():
-                                            cache_process = await self.execute_command(
-                                                f"\"{self.env.get_node_path()}npm\" cache clean --force",
-                                                "SillyTavern"
-                                            )
-                                            if cache_process:
-                                                await cache_process.wait()
-                                                # 删除node_modules
-                                                node_modules_path = os.path.join(self.env.st_dir, "node_modules")
-                                                if os.path.exists(node_modules_path):
-                                                    try:
-                                                        import shutil
-                                                        shutil.rmtree(node_modules_path)
-                                                    except Exception as ex:
-                                                        self.terminal.add_log(f"删除node_modules失败: {str(ex)}")
-                                                # 重新安装依赖
-                                                async def retry_install():
-                                                    retry_process = await self.execute_command(
-                                                        f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
-                                                        "SillyTavern"
-                                                    )
-                                                    if retry_process:
-                                                        await retry_process.wait()
-                                                        # 在主线程中调用回调
-                                                        try:
-                                                            self.page.run_task(lambda: on_npm_complete(retry_process, npm_retry_count + 1))
-                                                        except AttributeError:
-                                                            on_npm_complete(retry_process, npm_retry_count + 1)
-                                                
-                                                self.run_async_task(retry_install())
-                                        
-                                        self.run_async_task(clean_cache())
-                                    else:
-                                        self.terminal.add_log("依赖安装失败，正在启动SillyTavern...")
-                                        self.start_sillytavern(None)
-                            
-                            async def install_deps():
-                                process = await self.execute_command(
-                                    f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com", 
-                                    "SillyTavern"
-                                )
-                                if process:
-                                    await process.wait()
-                                    # 在主线程中调用回调
-                                    try:
-                                        self.page.run_task(lambda: on_npm_complete(process, 0))
-                                    except AttributeError:
-                                        on_npm_complete(process, 0)
-                            
-                            self.run_async_task(install_deps())
+                                self.terminal.add_log("未找到nodejs")
                         else:
-                            self.terminal.add_log("未找到nodejs，正在启动SillyTavern...")
-                            self.start_sillytavern(None)
-                    else:
-                        # 检查重试次数，避免无限重试
-                        if retry_count < 2:
-                            self.terminal.add_log(f"Git更新失败，检查是否为package-lock.json冲突... (尝试次数: {retry_count + 1}/2)")
+                            # 检查是否是由于package-lock.json冲突导致的更新失败
+                            self.terminal.add_log("Git更新失败，检查是否为package-lock.json冲突...")
                             try:
                                 # 尝试解决package-lock.json冲突
                                 reset_process = subprocess.run(
@@ -714,49 +644,267 @@ class UiEvent:
                                     capture_output=True,
                                     text=True
                                 )
-                                
+
                                 if reset_process.returncode == 0:
                                     self.terminal.add_log("已重置package-lock.json，重新尝试更新...")
                                     # 重新执行git pull
                                     async def retry_update():
                                         retry_process = await self.execute_command(
-                                            f'\"{git_path}git\" pull --rebase --autostash', 
+                                            f'\"{git_path}git\" pull --rebase --autostash',
                                             "SillyTavern"
                                         )
                                         if retry_process:
                                             await retry_process.wait()
                                             # 避免递归调用，直接处理结果
-                                            # 在主线程中调用回调
-                                            try:
-                                                self.page.run_task(lambda: on_git_complete(retry_process, retry_count + 1))
-                                            except AttributeError:
-                                                on_git_complete(retry_process, retry_count + 1)
-                                    
+                                            if retry_process.returncode == 0:
+                                                self.terminal.add_log("Git更新成功")
+                                                if self.env.get_node_path():
+                                                    self.terminal.add_log("正在安装依赖...")
+                                                    def on_npm_complete(process):
+                                                        if process.returncode == 0:
+                                                            self.terminal.add_log("依赖安装成功")
+                                                        else:
+                                                            self.terminal.add_log("依赖安装失败")
+
+                                                    async def install_deps():
+                                                        process = await self.execute_command(
+                                                            f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
+                                                            "SillyTavern"
+                                                        )
+                                                        if process:
+                                                            await process.wait()
+                                                            on_npm_complete(process)
+
+                                                    self.run_async_task(install_deps())
+                                                else:
+                                                    self.terminal.add_log("未找到nodejs")
+                                            else:
+                                                self.terminal.add_log("重试更新失败")
+
                                     self.run_async_task(retry_update())
                                 else:
                                     self.terminal.add_log("无法解决package-lock.json冲突，需要手动处理")
                             except Exception as ex:
                                 self.terminal.add_log(f"处理package-lock.json冲突时出错: {str(ex)}")
-                        else:
-                            self.terminal.add_log("Git更新失败，正在启动SillyTavern...")
-                            self.start_sillytavern(None)
-                
-                async def git_pull():
-                    process = await self.execute_command(
-                        f'\"{git_path}git\" pull --rebase --autostash', 
-                        "SillyTavern"
-                    )
-                    if process:
-                        await process.wait()
-                        # 在主线程中调用回调
-                        try:
-                            self.page.run_task(lambda: on_git_complete(process, 0))
-                        except AttributeError:
-                            on_git_complete(process, 0)
-                
-                self.run_async_task(git_pull())
+
+                    # 使用异步方式执行git pull
+                    async def git_pull():
+                        process = await self.execute_command(
+                            f'\"{git_path}git\" pull --rebase --autostash',
+                            "SillyTavern"
+                        )
+                        if process:
+                            await process.wait()
+                            on_git_complete(process)
+
+                    self.run_async_task(git_pull())
+                else:
+                    self.terminal.add_log("未找到Git路径，请手动更新SillyTavern")
             else:
-                self.terminal.add_log("未找到Git路径，请手动更新SillyTavern")
+                self.terminal.add_log("SillyTavern未安装")
+        except Exception as ex:
+            error_msg = f"更新SillyTavern时出错: {str(ex)}"
+            self.terminal.add_log(error_msg)
+            print(error_msg)
+            import traceback
+            traceback.print_exc()
+
+    def update_sillytavern_with_callback(self, e):
+        """
+        更新SillyTavern并在完成后自动启动
+        """
+        try:
+            # 验证路径是否适合NPM运行
+            if not self.validate_path_for_npm():
+                return
+
+            git_path = self.env.get_git_path()
+            if self.env.checkST():
+                self.terminal.add_log("正在更新SillyTavern...")
+                if git_path:
+                    # 检查并恢复detached HEAD状态
+                    self.terminal.add_log("检查Git状态...")
+                    try:
+                        # 检查是否处于detached HEAD状态
+                        branch_check = subprocess.run(
+                            f'\"{git_path}git\" rev-parse --abbrev-ref HEAD',
+                            shell=True,
+                            capture_output=True,
+                            text=True,
+                            cwd=self.env.st_dir,
+                            creationflags=subprocess.CREATE_NO_WINDOW
+                        )
+
+                        if branch_check.returncode == 0:
+                            current_branch = branch_check.stdout.strip()
+                            # 如果输出是"HEAD"，说明处于detached状态
+                            if current_branch == 'HEAD':
+                                self.terminal.add_log("检测到detached HEAD状态，正在切换到release分支...")
+
+                                # 先尝试本地checkout，如果失败则从远程创建
+                                checkout_result = subprocess.run(
+                                    f'\"{git_path}git\" checkout -B release origin/release',
+                                    shell=True,
+                                    capture_output=True,
+                                    text=True,
+                                    cwd=self.env.st_dir,
+                                    creationflags=subprocess.CREATE_NO_WINDOW
+                                )
+
+                                if checkout_result.returncode == 0:
+                                    self.terminal.add_log("成功切换到release分支")
+                                else:
+                                    # 尝试更简单的恢复方式
+                                    self.terminal.add_log("尝试另一种恢复方式...")
+                                    checkout_result2 = subprocess.run(
+                                        f'\"{git_path}git\" checkout release',
+                                        shell=True,
+                                        capture_output=True,
+                                        text=True,
+                                        cwd=self.env.st_dir,
+                                        creationflags=subprocess.CREATE_NO_WINDOW
+                                    )
+
+                                    if checkout_result2.returncode == 0:
+                                        self.terminal.add_log("成功切换到release分支")
+                                    else:
+                                        self.terminal.add_log("切换到release分支失败，请手动处理")
+                                        return
+                    except Exception as ex:
+                        self.terminal.add_log(f"检查detached HEAD状态时出错: {str(ex)}")
+
+                    # 执行git pull
+                    def on_git_complete(process, retry_count=0):
+                        if process.returncode == 0:
+                            self.terminal.add_log("Git更新成功")
+                            if self.env.get_node_path():
+                                self.terminal.add_log("正在安装依赖...")
+                                def on_npm_complete(process, npm_retry_count=0):
+                                    if process.returncode == 0:
+                                        self.terminal.add_log("依赖安装成功，正在启动SillyTavern...")
+                                        self.start_sillytavern(None)
+                                    else:
+                                        if npm_retry_count < 2:
+                                            self.terminal.add_log(f"依赖安装失败，正在重试... (尝试次数: {npm_retry_count + 1}/2)")
+                                            # 清理npm缓存
+                                            async def clean_cache():
+                                                cache_process = await self.execute_command(
+                                                    f"\"{self.env.get_node_path()}npm\" cache clean --force",
+                                                    "SillyTavern"
+                                                )
+                                                if cache_process:
+                                                    await cache_process.wait()
+                                                    # 删除node_modules
+                                                    node_modules_path = os.path.join(self.env.st_dir, "node_modules")
+                                                    if os.path.exists(node_modules_path):
+                                                        try:
+                                                            import shutil
+                                                            shutil.rmtree(node_modules_path)
+                                                        except Exception as ex:
+                                                            self.terminal.add_log(f"删除node_modules失败: {str(ex)}")
+                                                    # 重新安装依赖
+                                                    async def retry_install():
+                                                        retry_process = await self.execute_command(
+                                                            f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
+                                                            "SillyTavern"
+                                                        )
+                                                        if retry_process:
+                                                            await retry_process.wait()
+                                                            # 在主线程中调用回调
+                                                            try:
+                                                                self.page.run_task(lambda: on_npm_complete(retry_process, npm_retry_count + 1))
+                                                            except AttributeError:
+                                                                on_npm_complete(retry_process, npm_retry_count + 1)
+
+                                                    self.run_async_task(retry_install())
+
+                                            self.run_async_task(clean_cache())
+                                        else:
+                                            self.terminal.add_log("依赖安装失败，正在启动SillyTavern...")
+                                            self.start_sillytavern(None)
+
+                                async def install_deps():
+                                    process = await self.execute_command(
+                                        f"\"{self.env.get_node_path()}npm\" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com",
+                                        "SillyTavern"
+                                    )
+                                    if process:
+                                        await process.wait()
+                                        # 在主线程中调用回调
+                                        try:
+                                            self.page.run_task(lambda: on_npm_complete(process, 0))
+                                        except AttributeError:
+                                            on_npm_complete(process, 0)
+
+                                self.run_async_task(install_deps())
+                            else:
+                                self.terminal.add_log("未找到nodejs，正在启动SillyTavern...")
+                                self.start_sillytavern(None)
+                        else:
+                            # 检查重试次数，避免无限重试
+                            if retry_count < 2:
+                                self.terminal.add_log(f"Git更新失败，检查是否为package-lock.json冲突... (尝试次数: {retry_count + 1}/2)")
+                                try:
+                                    # 尝试解决package-lock.json冲突
+                                    reset_process = subprocess.run(
+                                        f'\"{git_path}git\" checkout -- package-lock.json',
+                                        shell=True,
+                                        cwd=self.env.st_dir,
+                                        creationflags=subprocess.CREATE_NO_WINDOW,
+                                        capture_output=True,
+                                        text=True
+                                    )
+
+                                    if reset_process.returncode == 0:
+                                        self.terminal.add_log("已重置package-lock.json，重新尝试更新...")
+                                        # 重新执行git pull
+                                        async def retry_update():
+                                            retry_process = await self.execute_command(
+                                                f'\"{git_path}git\" pull --rebase --autostash',
+                                                "SillyTavern"
+                                            )
+                                            if retry_process:
+                                                await retry_process.wait()
+                                                # 避免递归调用，直接处理结果
+                                                # 在主线程中调用回调
+                                                try:
+                                                    self.page.run_task(lambda: on_git_complete(retry_process, retry_count + 1))
+                                                except AttributeError:
+                                                    on_git_complete(retry_process, retry_count + 1)
+
+                                        self.run_async_task(retry_update())
+                                    else:
+                                        self.terminal.add_log("无法解决package-lock.json冲突，需要手动处理")
+                                except Exception as ex:
+                                    self.terminal.add_log(f"处理package-lock.json冲突时出错: {str(ex)}")
+                            else:
+                                self.terminal.add_log("Git更新失败，正在启动SillyTavern...")
+                                self.start_sillytavern(None)
+
+                    async def git_pull():
+                        process = await self.execute_command(
+                            f'\"{git_path}git\" pull --rebase --autostash',
+                            "SillyTavern"
+                        )
+                        if process:
+                            await process.wait()
+                            # 在主线程中调用回调
+                            try:
+                                self.page.run_task(lambda: on_git_complete(process, 0))
+                            except AttributeError:
+                                on_git_complete(process, 0)
+
+                    self.run_async_task(git_pull())
+                else:
+                    self.terminal.add_log("未找到Git路径，请手动更新SillyTavern")
+            else:
+                self.terminal.add_log("SillyTavern未安装")
+        except Exception as ex:
+            error_msg = f"更新SillyTavern时出错: {str(ex)}"
+        self.terminal.add_log(error_msg)
+        print(error_msg)
+        import traceback
+        traceback.print_exc()
 
     def port_changed(self,e):
         self.stCfg.port = e.control.value
@@ -1462,6 +1610,8 @@ class UiEvent:
             self.terminal.add_log(error_msg)
             print(error_msg)
             self.show_error_dialog("切换失败", f"切换版本时发生错误: {str(ex)}")
+            import traceback
+            traceback.print_exc()  # 打印完整堆栈跟踪以便调试
 
     def _refresh_version_view(self):
         """刷新版本页面的显示"""
