@@ -1320,62 +1320,88 @@ class UiEvent:
             
             # 读取输出的异步方法
             async def read_output_async(stream, is_stderr=False):
-                # 使用更小的缓冲区以提高实时性，特别是对于stderr
-                buffer_size = 1024 if not is_stderr else 512
+                # 快速响应配置
+                buffer_size = 4096 if not is_stderr else 2048
                 buffer = b""
                 delimiter = b'\n'
-                last_flush_time = asyncio.get_event_loop().time()
-                flush_interval = 0.3  # 每300ms强制刷新一次缓冲区
+                last_activity_time = asyncio.get_event_loop().time()
+                flush_interval = 0.05  # ⚡ 降低到50ms，快速响应
+
+                # 小批量快速显示
+                log_batch = []
+                batch_size = 1  # ⚡ 立即显示，不等待
+
+                last_batch_flush = last_activity_time
 
                 while True:
                     try:
-                        # 尝试读取数据，添加超时以实现定期刷新
+                        # 快速读取，短超时
                         try:
-                            # 使用较小的超时时间，允许定期刷新缓冲区
-                            chunk = await asyncio.wait_for(stream.read(buffer_size), timeout=0.1)
+                            chunk = await asyncio.wait_for(stream.read(buffer_size), timeout=0.05)  # ⚡ 50ms超时
                         except asyncio.TimeoutError:
-                            # 超时是正常的，继续处理缓冲区
                             chunk = None
 
                         current_time = asyncio.get_event_loop().time()
 
-                        # 如果读取到数据
                         if chunk:
-                            # 将新读取的数据添加到缓冲区
                             buffer += chunk
-                            last_flush_time = current_time  # 更新最后刷新时间
+                            last_activity_time = current_time
 
-                        # 处理缓冲区中的完整行
+                        # 处理完整行
                         while delimiter in buffer:
                             line, buffer = buffer.split(delimiter, 1)
                             clean_line = line.decode('utf-8', errors='replace').rstrip('\r\n')
-                            if clean_line:  # 只有当文本非空时才添加日志
-                                self.terminal.add_log(clean_line)
+                            if clean_line:
+                                log_batch.append(clean_line)
 
-                        # 定期强制刷新缓冲区（处理没有换行符的输出）
-                        time_since_flush = current_time - last_flush_time
-                        if buffer and time_since_flush > flush_interval:
+                                # 立即发送到终端（批量大小为1）
+                                if len(log_batch) >= batch_size:
+                                    for log_line in log_batch:
+                                        self.terminal.add_log(log_line)
+                                    log_batch.clear()
+                                    last_batch_flush = current_time
+
+                        # 处理无换行符的缓冲区
+                        time_since_activity = current_time - last_activity_time
+                        if buffer and time_since_activity > flush_interval:
                             clean_line = buffer.decode('utf-8', errors='replace').rstrip('\r\n')
                             if clean_line:
-                                self.terminal.add_log(clean_line)
+                                log_batch.append(clean_line)
                             buffer = b""
-                            last_flush_time = current_time
+                            last_activity_time = current_time
 
-                        # 如果没有读取到数据且流已关闭，退出
+                        # 定期刷新log_batch（防止数据积压）
+                        time_since_batch_flush = current_time - last_batch_flush
+                        if log_batch and time_since_batch_flush > flush_interval:
+                            for log_line in log_batch:
+                                self.terminal.add_log(log_line)
+                            log_batch.clear()
+                            last_batch_flush = current_time
+
+                        # 流结束处理
                         if chunk is None and stream.at_eof():
-                            # 处理缓冲区中剩余的数据
                             if buffer:
                                 clean_line = buffer.decode('utf-8', errors='replace').rstrip('\r\n')
                                 if clean_line:
-                                    self.terminal.add_log(clean_line)
+                                    log_batch.append(clean_line)
+                                buffer = b""
+
+                            if log_batch:
+                                for log_line in log_batch:
+                                    self.terminal.add_log(log_line)
+                                log_batch.clear()
                             break
 
                     except asyncio.CancelledError:
-                        # 任务被取消，清理并退出
                         if buffer:
                             clean_line = buffer.decode('utf-8', errors='replace').rstrip('\r\n')
                             if clean_line:
-                                self.terminal.add_log(clean_line)
+                                log_batch.append(clean_line)
+
+                        if log_batch:
+                            for log_line in log_batch:
+                                self.terminal.add_log(log_line)
+                            log_batch.clear()
                         break
                     except Exception as ex:
                         if hasattr(self.terminal, 'view') and self.terminal.view.page:
@@ -1590,7 +1616,7 @@ class UiEvent:
 
     def switch_st_version(self, version_info, commit_hash):
         """
-        执行SillyTavern版本切换
+        执行SillyTavern版本切换（保持在release分支，避免detached HEAD）
 
         Args:
             version_info (dict): 版本信息 {version, commit, date, source}
@@ -1618,7 +1644,7 @@ class UiEvent:
                 print(f"警告: {status_msg}")
                 self.show_error_dialog("警告", f"{status_msg}，切换可能丢失更改")
 
-            # 3. 执行git checkout
+            # 3. 执行版本切换（在release分支上使用reset --hard）
             success, message = checkout_st_version(commit_hash)
 
             if success:
@@ -1626,6 +1652,12 @@ class UiEvent:
                 self.terminal.add_log(f"✓ 成功切换到版本 v{version_info['version']}")
                 print(f"✓ {message}")
                 print(f"✓ 成功切换到版本 v{version_info['version']}")
+
+                # 验证当前分支状态
+                from git_utils import get_current_commit
+                verify_success, current_commit, verify_msg = get_current_commit()
+                if verify_success:
+                    self.terminal.add_log(f"当前commit: {current_commit[:7]}")
 
                 # 刷新版本页面显示
                 self._refresh_version_view()

@@ -127,6 +127,8 @@ class AsyncTerminal:
         # UI更新防抖（避免频繁更新）
         self._update_pending = False
         self._update_lock = threading.Lock()
+        self._update_timer = None  # 存储Timer对象以便取消
+        self._last_ui_update = 0  # 记录上次UI更新时间
 
         # 启动异步日志处理循环
         self._start_log_processing_loop()
@@ -141,7 +143,7 @@ class AsyncTerminal:
                     # 等待一小段时间或直到有日志需要处理
                     if not self._log_queue.empty():
                         self._process_batch()
-                    time.sleep(0.02)  # 20ms间隔检查 - 提高检查频率以提高响应性
+                    time.sleep(0.1)  # 优化：100ms间隔检查，降低CPU占用（从20ms增加到100ms）
                 except Exception as e:
                     print(f"日志处理循环错误: {str(e)}")
 
@@ -367,7 +369,7 @@ class AsyncTerminal:
         return True
 
     def _process_batch(self):
-        """处理批量日志条目（优化版 - 使用防抖UI更新）"""
+        """处理批量日志条目（快速响应版本）"""
         # 阻止并发处理
         if self._processing:
             return
@@ -376,7 +378,8 @@ class AsyncTerminal:
         try:
             # 收集队列中的日志条目
             log_entries = []
-            batch_limit = min(self._batch_size_threshold, self._log_queue.qsize())
+            # ⚡ 降低批量大小，提高响应性
+            batch_limit = min(20, self._log_queue.qsize())  # 从50降低到20
 
             processed_count = 0
             while processed_count < batch_limit:
@@ -403,15 +406,16 @@ class AsyncTerminal:
             # 批量更新日志控件
             self.logs.controls.extend(new_controls)
 
-            # 主动限制日志数量（更激进）
+            # 主动限制日志数量
             if len(self.logs.controls) > self._max_log_entries:
                 self.logs.controls = self.logs.controls[-self._max_log_entries//2:]
 
             # 更新处理时间
             self._last_process_time = time.time()
 
-            # 防抖UI更新（避免频繁更新导致卡顿）
-            self._schedule_ui_update()
+            # ⚡ 立即更新UI，不等待
+            if len(new_controls) > 0:
+                self._schedule_ui_update_fast()
 
         except Exception as e:
             import traceback
@@ -423,8 +427,12 @@ class AsyncTerminal:
     def _schedule_ui_update(self):
         """防抖UI更新（避免频繁更新导致卡顿）"""
         with self._update_lock:
-            if self._update_pending:
-                return
+            # 取消之前的定时器（防止线程泄漏）
+            if self._update_timer is not None:
+                try:
+                    self._update_timer.cancel()
+                except Exception:
+                    pass
 
             self._update_pending = True
 
@@ -432,14 +440,49 @@ class AsyncTerminal:
                 try:
                     if hasattr(self, 'view') and self.view.page is not None:
                         self.logs.update()
+                        self._last_ui_update = time.time()
                 except Exception as e:
                     print(f"UI更新失败: {str(e)}")
                 finally:
                     with self._update_lock:
                         self._update_pending = False
+                        self._update_timer = None
 
-            # 延迟更新，合并多次更新请求
-            threading.Timer(0.1, do_update).start()
+            # ⚡ 快速更新，减少延迟
+            self._update_timer = threading.Timer(0.05, do_update)  # 50ms延迟（从150ms降低）
+            self._update_timer.start()
+
+    def _schedule_ui_update_fast(self):
+        """快速UI更新（用于实时输出）"""
+        with self._update_lock:
+            # 如果已经有更新在等待，不重复调度
+            if self._update_pending:
+                return
+
+            # 取消之前的定时器
+            if self._update_timer is not None:
+                try:
+                    self._update_timer.cancel()
+                except Exception:
+                    pass
+
+            self._update_pending = True
+
+            def do_update():
+                try:
+                    if hasattr(self, 'view') and self.view.page is not None:
+                        self.logs.update()
+                        self._last_ui_update = time.time()
+                except Exception as e:
+                    print(f"UI更新失败: {str(e)}")
+                finally:
+                    with self._update_lock:
+                        self._update_pending = False
+                        self._update_timer = None
+
+            # ⚡ 极速更新：立即执行
+            self._update_timer = threading.Timer(0.01, do_update)  # 10ms延迟
+            self._update_timer.start()
 
     def add_log(self, text: str):
         """线程安全的日志添加方法（优化版 - 使用背压机制）"""
@@ -511,10 +554,11 @@ class AsyncTerminal:
         current_time = time.time()
         time_since_last_process = current_time - self._last_process_time
 
+        # ⚡ 快速触发：降低阈值，提高响应性
         # 如果队列中有日志且满足以下条件之一，则立即处理：
-        # 1. 队列中有较多日志（>=5条）
-        # 2. 距离上次处理已经超过100ms
-        if queue_size > 0 and (queue_size >= 5 or time_since_last_process >= 0.1):
+        # 1. 队列中有日志（>=1条，立即处理）
+        # 2. 距离上次处理已经超过50ms（从200ms降低到50ms）
+        if queue_size > 0 and (queue_size >= 1 or time_since_last_process >= 0.05):
             if not self._processing:
                 self._process_batch()
 
