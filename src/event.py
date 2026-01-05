@@ -401,7 +401,7 @@ class UiEvent:
 
                     # 启动进程并设置退出回调
                     custom_args = self.config_manager.get("custom_args", "")
-                    base_command = f"\"{self.env.get_node_path()}node\" server.js"
+                    base_command = f"\"{self.env.get_node_path()}node.exe\" server.js"
                     if custom_args:
                         command = f"{base_command} {custom_args}"
                     else:
@@ -1302,15 +1302,49 @@ class UiEvent:
                 env['NODE_OPTIONS'] = '--no-warnings'  # 禁用警告，减少输出干扰
 
                 self.terminal.add_log(f"{workdir} $ {command}")
-                # 启动进程并记录(优化Windows参数)
-                process = await asyncio.create_subprocess_shell(
-                    command,  # 直接执行原始命令
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    cwd=workdir,
-                    env=env,  # 使用自定义环境变量
-                    creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-                )
+
+                # 解析命令：提取可执行文件和参数
+                # 使用 shlex.split 来正确处理带引号的路径
+                import shlex
+                try:
+                    # 在 Windows 上，shlex.split 可以正确处理带引号的路径
+                    args = shlex.split(command, posix=False)
+                    if not args:
+                        raise ValueError("命令解析为空")
+
+                    executable = args[0].strip('"').strip("'")  # 去除引号
+                    cmd_args = args[1:]
+
+                    self.terminal.add_log(f"[DEBUG] 可执行文件: {executable}")
+                    self.terminal.add_log(f"[DEBUG] 参数: {cmd_args}")
+
+                    # 验证可执行文件是否存在
+                    if not os.path.isfile(executable):
+                        raise FileNotFoundError(f"找不到可执行文件: {executable}")
+
+                    # 使用 create_subprocess_exec 直接执行，避免通过 cmd.exe
+                    process = await asyncio.create_subprocess_exec(
+                        executable,
+                        *cmd_args,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        cwd=workdir,
+                        env=env,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                except Exception as e:
+                    # 如果解析失败，回退到 create_subprocess_shell
+                    self.terminal.add_log(f"[DEBUG] 解析命令失败，使用 shell 方式: {str(e)}")
+                    import traceback
+                    self.terminal.add_log(f"[DEBUG] 详细错误: {traceback.format_exc()}")
+                    process = await asyncio.create_subprocess_shell(
+                        command,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        cwd=workdir,
+                        env=env,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
                 
                 self.terminal.active_processes.append({
                     'process': process,

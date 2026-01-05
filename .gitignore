@@ -16,3 +16,4 @@ nuitka-crash-report.xml
 .flet
 .claude/settings.local.json
 backup
+/venv
