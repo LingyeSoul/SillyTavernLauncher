@@ -64,19 +64,25 @@ jobs:
 
       - name: Upgrade pip and install dependencies
         run: |
+          # Upgrade pip
           python -m pip install --upgrade pip
-          pip install pyinstaller ruamel.yaml packaging Nuitka flet-desktop==0.28.3 aiohttp flet==0.28.3 pystray==0.19.5
 
-      - name: Install custom flet-cli
-        run: |
-          # Install custom flet-cli version
+          # Install packages from requirements.txt
+          pip install -r requirements.txt
+
+          # Install custom flet-cli
           pip install git+https://github.com/LingyeSoul/flet_cli.git@main
-          
+
+          # Install flet-desktop
+          pip install flet-desktop==0.28.3
+
+          # Install Nuitka and dependencies
+          pip install -U Nuitka pefile pyinstaller
+
           # Verify installation
           echo "=== Installed flet-cli info ==="
           pip show flet-cli
-          
-          # Verify flet command availability
+          echo "=== Verifying flet command ==="
           flet --version
           flet pack --help
         shell: pwsh

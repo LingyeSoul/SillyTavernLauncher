@@ -127,6 +127,33 @@ async def main(page: ft.Page):
 
     uniUI=UniUI(page,version,version_checker)
     uniUI.setMainView(page)
+
+    # 检测启动器版本号，如果是测试版则启用 DEBUG 模式
+    def is_prerelease_version(version_str):
+        """检测版本号是否为测试版"""
+        if not version_str:
+            return False
+
+        version_lower = version_str.lower()
+
+        # 检查常见的测试版标识
+        prerelease_keywords = [
+            'alpha', 'beta', 'rc', 'pre', 'preview',
+            'test', 'testing', 'dev', 'development',
+            'snapshot', 'nightly', 'experimental',
+            '测试版', '测试', '开发版', '预览版'
+        ]
+
+        for keyword in prerelease_keywords:
+            if keyword in version_lower:
+                return True
+
+        return False
+
+    if is_prerelease_version(version):
+        uniUI.terminal.enable_debug_mode(True)
+        uniUI.terminal.add_log(f"检测到启动器测试版 {version}，已自动启用 DEBUG 模式")
+
     # 检查自动代理设置
     config_manager = ConfigManager()
     if config_manager.get("auto_proxy", False):

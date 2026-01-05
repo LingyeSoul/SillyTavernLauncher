@@ -113,6 +113,14 @@ class AsyncTerminal:
         self._output_threads = []  # 存储输出处理线程
         self.enable_logging = enable_logging
 
+        # DEBUG 模式控制
+        self._debug_mode = False  # 是否启用 DEBUG 模式（显示所有 DEBUG 信息）
+
+        # 进程监控相关
+        self._process_monitor_thread = None
+        self._process_monitor_stop_event = threading.Event()
+        self._start_process_monitor()
+
         # 异步处理相关属性 - 使用有界队列防止内存溢出
         self._log_queue = queue.Queue(maxsize=self.MAX_QUEUE_SIZE)
         self._last_process_time = 0  # 上次处理时间
@@ -195,6 +203,53 @@ class AsyncTerminal:
         self._log_file_thread = threading.Thread(target=log_file_worker, daemon=True)
         self._log_file_thread.start()
 
+    def _start_process_monitor(self):
+        """启动进程监控线程，定期检查进程状态"""
+        def process_monitor_worker():
+            """进程监控工作线程"""
+            while not self._process_monitor_stop_event.is_set():
+                try:
+                    if self.is_running and self.active_processes:
+                        # 检查是否有进程已经退出
+                        all_stopped = True
+                        for proc_info in self.active_processes:
+                            process = proc_info.get('process')
+                            pid = proc_info.get('pid')
+
+                            # 检查进程是否仍在运行
+                            is_running = False
+                            if hasattr(process, 'poll'):  # subprocess.Popen
+                                is_running = process.poll() is None
+                            elif hasattr(process, 'returncode'):  # asyncio.subprocess.Process
+                                is_running = process.returncode is None
+
+                            if is_running:
+                                all_stopped = False
+                                break
+                            else:
+                                # 进程已退出，记录日志
+                                self.add_log(f"[DEBUG] 进程 PID={pid} 已退出")
+
+                        # 如果所有进程都已停止，更新状态
+                        if all_stopped:
+                            if self.is_running:
+                                self.add_log("检测到所有进程已停止")
+                                self.is_running = False
+
+                    time.sleep(1.0)  # 每秒检查一次
+                except Exception as e:
+                    print(f"进程监控线程错误: {str(e)}")
+
+        # 启动进程监控线程
+        self._process_monitor_thread = threading.Thread(target=process_monitor_worker, daemon=True)
+        self._process_monitor_thread.start()
+
+    def _stop_process_monitor(self):
+        """停止进程监控线程"""
+        if self._process_monitor_thread and self._process_monitor_thread.is_alive():
+            self._process_monitor_stop_event.set()
+            self._process_monitor_thread.join(timeout=2.0)
+
     def _open_log_file(self):
         """打开日志文件句柄"""
         if not self.enable_logging:
@@ -229,8 +284,100 @@ class AsyncTerminal:
         else:
             self._open_log_file()
 
+    def _verify_process_running(self, pid):
+        """使用 tasklist 验证进程是否仍在运行"""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ['tasklist', '/FI', f'PID eq {pid}', '/FO', 'CSV'],
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                encoding='gbk',
+                errors='ignore'
+            )
+
+            self.add_log(f"[DEBUG] 验证 PID={pid}: tasklist 返回码={result.returncode}")
+            if result.stdout:
+                self.add_log(f"[DEBUG] tasklist 输出: {result.stdout[:200]}")
+
+            # tasklist 返回 0 表示找到进程
+            # 检查输出中是否包含 PID
+            is_running = str(pid) in result.stdout and result.returncode == 0
+            self.add_log(f"[DEBUG] PID={pid} 是否运行: {is_running}")
+            return is_running
+        except Exception as e:
+            self.add_log(f"[DEBUG] 验证 PID={pid} 时出错: {str(e)}")
+            return False
+
+    def _get_all_node_processes(self):
+        """获取所有 node.exe 进程的 PID 列表"""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ['tasklist', '/FI', 'IMAGENAME eq node.exe', '/FO', 'CSV'],
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                encoding='gbk',
+                errors='ignore'
+            )
+
+            if result.returncode != 0:
+                return []
+
+            # 解析 CSV 输出，提取 PID
+            pids = []
+            lines = result.stdout.strip().split('\n')
+            for line in lines[1:]:  # 跳过标题行
+                if 'node.exe' in line:
+                    parts = line.split(',')
+                    if len(parts) >= 2:
+                        try:
+                            pid = int(parts[1].strip('"'))
+                            pids.append(pid)
+                        except ValueError:
+                            pass
+
+            return pids
+        except Exception:
+            return []
+
+    def _kill_process_by_pid(self, pid, use_tree=True):
+        """使用 taskkill 强制杀死指定 PID 的进程（微软官方工具，更安全）
+
+        Args:
+            pid: 进程 ID
+            use_tree: 是否使用 /T 参数终止进程树（包括子进程）
+        """
+        import subprocess
+        try:
+            cmd = ['taskkill', '/F', '/PID', str(pid)]
+            if use_tree:
+                cmd.append('/T')  # 终止进程树
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                text=True,
+                encoding='gbk',
+                errors='ignore'
+            )
+
+            # taskkill 返回 0 表示成功，返回 1 表示进程不存在
+            return result.returncode in [0, 1]
+        except Exception:
+            return False
+
     def stop_processes(self):
-        """停止所有由execute_command启动的进程"""
+        """停止所有由execute_command启动的进程
+
+        使用多阶段终止策略：
+        1. 优雅终止（SIGTERM）
+        2. 强制终止（SIGKILL）
+        3. taskkill /F 终止残留进程
+        """
         # 检查是否有活跃的进程
         if not self.active_processes:
             return False  # 没有进程需要停止
@@ -259,114 +406,100 @@ class AsyncTerminal:
                     task.cancel()
             self._output_tasks = []
 
-        # 使用平台特定方式终止进程
-        import subprocess
-        for proc_info in self.active_processes[:]:  # 使用副本避免遍历时修改
+        import signal
+
+        # 阶段 1 & 2: 优雅终止 + 强制终止
+        for proc_info in self.active_processes[:]:
             try:
-                process = proc_info['process']
-                # 对于异步进程，使用不同的终止方法
-                if hasattr(process, 'terminate'):
-                    if not process.returncode:  # 如果进程仍在运行
-                        process.terminate()
+                pid = proc_info['pid']
+                process = proc_info.get('process')
+                command = proc_info.get('command', '')
+
+                self.add_log(f"终止进程 PID={pid}: {command[:50]}")
 
                 # 检查进程是否仍在运行
+                is_running = False
+                if hasattr(process, 'poll'):  # subprocess.Popen
+                    is_running = process.poll() is None
+                elif hasattr(process, 'returncode'):  # asyncio.subprocess.Process
+                    is_running = process.returncode is None
+
+                if not is_running:
+                    self.add_log(f"  进程 PID={pid} 已停止")
+                    continue
+
+                # 阶段 1: 优雅终止（SIGTERM）
+                try:
+                    if hasattr(process, 'terminate'):  # subprocess.Popen
+                        process.terminate()
+                    elif hasattr(process, 'send_signal'):  # asyncio.subprocess.Process
+                        process.send_signal(signal.SIGTERM)
+                except Exception:
+                    pass
+
+                # 等待优雅退出（最多2秒）
+                for _ in range(20):
+                    time.sleep(0.1)
+                    if hasattr(process, 'poll') and process.poll() is not None:
+                        break
+                    elif hasattr(process, 'returncode') and process.returncode is not None:
+                        break
+
+                # 阶段 2: 强制终止（SIGKILL）
                 is_running = False
                 if hasattr(process, 'poll'):
                     is_running = process.poll() is None
                 elif hasattr(process, 'returncode'):
                     is_running = process.returncode is None
-                else:
-                    # 对于协程对象，默认认为仍在运行
-                    is_running = True
 
                 if is_running:
-                    self.add_log(f"终止进程 {proc_info['pid']}: {proc_info['command']}")
-
-                    # 首先使用PowerShell递归终止整个进程树
+                    self.add_log(f"  进程 PID={pid} 优雅退出失败，强制终止...")
                     try:
-                        result1 = subprocess.run(
-                            f"powershell.exe -WindowStyle Hidden -Command \"Get-CimInstance Win32_Process -Filter 'ParentProcessId={proc_info['pid']}' | Select-Object -ExpandProperty Handle | ForEach-Object {{ Stop-Process -Id $_ -Force }}\"",
-                            shell=True,
-                            stderr=subprocess.PIPE,
-                            stdout=subprocess.PIPE,
-                            creationflags=subprocess.CREATE_NO_WINDOW,
-                            timeout=10  # 添加10秒超时
-                        )
-                        if result1.stderr and result1.stderr.strip():
-                            error_text = result1.stderr.decode('utf-8', errors='replace').strip()
-                            # 忽略PowerShell的预期错误
-                            ignore_keywords = ["no cim instances", "not found", "没有找到", "不存在", "无法找到"]
-                            if not any(ignore_text in error_text.lower() for ignore_text in ignore_keywords):
-                                self.add_log(f"PowerShell终止子进程错误: {error_text}")
-                    except subprocess.TimeoutExpired:
-                        self.add_log(f"PowerShell终止子进程超时: {proc_info['pid']}")
+                        if hasattr(process, 'kill'):
+                            process.kill()
+                        elif hasattr(process, 'send_signal'):
+                            process.send_signal(signal.SIGKILL)
+                    except Exception:
+                        pass
 
-                    # 使用taskkill递归终止进程树
-                    try:
-                        result2 = subprocess.run(
-                            f"taskkill /F /T /PID {proc_info['pid']}",
-                            shell=True,
-                            stderr=subprocess.PIPE,
-                            stdout=subprocess.PIPE,
-                            creationflags=subprocess.CREATE_NO_WINDOW,
-                            timeout=10  # 添加10秒超时
-                        )
-                        # 只有当stderr不为空且不是预期的错误消息时才记录错误
-                        if result2.stderr and result2.stderr.strip():
-                            # 解码错误文本，尝试多种编码
-                            error_bytes = result2.stderr
-                            error_text = ""
-                            for encoding in ['utf-8', 'gbk', 'gb2312', 'latin1']:
-                                try:
-                                    error_text = error_bytes.decode(encoding).strip()
-                                    break
-                                except UnicodeDecodeError:
-                                    continue
-
-                            if not error_text:
-                                error_text = error_bytes.decode('utf-8', errors='replace').strip()
-
-                            # 忽略taskkill的预期错误
-                            ignore_keywords = [
-                                "not found", "no running", "ûҵ", "没有找到",
-                                "不存在", "无法找到", "not running", "process not found"
-                            ]
-                            if not any(ignore_text in error_text.lower() for ignore_text in ignore_keywords):
-                                self.add_log(f"Taskkill终止进程树错误: {error_text}")
-                    except subprocess.TimeoutExpired:
-                        self.add_log(f"Taskkill终止进程树超时: {proc_info['pid']}")
-
-                    # 等待进程终止，最多等待5秒
-                    start_time = time.time()
-                    while time.time() - start_time < 5:
+                    # 等待强制终止生效（最多1秒）
+                    for _ in range(10):
+                        time.sleep(0.1)
                         if hasattr(process, 'poll') and process.poll() is not None:
-                            # 同步进程已结束
                             break
                         elif hasattr(process, 'returncode') and process.returncode is not None:
-                            # 异步进程已结束
                             break
-                        time.sleep(0.1)  # 短暂休眠避免占用过多CPU
 
-                    # 再次检查进程是否仍在运行
-                    still_running = True
-                    if hasattr(process, 'poll'):
-                        still_running = process.poll() is None
-                    elif hasattr(process, 'returncode'):
-                        still_running = process.returncode is None
-
-                    # 只有当进程确实仍在运行时才报告错误
-                    if still_running:
-                        self.add_log(f"警告: 进程 {proc_info['pid']} 可能仍在运行")
             except Exception as ex:
-                # 只在有实际错误信息时才记录错误
                 error_msg = str(ex).strip()
                 if error_msg:
-                    self.add_log(f"终止进程时出错: {error_msg}")
-                # 继续处理其他进程，不因单个进程错误而中断
+                    self.add_log(f"终止进程 {proc_info['pid']} 时出错: {error_msg}")
 
-        # 清空进程列表
+        # 保存需要验证的进程列表
+        processes_to_verify = self.active_processes[:]
         self.active_processes = []
+
         self.add_log("所有进程已终止")
+
+        # 阶段 3: 使用 taskkill 清理残留进程
+        self.add_log("检查并清理残留进程...")
+        killed_count = 0
+
+        for proc_info in processes_to_verify:
+            pid = proc_info['pid']
+            # 使用 tasklist 验证进程是否仍在运行
+            if self._verify_process_running(pid):
+                self.add_log(f"  发现残留进程 PID={pid}，正在清理...")
+                if self._kill_process_by_pid(pid, use_tree=False):  # 不需要 /T，因为没有进程组
+                    self.add_log(f"  ✓ 成功清理 PID={pid}")
+                    killed_count += 1
+                else:
+                    self.add_log(f"  ⚠ 清理失败 PID={pid}")
+
+        if killed_count > 0:
+            self.add_log(f"✓ 成功清理 {killed_count} 个残留进程")
+        else:
+            self.add_log("✓ 所有进程已成功终止")
 
         # 标记为不再运行
         self.is_running = False
@@ -507,11 +640,43 @@ class AsyncTerminal:
             self._update_timer = threading.Timer(0.01, do_update)  # 10ms延迟
             self._update_timer.start()
 
+    def enable_debug_mode(self, enabled=True):
+        """
+        启用或禁用 DEBUG 模式
+
+        Args:
+            enabled (bool): True 启用 DEBUG 模式，False 禁用
+        """
+        self._debug_mode = enabled
+        if enabled:
+            self.add_log("[DEBUG] DEBUG 模式已启用 - 将显示所有调试信息")
+        else:
+            self.add_log("[DEBUG] DEBUG 模式已禁用 - 将隐藏调试信息")
+
     def add_log(self, text: str):
         """线程安全的日志添加方法（显示和记录分离）"""
         try:
             # 优先处理空值情况
             if not text:
+                return
+
+            # 检查是否为 DEBUG 日志
+            is_debug = '[DEBUG]' in text or '[debug]' in text
+
+            # 如果不是 DEBUG 模式且是 DEBUG 日志，则跳过显示（但仍然记录到文件）
+            if is_debug and not self._debug_mode:
+                # 只记录到文件，不显示在终端
+                if self.enable_logging:
+                    processed_text = text[:self.LOG_MAX_LENGTH]
+                    processed_text = re.sub(r'(\r?\n){3,}', '\n\n', processed_text.strip())
+                    timestamp = datetime.datetime.now()
+                    try:
+                        self._log_file_queue.put_nowait((timestamp, processed_text))
+                    except queue.Full:
+                        try:
+                            self._log_file_queue.put((timestamp, processed_text), block=True, timeout=1.0)
+                        except:
+                            pass
                 return
 
             # 限制单条日志长度并清理多余换行
