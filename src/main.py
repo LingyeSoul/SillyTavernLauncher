@@ -7,6 +7,7 @@ import asyncio
 import urllib.request
 from version import VERSION
 from sysenv import SysEnv
+from welcome_dialog import show_welcome_dialog
 
 async def main(page: ft.Page):
     page.window.center()
@@ -29,38 +30,11 @@ async def main(page: ft.Page):
         # 检查first_run参数是否存在且为True
         if config.get("first_run", True):
             # 显示欢迎对话框
-            show_welcome_dialog()
+            show_welcome_dialog(page)
             # 更新配置文件，将first_run设置为False
             config_manager.set("first_run", False)
             config_manager.save_config()
     
-    # 显示欢迎对话框
-    def show_welcome_dialog():
-        welcome_dialog = ft.AlertDialog(
-            title=ft.Text("欢迎使用 SillyTavernLauncher"),
-            modal=True,
-            content=ft.Column([
-                ft.Divider(),
-                ft.Text("欢迎使用 SillyTavern 启动器！", size=16, weight=ft.FontWeight.BOLD),
-                ft.Text("这是您第一次运行本启动器，以下是基本使用说明：", size=14),
-                ft.Text("1. 请先点击'安装'按钮安装 SillyTavern（懒人包请跳过这步）", size=14),
-                ft.Text("2. 安装完成后点击'启动'按钮启动酒馆", size=14),
-                ft.Text("3. 启动后可通过'停止'按钮停止酒馆", size=14),
-                ft.Text("4. 可在'设置'页面配置各种选项", size=14),
-                ft.Text("5. 不要使用中文和空格路径存放启动器！", size=14),
-                ft.Text("如有任何问题，请查看'关于'页面获取更多信息", size=14),
-                ft.Text("祝您使用愉快！", size=14, weight=ft.FontWeight.BOLD),
-                ft.Divider(),
-            ], width=400, height=300),
-            actions=[
-                ft.TextButton("酒馆入门教程", on_click=lambda e: e.page.launch_url("https://www.yuque.com/yinsa-0wzmf/rcv7g3?", web_window_name="sillytaverntutorial")),
-                ft.TextButton("启动器官网", on_click=lambda e: e.page.launch_url("https://sillytavern.lingyesoul.top", web_window_name="sillytavernlanuncher")),
-                ft.TextButton("我已知晓", on_click=lambda e: page.close(welcome_dialog))
-            ],
-            actions_alignment=ft.MainAxisAlignment.END,
-        )
-        page.open(welcome_dialog)
-
     # 显示系统环境缺失对话框
     def show_system_env_missing_dialog(missing_items):
         def close_dialog(e):
