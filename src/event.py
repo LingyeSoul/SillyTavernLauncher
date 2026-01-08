@@ -20,7 +20,7 @@ class UiEvent:
         self.uni_ui = uni_ui
         self.config_manager = ConfigManager()
         self.config = self.config_manager.config
-        
+
         use_sys_env=self.config["use_sys_env"]
         if use_sys_env:
             self.env=SysEnv()
@@ -34,6 +34,27 @@ class UiEvent:
                 self.terminal.add_log(tmp)
         self.stCfg = stcfg()
         self.tray = None  # 添加tray引用
+
+    def safe_update(self):
+        """安全地调用 page.update()，处理控件 uid 为 None 的异常"""
+        try:
+            async def async_update():
+                try:
+                    self.page.update()
+                except AssertionError as e:
+                    # 控件 __uid 为 None，说明控件未初始化或已被移除
+                    import traceback
+                    print(f"safe_update: AssertionError (控件 __uid 为 None) - {str(e)}")
+                    traceback.print_stack()
+                except Exception as e:
+                    # 其他异常也记录但继续运行
+                    import traceback
+                    print(f"safe_update: 更新失败 - {str(e)}")
+                    traceback.print_exc()
+            self.page.run_task(async_update)
+        except Exception:
+            # run_task 本身失败，忽略
+            pass
 
     def run_async_task(self, coroutine):
         """运行异步任务"""
@@ -124,15 +145,34 @@ class UiEvent:
             if self.terminal.is_running:
                 self.terminal.stop_processes()
             self.page.window.visible = False
-            self.page.update()
+            try:
+                async def async_update():
+                    try:
+                        self.page.update()
+                    except AssertionError:
+                        pass  # 控件树过深，忽略
+                self.page.run_task(async_update)
+            except Exception:
+                pass
         else:
             # 未启用托盘时，正常退出程序
             if self.terminal.is_running:
                 self.terminal.stop_processes()
             self.page.window.visible = False
             self.page.window.prevent_close = False
-            self.page.update()
-            self.page.window.close()
+            try:
+                async def async_update():
+                    try:
+                        self.page.update()
+                    except AssertionError:
+                        pass  # 控件树过深，忽略
+                self.page.run_task(async_update)
+            except Exception:
+                pass
+            try:
+                self.page.window.close()
+            except Exception:
+                pass
 
 
     def exit_app_with_tray(self, e):
@@ -161,10 +201,18 @@ class UiEvent:
             e.control.icon = "MODE_NIGHT"
             self.page.theme_mode = "light"
             self.config_manager.set("theme", "light")
-        
+
         # 保存配置
         self.config_manager.save_config()
-        self.page.update()
+        try:
+            async def async_update():
+                try:
+                    self.page.update()
+                except AssertionError:
+                    pass  # 控件树过深，忽略
+            self.page.run_task(async_update)
+        except Exception:
+            pass
 
 
     def install_sillytavern(self, e):

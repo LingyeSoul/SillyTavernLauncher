@@ -64,14 +64,14 @@ def parse_ansi_text(text):
 class AsyncTerminal:
     # 性能优化常量
     MAX_QUEUE_SIZE = 1000  # 队列最大条目数（背压机制）
-    MAX_LOG_ENTRIES = 500  # 减少UI控件数量（从1500降到500）
-    LOG_MAX_LENGTH = 1000  # 单条日志长度限制（从2000降到1000）
+    MAX_LOG_ENTRIES = 200  # 降低UI控件数量，避免控件树过深（从500降到200）
+    LOG_MAX_LENGTH = 1000  # 单条日志长度限制
     LOG_MAX_LENGTH_DETAILED = 5000  # 详细日志（如traceback）的长度限制
-    BATCH_SIZE_THRESHOLD = 50  # 批量处理阈值（从30增加到50）
-    PROCESS_INTERVAL = 0.05  # 处理间隔50ms（从20ms增加到50ms）
+    BATCH_SIZE_THRESHOLD = 50  # 批量处理阈值
+    PROCESS_INTERVAL = 0.05  # 处理间隔50ms
 
     # ⚡ 新增：日志显示和记录分离
-    MAX_DISPLAY_LOGS = 300  # 终端最多显示300条
+    MAX_DISPLAY_LOGS = 150  # 终端最多显示150条（降低）
     HIGH_LOAD_THRESHOLD = 200  # 高负载阈值（队列>200条）
     OVERLOAD_THRESHOLD = 500  # 过载阈值（队列>500条，启用激进截断）
 
@@ -128,7 +128,6 @@ class AsyncTerminal:
         self._process_interval = self.PROCESS_INTERVAL  # 优化为50ms
         self._processing = False  # 阻止并发处理
         self._batch_size_threshold = self.BATCH_SIZE_THRESHOLD  # 优化为50
-        self._stop_event = threading.Event()  # 停止事件
         self._max_log_entries = self.MAX_LOG_ENTRIES  # 优化为500
 
         # 日志文件写入线程相关属性
@@ -146,27 +145,10 @@ class AsyncTerminal:
         self._is_shutting_down = False  # 关闭标志，防止更新已关闭的页面
         self._ui_update_fail_count = 0  # UI更新失败计数器
 
-        # 启动异步日志处理循环
-        self._start_log_processing_loop()
+        # 不再使用连续日志处理循环线程，改为按需调度（v1.2.9 方式）
         # 启动日志文件写入线程
         if self.enable_logging:
             self._start_log_file_thread()
-
-    def _start_log_processing_loop(self):
-        """启动异步日志处理循环"""
-        def log_processing_worker():
-            while not self._stop_event.is_set():
-                try:
-                    # 等待一小段时间或直到有日志需要处理
-                    if not self._log_queue.empty():
-                        self._process_batch()
-                    time.sleep(0.1)  # 优化：100ms间隔检查，降低CPU占用（从20ms增加到100ms）
-                except Exception as e:
-                    print(f"日志处理循环错误: {str(e)}")
-
-        # 在单独的线程中运行日志处理循环
-        self._log_thread = threading.Thread(target=log_processing_worker, daemon=True)
-        self._log_thread.start()
 
     def _start_log_file_thread(self):
         """启动日志文件写入线程"""
@@ -391,8 +373,7 @@ class AsyncTerminal:
         # 刷新日志缓冲区
         self._flush_log_buffer()
 
-        # 设置停止事件
-        self._stop_event.set()
+        # 设置停止事件（仅日志文件线程）
         self._log_file_stop_event.set()
 
         # 首先停止所有输出线程
@@ -511,7 +492,7 @@ class AsyncTerminal:
         return True
 
     def _process_batch(self):
-        """处理批量日志条目"""
+        """⭐ 处理批量日志条目（v1.2.9 方式 - 在主线程更新）"""
         # 阻止并发处理
         if self._processing:
             return
@@ -554,7 +535,7 @@ class AsyncTerminal:
                     new_text = ft.Text(processed_text, selectable=True, size=14)
                 new_controls.append(new_text)
 
-            # 批量更新日志控件
+            # ⭐ 关键：直接操作控件（在主线程中）
             self.logs.controls.extend(new_controls)
 
             # 限制日志数量
@@ -564,51 +545,60 @@ class AsyncTerminal:
             # 更新处理时间
             self._last_process_time = time.time()
 
-            # 使用 page.run_task() 更新 UI（确保在主线程）
+            # ⭐ 关键：直接更新 UI（已在主线程中，不需要 page.run_task）
             if (hasattr(self, 'view') and
                 self.view.page is not None and
                 not getattr(self.view.page, 'closed', False)):
                 try:
-                    # 定义异步更新函数
-                    async def async_update():
-                        try:
-                            self.logs.update()
-                        except AssertionError as e:
-                            # 记录但继续运行
-                            error_msg = str(e) if str(e) else "控件树过深或并发更新"
-                            print(f"UI更新失败(AssertionError): {error_msg}")
-                        except RuntimeError as e:
-                            # 事件循环已关闭
-                            if "Event loop is closed" not in str(e):
-                                raise
-
-                    # 使用 run_task 确保在主线程执行
-                    self.view.page.run_task(async_update)
-                except (AssertionError, RuntimeError) as e:
-                    # page.run_task() 失败，跳过更新
-                    pass
+                    # 直接调用 update，因为已在主线程
+                    self.logs.update()
+                except AssertionError as e:
+                    # 详细记录错误信息
+                    import threading
+                    import traceback
+                    error_msg = str(e) if str(e) else "控件 __uid 为 None"
+                    print(f"=== UI更新失败(AssertionError) ===")
+                    print(f"错误信息: {error_msg}")
+                    print(f"当前线程: {threading.current_thread().name}")
+                    print(f"日志控件数量: {len(self.logs.controls)}")
+                    print(f"MAX_LOG_ENTRIES: {self.MAX_LOG_ENTRIES}")
+                    print(f"队列大小: {self._log_queue.qsize()}")
+                    print(f"批量处理数量: {len(new_controls)}")
+                    print(f"堆栈信息:")
+                    traceback.print_stack()
+                    print(f"===================================")
+                except RuntimeError as e:
+                    # 事件循环已关闭
+                    if "Event loop is closed" not in str(e):
+                        raise
 
         except Exception as e:
             import traceback
             print(f"批量处理失败: {str(e)}")
             print(f"错误详情: {traceback.format_exc()}")
         finally:
+            # 确保_processing标志被重置
             self._processing = False
-            # 如果队列还有日志，安排下次处理
+            # 如果队列中还有未处理的日志，安排下一次处理
             if not self._log_queue.empty():
+                # ⭐ 递归调度（通过 page.run_task）
                 self._schedule_batch_process()
 
     def _schedule_batch_process(self):
-        """安排批量处理"""
+        """⭐ 安排批量处理（v1.2.9 方式 - 使用 page.run_task）"""
+        # 如果正在处理中，跳过（快速检查，避免竞争）
+        if self._processing:
+            return
+
         if (hasattr(self, 'view') and
             self.view.page is not None and
             not getattr(self.view.page, 'closed', False)):
             try:
-                # 定义异步函数
+                # 定义异步函数用于处理批处理
                 async def async_process_batch():
                     self._process_batch()
 
-                # 使用 page.run_task() 确保在主线程执行
+                # ⭐ 关键：使用 page.run_task() 确保在主线程执行
                 self.view.page.run_task(async_process_batch)
             except (AssertionError, RuntimeError) as e:
                 # page.run_task() 失败，尝试直接调用
@@ -788,16 +778,29 @@ class AsyncTerminal:
             # 1. 队列中有较多日志（>=3条）
             # 2. 距离上次处理已经超过50ms
             if queue_size > 0 and (queue_size >= 3 or time_since_last_process >= 0.05):
+                # 取消之前的 Timer（如果有）
+                if self._update_timer is not None:
+                    try:
+                        self._update_timer.cancel()
+                    except Exception:
+                        pass
                 self._schedule_batch_process()
             # 对于少量日志，确保不会等待太久
             elif queue_size > 0:
+                # 取消之前的 Timer（如果有）
+                if self._update_timer is not None:
+                    try:
+                        self._update_timer.cancel()
+                    except Exception:
+                        pass
+
                 # 使用 threading.Timer 安排延迟处理
                 if (hasattr(self, 'view') and
                     self.view.page is not None and
                     not getattr(self.view.page, 'closed', False)):
                     try:
-                        timer = threading.Timer(0.03, self._schedule_batch_process)  # 30ms 后处理
-                        timer.start()
+                        self._update_timer = threading.Timer(0.03, self._schedule_batch_process)  # 30ms 后处理
+                        self._update_timer.start()
                     except:
                         # 定时器设置失败，直接安排处理
                         self._schedule_batch_process()
