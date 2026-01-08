@@ -1318,9 +1318,23 @@ class UiEvent:
                     self.terminal.add_log(f"[DEBUG] 可执行文件: {executable}")
                     self.terminal.add_log(f"[DEBUG] 参数: {cmd_args}")
 
-                    # 验证可执行文件是否存在
+                    # 验证可执行文件是否存在（自动尝试添加扩展名）
                     if not os.path.isfile(executable):
-                        raise FileNotFoundError(f"找不到可执行文件: {executable}")
+                        # 在 Windows 上，如果路径没有扩展名，尝试添加常见扩展名
+                        import platform
+                        if platform.system() == 'Windows' and '.' not in os.path.basename(executable):
+                            extensions = ['.exe', '.cmd', '.bat', '.ps1']
+                            found = False
+                            for ext in extensions:
+                                if os.path.isfile(executable + ext):
+                                    executable = executable + ext
+                                    found = True
+                                    self.terminal.add_log(f"[DEBUG] 自动添加扩展名: {ext}")
+                                    break
+                            if not found:
+                                raise FileNotFoundError(f"找不到可执行文件: {executable}")
+                        else:
+                            raise FileNotFoundError(f"找不到可执行文件: {executable}")
 
                     # 使用 create_subprocess_exec 直接执行，避免通过 cmd.exe
                     process = await asyncio.create_subprocess_exec(
