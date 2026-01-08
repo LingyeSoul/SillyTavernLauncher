@@ -145,12 +145,12 @@ class AsyncTerminal:
         self._last_ui_update = 0  # 记录上次UI更新时间
         self._is_shutting_down = False  # 关闭标志，防止更新已关闭的页面
         self._ui_update_fail_count = 0  # UI更新失败计数器
-        self._max_ui_update_failures = 10  # 最大失败次数，超过则停止尝试
 
         # 启动异步日志处理循环
         self._start_log_processing_loop()
         # 启动日志文件写入线程
-        self._start_log_file_thread()
+        if self.enable_logging:
+            self._start_log_file_thread()
 
     def _start_log_processing_loop(self):
         """启动异步日志处理循环"""
@@ -511,7 +511,7 @@ class AsyncTerminal:
         return True
 
     def _process_batch(self):
-        """处理批量日志条目（显示和记录分离）"""
+        """处理批量日志条目"""
         # 阻止并发处理
         if self._processing:
             return
@@ -530,6 +530,7 @@ class AsyncTerminal:
 
             batch_limit = min(batch_limit, queue_size)
 
+            # 收集日志条目
             log_entries = []
             processed_count = 0
             while processed_count < batch_limit:
@@ -556,26 +557,36 @@ class AsyncTerminal:
             # 批量更新日志控件
             self.logs.controls.extend(new_controls)
 
-            # ⚡ 激进限制显示日志数量（确保不超过MAX_DISPLAY_LOGS）
-            current_count = len(self.logs.controls)
-            if current_count > self.MAX_DISPLAY_LOGS:
-                # 只保留最新的MAX_DISPLAY_LOGS条
-                self.logs.controls = self.logs.controls[-self.MAX_DISPLAY_LOGS:]
-            elif current_count > self.MAX_DISPLAY_LOGS * 0.7:
-                # 接近上限时，主动清理到70%
-                keep_count = int(self.MAX_DISPLAY_LOGS * 0.7)
-                self.logs.controls = self.logs.controls[-keep_count:]
+            # 限制日志数量
+            if len(self.logs.controls) > self.MAX_LOG_ENTRIES:
+                self.logs.controls = self.logs.controls[-self.MAX_LOG_ENTRIES:]
 
             # 更新处理时间
             self._last_process_time = time.time()
 
-            # ⚡ 自适应UI更新：根据队列深度决定更新方式
-            if queue_size > 100:
-                # 高负载：使用慢速更新（减少UI压力）
-                self._schedule_ui_update()
-            else:
-                # 低负载：使用快速更新（保持响应性）
-                self._schedule_ui_update_fast()
+            # 使用 page.run_task() 更新 UI（确保在主线程）
+            if (hasattr(self, 'view') and
+                self.view.page is not None and
+                not getattr(self.view.page, 'closed', False)):
+                try:
+                    # 定义异步更新函数
+                    async def async_update():
+                        try:
+                            self.logs.update()
+                        except AssertionError as e:
+                            # 记录但继续运行
+                            error_msg = str(e) if str(e) else "控件树过深或并发更新"
+                            print(f"UI更新失败(AssertionError): {error_msg}")
+                        except RuntimeError as e:
+                            # 事件循环已关闭
+                            if "Event loop is closed" not in str(e):
+                                raise
+
+                    # 使用 run_task 确保在主线程执行
+                    self.view.page.run_task(async_update)
+                except (AssertionError, RuntimeError) as e:
+                    # page.run_task() 失败，跳过更新
+                    pass
 
         except Exception as e:
             import traceback
@@ -583,132 +594,46 @@ class AsyncTerminal:
             print(f"错误详情: {traceback.format_exc()}")
         finally:
             self._processing = False
+            # 如果队列还有日志，安排下次处理
+            if not self._log_queue.empty():
+                self._schedule_batch_process()
+
+    def _schedule_batch_process(self):
+        """安排批量处理"""
+        if (hasattr(self, 'view') and
+            self.view.page is not None and
+            not getattr(self.view.page, 'closed', False)):
+            try:
+                # 定义异步函数
+                async def async_process_batch():
+                    self._process_batch()
+
+                # 使用 page.run_task() 确保在主线程执行
+                self.view.page.run_task(async_process_batch)
+            except (AssertionError, RuntimeError) as e:
+                # page.run_task() 失败，尝试直接调用
+                if "Event loop is closed" in str(e):
+                    # 事件循环已关闭，尝试直接调用
+                    try:
+                        self._process_batch()
+                    except Exception as fallback_error:
+                        print(f"日志处理失败: {str(fallback_error)}")
+                else:
+                    # 其他错误，尝试直接调用
+                    try:
+                        self._process_batch()
+                    except Exception as fallback_error:
+                        print(f"日志处理失败: {str(fallback_error)}")
 
     def _schedule_ui_update(self):
-        """防抖UI更新（避免频繁更新导致卡顿）"""
-        with self._update_lock:
-            # 如果正在关闭或失败次数过多，不再尝试更新
-            if self._is_shutting_down or self._ui_update_fail_count >= self._max_ui_update_failures:
-                return
-
-            # 取消之前的定时器（防止线程泄漏）
-            if self._update_timer is not None:
-                try:
-                    self._update_timer.cancel()
-                except Exception:
-                    pass
-
-            self._update_pending = True
-
-            def do_update():
-                try:
-                    # 检查页面是否有效
-                    if (not self._is_shutting_down and
-                        hasattr(self, 'view') and
-                        self.view is not None and
-                        hasattr(self.view, 'page') and
-                        self.view.page is not None and
-                        not getattr(self.view.page, 'closed', False)):
-
-                        # 尝试更新 UI
-                        self.logs.update()
-                        self._last_ui_update = time.time()
-                        # 更新成功，重置失败计数
-                        self._ui_update_fail_count = 0
-
-                except RuntimeError as e:
-                    # Flet 页面已关闭的典型错误
-                    if 'closed' in str(e).lower() or 'page' in str(e).lower():
-                        self._is_shutting_down = True
-                        print(f"[DEBUG] 页面已关闭，停止UI更新")
-                    else:
-                        self._ui_update_fail_count += 1
-                        print(f"UI更新失败(RuntimeError): {str(e)}, 失败计数: {self._ui_update_fail_count}")
-
-                except AssertionError as e:
-                    # Flet 内部断言失败（控件树过深等）
-                    self._ui_update_fail_count += 1
-                    print(f"UI更新失败(AssertionError): {str(e)}, 失败计数: {self._ui_update_fail_count}")
-                    if self._ui_update_fail_count >= self._max_ui_update_failures:
-                        print(f"[DEBUG] UI更新连续失败{self._ui_update_fail_count}次，停止尝试")
-                        self._is_shutting_down = True
-
-                except Exception as e:
-                    self._ui_update_fail_count += 1
-                    print(f"UI更新失败: {type(e).__name__}: {str(e)}, 失败计数: {self._ui_update_fail_count}")
-
-                finally:
-                    with self._update_lock:
-                        self._update_pending = False
-                        self._update_timer = None
-
-            # ⚡ 快速更新，减少延迟
-            self._update_timer = threading.Timer(0.05, do_update)  # 50ms延迟（从150ms降低）
-            self._update_timer.start()
+        """触发 UI 更新"""
+        # 直接调用 batch process
+        self._schedule_batch_process()
 
     def _schedule_ui_update_fast(self):
-        """快速UI更新（用于实时输出）"""
-        with self._update_lock:
-            # 如果正在关闭、失败次数过多或已有更新待处理，直接返回
-            if (self._is_shutting_down or
-                self._ui_update_fail_count >= self._max_ui_update_failures or
-                self._update_pending):
-                return
-
-            # 取消之前的定时器
-            if self._update_timer is not None:
-                try:
-                    self._update_timer.cancel()
-                except Exception:
-                    pass
-
-            self._update_pending = True
-
-            def do_update():
-                try:
-                    # 检查页面是否有效
-                    if (not self._is_shutting_down and
-                        hasattr(self, 'view') and
-                        self.view is not None and
-                        hasattr(self.view, 'page') and
-                        self.view.page is not None and
-                        not getattr(self.view.page, 'closed', False)):
-
-                        # 尝试更新 UI
-                        self.logs.update()
-                        self._last_ui_update = time.time()
-                        # 更新成功，重置失败计数
-                        self._ui_update_fail_count = 0
-
-                except RuntimeError as e:
-                    # Flet 页面已关闭的典型错误
-                    if 'closed' in str(e).lower() or 'page' in str(e).lower():
-                        self._is_shutting_down = True
-                        print(f"[DEBUG] 页面已关闭，停止UI更新")
-                    else:
-                        self._ui_update_fail_count += 1
-                        print(f"UI更新失败(RuntimeError): {str(e)}, 失败计数: {self._ui_update_fail_count}")
-
-                except AssertionError as e:
-                    # Flet 内部断言失败（控件树过深等）
-                    self._ui_update_fail_count += 1
-                    print(f"UI更新失败(AssertionError): {str(e)}, 失败计数: {self._ui_update_fail_count}")
-                    if self._ui_update_fail_count >= self._max_ui_update_failures:
-                        print(f"[DEBUG] UI更新连续失败{self._ui_update_fail_count}次，停止尝试")
-                        self._is_shutting_down = True
-
-                except Exception as e:
-                    self._ui_update_fail_count += 1
-                    print(f"UI更新失败: {type(e).__name__}: {str(e)}, 失败计数: {self._ui_update_fail_count}")
-
-                finally:
-                    with self._update_lock:
-                        self._update_pending = False
-                        self._update_timer = None
-
-            # ⚡ 极速更新：立即执行
-            self._update_timer = threading.Timer(0.01, do_update)  # 10ms延迟
-            self._update_timer.start()
+        """触发快速 UI 更新"""
+        # 直接调用 batch process
+        self._schedule_batch_process()
 
     def enable_debug_mode(self, enabled=True):
         """
@@ -752,7 +677,7 @@ class AsyncTerminal:
             # 清理多余换行（不截断）
             clean_text = re.sub(r'(\r?\n){3,}', '\n\n', text.strip())
 
-            # ⭐ 关键：日志文件记录（完整记录，不截断）
+            # 日志文件记录（完整记录，不截断）
             if self.enable_logging:
                 timestamp = datetime.datetime.now()
                 try:
@@ -764,7 +689,7 @@ class AsyncTerminal:
                     except:
                         pass  # 超时则丢弃（极端情况）
 
-            # ⭐ 终端显示队列（根据类型截断，UI显示优化）
+            # 终端显示队列（根据类型截断，UI显示优化）
             # 对详细错误日志使用更长的限制，普通日志也适当限制
             is_detailed_error = ('详细错误' in text or 'traceback' in text.lower() or
                                 'Traceback' in text or 'File "' in text)
@@ -776,7 +701,7 @@ class AsyncTerminal:
             else:
                 processed_text = clean_text
 
-            # ⭐ 终端显示队列（激进丢弃，只保留末尾）
+            # 终端显示队列（激进丢弃，只保留末尾）
             current_queue_size = self._log_queue.qsize()
 
             # 过载检测：如果队列过大，启用激进截断模式
@@ -854,8 +779,28 @@ class AsyncTerminal:
                         # 替换队列
                         self._log_queue = new_queue
 
-            # 主动触发日志处理
-            self._trigger_log_processing()
+            # 立即安排处理
+            queue_size = self._log_queue.qsize()
+            current_time = time.time()
+            time_since_last_process = current_time - self._last_process_time
+
+            # 如果队列中有日志且满足以下条件之一，则立即处理：
+            # 1. 队列中有较多日志（>=3条）
+            # 2. 距离上次处理已经超过50ms
+            if queue_size > 0 and (queue_size >= 3 or time_since_last_process >= 0.05):
+                self._schedule_batch_process()
+            # 对于少量日志，确保不会等待太久
+            elif queue_size > 0:
+                # 使用 threading.Timer 安排延迟处理
+                if (hasattr(self, 'view') and
+                    self.view.page is not None and
+                    not getattr(self.view.page, 'closed', False)):
+                    try:
+                        timer = threading.Timer(0.03, self._schedule_batch_process)  # 30ms 后处理
+                        timer.start()
+                    except:
+                        # 定时器设置失败，直接安排处理
+                        self._schedule_batch_process()
 
         except (TypeError, IndexError, AttributeError) as e:
             import traceback
