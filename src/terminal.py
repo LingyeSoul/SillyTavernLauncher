@@ -66,6 +66,7 @@ class AsyncTerminal:
     MAX_QUEUE_SIZE = 1000  # 队列最大条目数（背压机制）
     MAX_LOG_ENTRIES = 500  # 减少UI控件数量（从1500降到500）
     LOG_MAX_LENGTH = 1000  # 单条日志长度限制（从2000降到1000）
+    LOG_MAX_LENGTH_DETAILED = 5000  # 详细日志（如traceback）的长度限制
     BATCH_SIZE_THRESHOLD = 50  # 批量处理阈值（从30增加到50）
     PROCESS_INTERVAL = 0.05  # 处理间隔50ms（从20ms增加到50ms）
 
@@ -142,6 +143,9 @@ class AsyncTerminal:
         self._update_lock = threading.Lock()
         self._update_timer = None  # 存储Timer对象以便取消
         self._last_ui_update = 0  # 记录上次UI更新时间
+        self._is_shutting_down = False  # 关闭标志，防止更新已关闭的页面
+        self._ui_update_fail_count = 0  # UI更新失败计数器
+        self._max_ui_update_failures = 10  # 最大失败次数，超过则停止尝试
 
         # 启动异步日志处理循环
         self._start_log_processing_loop()
@@ -583,6 +587,10 @@ class AsyncTerminal:
     def _schedule_ui_update(self):
         """防抖UI更新（避免频繁更新导致卡顿）"""
         with self._update_lock:
+            # 如果正在关闭或失败次数过多，不再尝试更新
+            if self._is_shutting_down or self._ui_update_fail_count >= self._max_ui_update_failures:
+                return
+
             # 取消之前的定时器（防止线程泄漏）
             if self._update_timer is not None:
                 try:
@@ -594,11 +602,41 @@ class AsyncTerminal:
 
             def do_update():
                 try:
-                    if hasattr(self, 'view') and self.view.page is not None:
+                    # 检查页面是否有效
+                    if (not self._is_shutting_down and
+                        hasattr(self, 'view') and
+                        self.view is not None and
+                        hasattr(self.view, 'page') and
+                        self.view.page is not None and
+                        not getattr(self.view.page, 'closed', False)):
+
+                        # 尝试更新 UI
                         self.logs.update()
                         self._last_ui_update = time.time()
+                        # 更新成功，重置失败计数
+                        self._ui_update_fail_count = 0
+
+                except RuntimeError as e:
+                    # Flet 页面已关闭的典型错误
+                    if 'closed' in str(e).lower() or 'page' in str(e).lower():
+                        self._is_shutting_down = True
+                        print(f"[DEBUG] 页面已关闭，停止UI更新")
+                    else:
+                        self._ui_update_fail_count += 1
+                        print(f"UI更新失败(RuntimeError): {str(e)}, 失败计数: {self._ui_update_fail_count}")
+
+                except AssertionError as e:
+                    # Flet 内部断言失败（控件树过深等）
+                    self._ui_update_fail_count += 1
+                    print(f"UI更新失败(AssertionError): {str(e)}, 失败计数: {self._ui_update_fail_count}")
+                    if self._ui_update_fail_count >= self._max_ui_update_failures:
+                        print(f"[DEBUG] UI更新连续失败{self._ui_update_fail_count}次，停止尝试")
+                        self._is_shutting_down = True
+
                 except Exception as e:
-                    print(f"UI更新失败: {str(e)}")
+                    self._ui_update_fail_count += 1
+                    print(f"UI更新失败: {type(e).__name__}: {str(e)}, 失败计数: {self._ui_update_fail_count}")
+
                 finally:
                     with self._update_lock:
                         self._update_pending = False
@@ -611,8 +649,10 @@ class AsyncTerminal:
     def _schedule_ui_update_fast(self):
         """快速UI更新（用于实时输出）"""
         with self._update_lock:
-            # 如果已经有更新在等待，不重复调度
-            if self._update_pending:
+            # 如果正在关闭、失败次数过多或已有更新待处理，直接返回
+            if (self._is_shutting_down or
+                self._ui_update_fail_count >= self._max_ui_update_failures or
+                self._update_pending):
                 return
 
             # 取消之前的定时器
@@ -626,11 +666,41 @@ class AsyncTerminal:
 
             def do_update():
                 try:
-                    if hasattr(self, 'view') and self.view.page is not None:
+                    # 检查页面是否有效
+                    if (not self._is_shutting_down and
+                        hasattr(self, 'view') and
+                        self.view is not None and
+                        hasattr(self.view, 'page') and
+                        self.view.page is not None and
+                        not getattr(self.view.page, 'closed', False)):
+
+                        # 尝试更新 UI
                         self.logs.update()
                         self._last_ui_update = time.time()
+                        # 更新成功，重置失败计数
+                        self._ui_update_fail_count = 0
+
+                except RuntimeError as e:
+                    # Flet 页面已关闭的典型错误
+                    if 'closed' in str(e).lower() or 'page' in str(e).lower():
+                        self._is_shutting_down = True
+                        print(f"[DEBUG] 页面已关闭，停止UI更新")
+                    else:
+                        self._ui_update_fail_count += 1
+                        print(f"UI更新失败(RuntimeError): {str(e)}, 失败计数: {self._ui_update_fail_count}")
+
+                except AssertionError as e:
+                    # Flet 内部断言失败（控件树过深等）
+                    self._ui_update_fail_count += 1
+                    print(f"UI更新失败(AssertionError): {str(e)}, 失败计数: {self._ui_update_fail_count}")
+                    if self._ui_update_fail_count >= self._max_ui_update_failures:
+                        print(f"[DEBUG] UI更新连续失败{self._ui_update_fail_count}次，停止尝试")
+                        self._is_shutting_down = True
+
                 except Exception as e:
-                    print(f"UI更新失败: {str(e)}")
+                    self._ui_update_fail_count += 1
+                    print(f"UI更新失败: {type(e).__name__}: {str(e)}, 失败计数: {self._ui_update_fail_count}")
+
                 finally:
                     with self._update_lock:
                         self._update_pending = False
@@ -679,21 +749,32 @@ class AsyncTerminal:
                             pass
                 return
 
-            # 限制单条日志长度并清理多余换行
-            processed_text = text[:self.LOG_MAX_LENGTH]
-            processed_text = re.sub(r'(\r?\n){3,}', '\n\n', processed_text.strip())
+            # 清理多余换行（不截断）
+            clean_text = re.sub(r'(\r?\n){3,}', '\n\n', text.strip())
 
-            # ⭐ 关键：日志文件记录（完整记录，不丢弃）
+            # ⭐ 关键：日志文件记录（完整记录，不截断）
             if self.enable_logging:
                 timestamp = datetime.datetime.now()
                 try:
-                    self._log_file_queue.put_nowait((timestamp, processed_text))
+                    self._log_file_queue.put_nowait((timestamp, clean_text))
                 except queue.Full:
                     # 日志文件队列也满了，阻塞等待（确保不丢失）
                     try:
-                        self._log_file_queue.put((timestamp, processed_text), block=True, timeout=1.0)
+                        self._log_file_queue.put((timestamp, clean_text), block=True, timeout=1.0)
                     except:
                         pass  # 超时则丢弃（极端情况）
+
+            # ⭐ 终端显示队列（根据类型截断，UI显示优化）
+            # 对详细错误日志使用更长的限制，普通日志也适当限制
+            is_detailed_error = ('详细错误' in text or 'traceback' in text.lower() or
+                                'Traceback' in text or 'File "' in text)
+            max_length = self.LOG_MAX_LENGTH_DETAILED if is_detailed_error else self.LOG_MAX_LENGTH
+
+            # 截断时保留末尾（重要信息通常在末尾）
+            if len(clean_text) > max_length:
+                processed_text = '...' + clean_text[-max_length:]
+            else:
+                processed_text = clean_text
 
             # ⭐ 终端显示队列（激进丢弃，只保留末尾）
             current_queue_size = self._log_queue.qsize()

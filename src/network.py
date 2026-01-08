@@ -45,7 +45,7 @@ class NetworkManager:
 
     def get_local_ip(self) -> Optional[str]:
         """
-        获取本机局域网IP地址（带缓存）
+        获取本机局域网IP地址（带缓存，优先选择物理网卡）
 
         Returns:
             str: 本机局域网IP地址，如果获取失败则返回None
@@ -69,42 +69,32 @@ class NetworkManager:
 
             output = result.stdout
 
-            # 使用正则表达式查找IPv4地址
-            # 匹配模式：IPv4 地址 . . . . . . . . . . . : 192.168.1.100
-            ipv4_pattern = r'IPv4 地址[\. ]+\: ([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})'
-            # 备用匹配模式：IP Address. . . . . . . . . . . : 192.168.1.100
-            ipv4_pattern_en = r'IP Address[\. ]+\: ([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})'
+            # 解析适配器信息和对应的IP地址
+            adapter_ips = self._parse_adapter_ips(output)
 
-            # 查找所有匹配的IP地址
-            ips_chinese = re.findall(ipv4_pattern, output)
-            ips_english = re.findall(ipv4_pattern_en, output)
-            all_ips = ips_chinese + ips_english
+            if adapter_ips:
+                # 按适配器优先级排序，选择最佳IP
+                best_adapter = min(adapter_ips, key=lambda x: (
+                    x['priority'],  # 适配器类型优先级
+                    self._get_ip_priority(x['ip'])  # IP段优先级
+                ))
 
-            if all_ips:
-                # 过滤出有效的IP地址
-                valid_ips = []
-                for ip in all_ips:
-                    if self._is_valid_ip(ip) and not ip.startswith("127.") and not ip.startswith("169.254."):
-                        valid_ips.append(ip)
+                best_ip = best_adapter['ip']
 
-                if valid_ips:
-                    # 按优先级排序，选择优先级最高的IP
-                    valid_ips.sort(key=lambda ip: self._get_ip_priority(ip))
-                    best_ip = valid_ips[0]
+                # 缓存结果并更新时间戳
+                self._cached_local_ip = best_ip
+                self._last_ip_check_time = current_time
 
-                    # 缓存结果并更新时间戳
-                    self._cached_local_ip = best_ip
-                    self._last_ip_check_time = current_time
+                # 记录日志信息
+                adapter_type = best_adapter['type']
+                if adapter_type == 'physical':
+                    self._log(f"通过ipconfig获取物理网卡IP: {best_ip} ({best_adapter.get('name', '未知适配器')})", 'success')
+                elif adapter_type == 'vm':
+                    self._log(f"警告：仅检测到虚拟网卡IP: {best_ip} ({best_adapter.get('name', '虚拟适配器')})", 'warning')
+                else:
+                    self._log(f"通过ipconfig获取IP: {best_ip} ({best_adapter.get('name', '适配器')})", 'info')
 
-                    # 根据IP类型记录不同的日志信息
-                    if best_ip.startswith("192.168."):
-                        self._log(f"通过ipconfig获取优选内网IP(192.168.x.x): {best_ip}", 'success')
-                    elif self._is_valid_lan_ip(best_ip):
-                        self._log(f"通过ipconfig获取内网IP: {best_ip}", 'success')
-                    else:
-                        self._log(f"通过ipconfig获取IP: {best_ip}", 'info')
-
-                    return best_ip
+                return best_ip
 
         except Exception as e:
             self._log(f"使用ipconfig获取IP失败: {e}", 'error')
@@ -115,6 +105,129 @@ class NetworkManager:
             self._cached_local_ip = fallback_ip
             self._last_ip_check_time = current_time
         return fallback_ip
+
+    def _parse_adapter_ips(self, ipconfig_output: str) -> list:
+        """
+        解析ipconfig输出，提取适配器信息和对应的IP地址
+
+        Args:
+            ipconfig_output: ipconfig命令的输出
+
+        Returns:
+            list: 适配器信息列表，每个元素包含 {'ip': str, 'name': str, 'type': str, 'priority': int}
+        """
+        adapters = []
+
+        # 按适配器分割输出
+        # Windows ipconfig 中每个适配器以适配器名称开头（通常不缩进或缩进较少）
+        # 使用更简单的分割方法：按行分割，然后识别适配器块
+        adapter_blocks = []
+        current_block = []
+
+        for line in ipconfig_output.split('\n'):
+            # 如果行首没有缩进（或缩进很少），且不为空，通常是新适配器的开始
+            if line.strip() and not line.startswith(' ') and not line.startswith('\t'):
+                # 保存前一个块
+                if current_block:
+                    adapter_blocks.append('\n'.join(current_block))
+                # 开始新块
+                current_block = [line]
+            elif current_block:  # 如果已经在块中，继续添加
+                current_block.append(line)
+
+        # 添加最后一个块
+        if current_block:
+            adapter_blocks.append('\n'.join(current_block))
+
+        for block in adapter_blocks:
+            if not block.strip():
+                continue
+
+            # 提取适配器名称（第一行）
+            lines = block.strip().split('\n')
+            adapter_name = lines[0].strip() if lines else ''
+
+            # 跳过没有IPv4地址的适配器
+            has_ipv4 = False
+            for line in lines:
+                if 'IPv4 地址' in line or 'IP Address' in line:
+                    has_ipv4 = True
+                    break
+
+            if not has_ipv4:
+                continue
+
+            # 判断适配器类型
+            adapter_type, priority = self._classify_adapter(adapter_name)
+
+            # 提取IPv4地址
+            ipv4_pattern = r'IPv4 地址[\. ]+\: ([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})'
+            ipv4_pattern_en = r'IP Address[\. ]+\: ([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})'
+
+            ips_chinese = re.findall(ipv4_pattern, block)
+            ips_english = re.findall(ipv4_pattern_en, block)
+            all_ips = ips_chinese + ips_english
+
+            # 过滤有效的IP地址
+            for ip in all_ips:
+                if self._is_valid_ip(ip) and not ip.startswith("127.") and not ip.startswith("169.254."):
+                    adapters.append({
+                        'ip': ip,
+                        'name': adapter_name,
+                        'type': adapter_type,
+                        'priority': priority
+                    })
+
+        return adapters
+
+    def _classify_adapter(self, adapter_name: str) -> tuple:
+        """
+        判断适配器类型和优先级
+
+        Args:
+            adapter_name: 适配器名称
+
+        Returns:
+            tuple: (适配器类型, 优先级数值)
+                   适配器类型: 'physical' (物理网卡), 'vm' (虚拟机), 'vpn' (VPN), 'other' (其他)
+                   优先级数值: 0为最高优先级
+        """
+        name_lower = adapter_name.lower()
+
+        # 虚拟机相关关键词（最低优先级）
+        vm_keywords = [
+            'vmware', 'virtualbox', 'virtual', 'vbox', 'vethernet',
+            'hyper-v', 'vethernet', 'docker', 'wsl', 'vnc'
+        ]
+        # VPN相关关键词（次低优先级）
+        vpn_keywords = [
+            'vpn', 'tap', 'tun', 'ppp', 'pptp', 'l2tp', 'cisco',
+            'fortinet', 'openvpn', 'wireguard', 'nordvpn', 'expressvpn'
+        ]
+        # 物理网卡相关关键词（高优先级）
+        physical_keywords = [
+            'ethernet', 'realtek', 'intel', 'broadcom', 'nvidia',
+            'wi-fi', 'wireless', '802.11', 'wlan', 'wifi', 'qualcomm',
+            'atheros', 'killer', 'controller'
+        ]
+
+        # 检查是否为虚拟机适配器
+        for keyword in vm_keywords:
+            if keyword in name_lower:
+                return ('vm', 30)  # 虚拟机最低优先级
+
+        # 检查是否为VPN适配器
+        for keyword in vpn_keywords:
+            if keyword in name_lower:
+                return ('vpn', 20)  # VPN次低优先级
+
+        # 检查是否为物理网卡
+        for keyword in physical_keywords:
+            if keyword in name_lower:
+                return ('physical', 10)  # 物理网卡最高优先级
+
+        # 默认为其他类型
+        return ('other', 25)
 
     def _fallback_get_local_ip(self) -> Optional[str]:
         """

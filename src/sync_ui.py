@@ -14,57 +14,6 @@ from typing import Optional
 import flet as ft
 import network
 from network import get_network_manager
-# ANSI颜色代码正则表达式
-ANSI_ESCAPE_REGEX = re.compile(r'\x1b\[[0-9;]*m')
-COLOR_MAP = {
-    '\x1b[30m': ft.Colors.BLACK,
-    '\x1b[31m': ft.Colors.RED,
-    '\x1b[32m': ft.Colors.GREEN,
-    '\x1b[33m': ft.Colors.YELLOW,
-    '\x1b[34m': ft.Colors.BLUE,
-    '\x1b[35m': ft.Colors.PURPLE,
-    '\x1b[36m': ft.Colors.CYAN,
-    '\x1b[37m': ft.Colors.WHITE,
-    '\x1b[90m': ft.Colors.GREY,
-    '\x1b[91m': ft.Colors.RED_300,
-    '\x1b[92m': ft.Colors.GREEN_300,
-    '\x1b[93m': ft.Colors.YELLOW_300,
-    '\x1b[94m': ft.Colors.BLUE_300,
-    '\x1b[95m': ft.Colors.PURPLE_300,
-    '\x1b[96m': ft.Colors.CYAN_300,
-    '\x1b[97m': ft.Colors.WHITE,
-    '\x1b[0m': None,  # 重置代码
-    '\x1b[m': None   # 重置代码
-}
-
-def parse_ansi_text(text):
-    """解析ANSI文本并返回带有颜色样式的TextSpan对象列表"""
-    if not text:
-        return []
-
-    # 使用正则表达式分割ANSI代码和文本
-    parts = ANSI_ESCAPE_REGEX.split(text)
-    ansi_codes = ANSI_ESCAPE_REGEX.findall(text)
-
-    spans = []
-    current_color = None
-
-    # 第一个部分没有前置的ANSI代码
-    if parts and parts[0]:
-        spans.append(ft.TextSpan(parts[0], style=ft.TextStyle(color=current_color)))
-
-    # 处理剩余部分和对应的ANSI代码
-    for i, part in enumerate(parts[1:]):
-        if i < len(ansi_codes):
-            ansi_code = ansi_codes[i]
-            if ansi_code in COLOR_MAP:
-                current_color = COLOR_MAP[ansi_code]
-
-        if part:  # 非空文本部分
-            # 创建带颜色的文本片段
-            spans.append(ft.TextSpan(part, style=ft.TextStyle(color=current_color)))
-
-    return spans
 
 try:
     from data_sync_manager import DataSyncManager
@@ -95,29 +44,6 @@ class DataSyncUI:
         self._controls = {}
         self._init_error = None
 
-        # AsyncTerminal 相关属性
-        self.launch_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        # 异步处理相关属性
-        self._log_queue = queue.Queue()  # 使用队列作为缓冲区
-        self._last_process_time = 0  # 上次处理时间
-        self._process_interval = 0.02  # 处理间隔（秒）- 优化为20ms以提高响应性
-        self._processing = False  # 阻止并发处理
-        self._batch_size_threshold = 30  # 批量处理阈值 - 调整为30以平衡性能和响应性
-        self._stop_event = threading.Event()  # 停止事件
-        self._max_log_entries = 1500  # 最大日志条目数 - 调整为1500以减少内存占用
-
-        # 日志文件写入线程相关属性
-        self._log_file_queue = queue.Queue()
-        self._log_file_thread = None
-        self._log_file_stop_event = threading.Event()
-
-        # 首次启动对话框相关属性
-        self._first_server_dialog = None
-        self._dialog_countdown_timer = None
-        self._dialog_countdown = 60  # 60秒倒计时
-        self._dialog_countdown_active = False
-
         # 读取配置文件中的日志设置
         self.enable_logging = True  # 默认启用日志
         try:
@@ -126,6 +52,15 @@ class DataSyncUI:
         except:
             pass
 
+        # 首次启动对话框相关属性
+        self._first_server_dialog = None
+        self._dialog_countdown_timer = None
+        self._dialog_countdown = 60  # 60秒倒计时
+        self._dialog_countdown_active = False
+
+        # ⭐ 使用 AsyncTerminal 替代自定义日志系统
+        self.terminal = None  # 将在 build_ui 时延迟初始化
+
     def _ensure_manager(self):
         """Ensure sync manager is initialized (lazy loading)"""
         if self.sync_manager is None:
@@ -133,8 +68,9 @@ class DataSyncUI:
                 raise ImportError("同步模块不可用，请检查依赖安装")
             try:
                 self.sync_manager = DataSyncManager(self.data_dir, self.config_manager)
-                # Set UI log callback to direct messages to the log control
-                self.sync_manager.set_ui_log_callback(self._add_log)
+                # Set UI log callback to use terminal
+                if self.terminal:
+                    self.sync_manager.set_ui_log_callback(self.terminal.add_log)
             except Exception as e:
                 raise Exception(f"同步管理器初始化失败: {e}")
 
@@ -261,17 +197,30 @@ class DataSyncUI:
         )
 
     def _create_log_area(self):
-        """Create enhanced log area control with ANSI color support"""
-        self._controls['log_area'] = ft.ListView(
-            height=200,
-            spacing=2,
-            padding=5,
-            auto_scroll=True
+        """Create enhanced log area control using AsyncTerminal with fixed height and scroll"""
+        # 导入并创建 AsyncTerminal 实例
+        from terminal import AsyncTerminal
+
+        # 创建 terminal 实例（复用启动器的日志系统）
+        self.terminal = AsyncTerminal(
+            page=self.page,
+            enable_logging=self.enable_logging,
+            local_enabled=False  # 不需要显示局域网IP
         )
 
-        # 启动异步日志处理循环和日志文件写入线程
-        self._start_log_processing_loop()
-        self._start_log_file_thread()
+        # 设置回调到同步管理器
+        if self.sync_manager:
+            self.sync_manager.set_ui_log_callback(self.terminal.add_log)
+
+        # 创建固定高度的可滚动容器包装 terminal.logs
+        log_container = ft.Container(
+            content=self.terminal.logs,
+            height=250,  # 固定高度
+            padding=5,
+        )
+
+        # 将容器作为日志区域（而不是直接使用 terminal.logs）
+        self._controls['log_area'] = log_container
 
     def _create_full_layout(self) -> ft.Column:
         """Create the complete UI layout"""
@@ -516,70 +465,9 @@ class DataSyncUI:
                     raise
 
         except Exception as e:
-            self._add_log(f"更新UI时出错: {e}")
+            if self.terminal:
 
-    def _add_log(self, message: str, level: str = 'info'):
-        """
-        线程安全的异步日志添加方法
-        支持ANSI颜色代码和多种日志级别
-
-        Args:
-            message (str): 日志消息
-            level (str): 日志级别 ('info', 'success', 'warning', 'error')
-        """
-        import re
-        LOG_MAX_LENGTH = 2000  # 单条日志长度限制
-
-        try:
-            # 优先处理空值情况
-            if not message:
-                return
-
-            # 限制单条日志长度并清理多余换行
-            processed_message = message[:LOG_MAX_LENGTH].replace('\r\n', '\n').replace('\r', '\n')
-
-            # 添加到异步处理队列
-            log_entry = {
-                'timestamp': time.strftime("%H:%M:%S"),
-                'full_timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
-                'message': processed_message,
-                'level': level.lower()
-            }
-
-            self._log_queue.put(log_entry)
-
-        except Exception as e:
-            import traceback
-            print(f"添加日志时发生未知错误: {str(e)}")
-            print(f"错误详情: {traceback.format_exc()}")
-
-    def _add_log_legacy(self, message: str):
-        """兼容旧版本的日志添加方法（直接添加到UI，不使用队列）"""
-        if self.page is None:
-            return  # Don't log if page is being destroyed
-
-        # Check if log area is initialized
-        if 'log_area' not in self._controls:
-            return  # Log area not yet initialized
-
-        timestamp = time.strftime("%H:%M:%S")
-        log_entry = ft.Text(f"[{timestamp}] {message}", size=11)
-        self._controls['log_area'].controls.append(log_entry)
-
-        # Keep only last 50 entries
-        if len(self._controls['log_area'].controls) > 50:
-            self._controls['log_area'].controls = self._controls['log_area'].controls[-50:]
-
-        # Update page safely
-        try:
-            if self.page:
-                self.page.update()
-        except RuntimeError as re:
-            if "Event loop is closed" in str(re):
-                # Page is shutting down, clear reference
-                self.page = None
-            else:
-                raise
+                self.terminal.add_log(f"更新UI时出错: {e}")
 
     def _on_server_toggle(self, e):
         """Handle server switch toggle"""
@@ -610,9 +498,13 @@ class DataSyncUI:
                         success = self.sync_manager.start_sync_server(port, host)
 
                         if success:
-                            self._add_log(f"同步服务已启动: {self.sync_manager.get_server_url()}")
+                            if self.terminal:
+
+                                self.terminal.add_log(f"同步服务已启动: {self.sync_manager.get_server_url()}")
                         else:
-                            self._add_log("启动同步服务失败")
+                            if self.terminal:
+
+                                self.terminal.add_log("启动同步服务失败")
                             if self.page:
                                 self.page.snack_bar = ft.SnackBar(content=ft.Text("启动同步服务失败"), bgcolor=ft.Colors.RED_500)
                                 self.page.snack_bar.open = True
@@ -620,14 +512,20 @@ class DataSyncUI:
                 else:
                     success = self.sync_manager.stop_sync_server()
                     if success:
-                        self._add_log("同步服务已停止")
+                        if self.terminal:
+
+                            self.terminal.add_log("同步服务已停止")
                     else:
-                        self._add_log("停止同步服务失败")
+                        if self.terminal:
+
+                            self.terminal.add_log("停止同步服务失败")
 
                 self._update_ui()
 
             except Exception as ex:
-                self._add_log(f"切换服务器状态时出错: {ex}")
+                if self.terminal:
+
+                    self.terminal.add_log(f"切换服务器状态时出错: {ex}")
 
         # Run in background thread to avoid blocking UI
         threading.Thread(target=toggle_server, daemon=True).start()
@@ -782,9 +680,13 @@ class DataSyncUI:
                 def start_server_after_dialog():
                     success = self.sync_manager.start_sync_server(port, host)
                     if success:
-                        self._add_log(f"同步服务已启动: {self.sync_manager.get_server_url()}")
+                        if self.terminal:
+
+                            self.terminal.add_log(f"同步服务已启动: {self.sync_manager.get_server_url()}")
                     else:
-                        self._add_log("启动同步服务失败")
+                        if self.terminal:
+
+                            self.terminal.add_log("启动同步服务失败")
                         if self.page:
                             self.page.snack_bar = ft.SnackBar(content=ft.Text("启动同步服务失败"), bgcolor=ft.Colors.RED_500)
                             self.page.snack_bar.open = True
@@ -830,14 +732,18 @@ class DataSyncUI:
             # 启动倒计时
             start_countdown()
         except Exception as ex:
-            self._add_log(f"显示对话框时出错: {ex}")
+            if self.terminal:
+
+                self.terminal.add_log(f"显示对话框时出错: {ex}")
 
     def _scan_servers(self, e):
         """Scan for servers on network"""
         def scan():
             try:
                 self._ensure_manager()
-                self._add_log("开始扫描局域网服务器...")
+                if self.terminal:
+
+                    self.terminal.add_log("开始扫描局域网服务器...")
                 servers = self.sync_manager.detect_network_servers()
 
                 server_list = self._controls.get('server_list')
@@ -871,17 +777,24 @@ class DataSyncUI:
                             )
                             server_list.controls.append(server_card)
 
-                        self._add_log(f"发现 {len(servers)} 个服务器")
+                        if self.terminal:
+
+
+                            self.terminal.add_log(f"发现 {len(servers)} 个服务器")
                     else:
                         no_server_text = ft.Text("未发现服务器", italic=True, color=ft.Colors.GREY_600)
                         server_list.controls.append(no_server_text)
-                        self._add_log("未发现服务器")
+                        if self.terminal:
+
+                            self.terminal.add_log("未发现服务器")
 
                 if self.page:
                     self.page.update()
 
             except Exception as ex:
-                self._add_log(f"扫描服务器时出错: {ex}")
+                if self.terminal:
+
+                    self.terminal.add_log(f"扫描服务器时出错: {ex}")
 
         # Run in background thread
         threading.Thread(target=scan, daemon=True).start()
@@ -893,7 +806,9 @@ class DataSyncUI:
             server_url_input.value = server_url
             if self.page:
                 self.page.update()
-        self._add_log(f"已选择服务器: {server_url}")
+        if self.terminal:
+
+            self.terminal.add_log(f"已选择服务器: {server_url}")
 
     def _start_sync(self, e):
         """Start data synchronization"""
@@ -908,25 +823,36 @@ class DataSyncUI:
                 if server_url_input:
                     server_url = server_url_input.value.strip()
                     if not server_url:
-                        self._add_log("请输入服务器地址")
+                        if self.terminal:
+
+                            self.terminal.add_log("请输入服务器地址")
                         return
 
                     method = method_dropdown.value if method_dropdown else "auto"
                     backup = backup_switch.value if backup_switch else True
 
-                    self._add_log(f"开始同步: {server_url}")
-                    self._add_log(f"同步方法: {method}, 备份数据: {'是' if backup else '否'}")
+                    if self.terminal:
+
+
+                        self.terminal.add_log(f"开始同步: {server_url}")
+                    if self.terminal:
+
+                        self.terminal.add_log(f"同步方法: {method}, 备份数据: {'是' if backup else '否'}")
 
                     success = self.sync_manager.sync_from_server(server_url, method, backup)
 
                     if success:
-                        self._add_log("数据同步完成!")
+                        if self.terminal:
+
+                            self.terminal.add_log("数据同步完成!")
                         if self.page:
                             self.page.snack_bar = ft.SnackBar(content=ft.Text("数据同步完成!"), bgcolor=ft.Colors.GREEN_500)
                             self.page.snack_bar.open = True
                             self.page.update()
                     else:
-                        self._add_log("数据同步失败!")
+                        if self.terminal:
+
+                            self.terminal.add_log("数据同步失败!")
                         if self.page:
                             self.page.snack_bar = ft.SnackBar(content=ft.Text("数据同步失败!"), bgcolor=ft.Colors.RED_500)
                             self.page.snack_bar.open = True
@@ -935,7 +861,9 @@ class DataSyncUI:
                     self._update_ui()
 
             except Exception as ex:
-                self._add_log(f"同步过程中出错: {ex}")
+                if self.terminal:
+
+                    self.terminal.add_log(f"同步过程中出错: {ex}")
                 if self.page:
                     self.page.snack_bar = ft.SnackBar(content=ft.Text(f"同步失败: {ex}"), bgcolor=ft.Colors.RED_500)
                     self.page.snack_bar.open = True
@@ -955,8 +883,12 @@ class DataSyncUI:
         # Stop dialog countdown
         self._dialog_countdown_active = False
 
-        # Stop async logging system
-        self._stop_async_logging()
+        # Clean up terminal (AsyncTerminal 会自动管理清理)
+        if self.terminal:
+            try:
+                self.terminal._is_shutting_down = True
+            except Exception:
+                pass
 
         # Stop sync server if running
         if self.sync_manager:
@@ -1014,252 +946,6 @@ class DataSyncUI:
             return False
 
     # ================ AsyncTerminal 相关方法 ================
-
-    def _start_log_processing_loop(self):
-        """启动异步日志处理循环"""
-        def log_processing_worker():
-            while not self._stop_event.is_set():
-                try:
-                    # 等待一小段时间或直到有日志需要处理
-                    if not self._log_queue.empty():
-                        self._process_batch()
-                    time.sleep(0.02)  # 20ms间隔检查 - 提高检查频率以提高响应性
-                except Exception as e:
-                    print(f"日志处理循环错误: {str(e)}")
-
-        # 在单独的线程中运行日志处理循环
-        self._log_thread = threading.Thread(target=log_processing_worker, daemon=True)
-        self._log_thread.start()
-
-    def _start_log_file_thread(self):
-        """启动日志文件写入线程"""
-        def log_file_worker():
-            """日志文件写入工作线程"""
-            while not self._log_file_stop_event.is_set():
-                try:
-                    # 批量处理日志文件写入
-                    entries = []
-                    try:
-                        # 先处理一个日志条目
-                        entry = self._log_file_queue.get(timeout=0.1)
-                        entries.append(entry)
-
-                        # 尝试获取更多日志条目进行批量处理
-                        while len(entries) < 50:  # 最多批量处理50条
-                            try:
-                                entry = self._log_file_queue.get_nowait()
-                                entries.append(entry)
-                            except queue.Empty:
-                                break
-                    except queue.Empty:
-                        continue
-
-                    if entries:
-                        self._write_log_entries_to_file(entries)
-
-                except Exception as e:
-                    print(f"日志文件写入线程错误: {str(e)}")
-
-        # 启动日志文件写入线程
-        self._log_file_thread = threading.Thread(target=log_file_worker, daemon=True)
-        self._log_file_thread.start()
-
-    def _process_batch(self):
-        """处理批量日志条目"""
-        # 阻止并发处理
-        if self._processing:
-            return
-
-        # 获取当前时间
-        current_time = time.time()
-
-        # 检查是否需要处理（基于时间间隔或队列大小）
-        queue_size = self._log_queue.qsize()
-
-        # 需要处理的条件：时间间隔到了或队列积压较多
-        should_process = (
-            (current_time - self._last_process_time >= self._process_interval) or
-            (queue_size >= self._batch_size_threshold)
-        )
-
-        if not should_process:
-            return
-
-        try:
-            self._processing = True
-            self._last_process_time = current_time
-
-            # 批量处理日志条目
-            batch = []
-            processed_count = 0
-
-            # 限制单次处理的条目数量
-            max_batch_size = min(self._batch_size_threshold * 2, queue_size)
-
-            while processed_count < max_batch_size and not self._log_queue.empty():
-                try:
-                    entry = self._log_queue.get_nowait()
-                    batch.append(entry)
-                    processed_count += 1
-                except queue.Empty:
-                    break
-
-            if batch:
-                self._add_log_batch_to_ui(batch)
-
-        except Exception as e:
-            print(f"批量处理日志时出错: {str(e)}")
-            import traceback
-            print(f"详细错误信息: {traceback.format_exc()}")
-        finally:
-            self._processing = False
-
-    def _add_log_batch_to_ui(self, batch):
-        """批量添加日志到UI"""
-        if self.page is None or 'log_area' not in self._controls:
-            return
-
-        try:
-            for entry in batch:
-                timestamp = entry.get('timestamp', time.strftime("%H:%M:%S"))
-                message = entry.get('message', '')
-                level = entry.get('level', 'info')
-
-                # 解析 ANSI 颜色代码
-                spans = parse_ansi_text(message)
-
-                if spans and len(spans) > 1:  # 有颜色代码
-                    try:
-                        # Flet Text 支持多个 spans，但是需要不同的格式
-                        colored_parts = []
-                        for span in spans:
-                            if span.style and span.style.color:
-                                colored_parts.append(ft.Text(
-                                    span.text,
-                                    size=11,
-                                    color=span.style.color
-                                ))
-                            else:
-                                colored_parts.append(ft.Text(span.text, size=11))
-
-                        # 组合时间戳和彩色文本
-                        log_entry = ft.Row([
-                            ft.Text(f"[{timestamp}] ", size=11, color=ft.Colors.GREY_600),
-                            *colored_parts
-                        ], spacing=0, wrap=True)
-
-                    except Exception:
-                        # 如果彩色渲染失败，使用普通文本
-                        color = self._get_level_color(level)
-                        log_entry = ft.Text(
-                            f"[{timestamp}] {message}",
-                            size=11,
-                            color=color
-                        )
-                else:
-                    # 普通文本，使用不同颜色表示不同级别
-                    color = self._get_level_color(level)
-                    log_entry = ft.Text(
-                        f"[{timestamp}] {message}",
-                        size=11,
-                        color=color
-                    )
-
-                self._controls['log_area'].controls.append(log_entry)
-
-                # 同时添加到文件写入队列
-                self._log_file_queue.put({
-                    'timestamp': entry.get('full_timestamp', time.strftime("%Y-%m-%d %H:%M:%S")),
-                    'level': level,
-                    'message': message
-                })
-
-            # 保持最大日志条目数限制
-            if len(self._controls['log_area'].controls) > self._max_log_entries:
-                # 保留最后的一半日志
-                keep_count = self._max_log_entries // 2
-                self._controls['log_area'].controls = self._controls['log_area'].controls[-keep_count:]
-
-            # 更新UI - 添加更健壮的错误处理
-            try:
-                if self.page:
-                    self.page.update()
-            except RuntimeError as e:
-                if "Event loop is closed" in str(e):
-                    # 页面已关闭，不再尝试更新
-                    self.page = None
-                else:
-                    print(f"更新页面时出错: {e}")
-            except Exception as e:
-                print(f"添加日志批量到UI时出错: {str(e)}")
-                import traceback
-                print(f"详细错误信息: {traceback.format_exc()}")
-
-        except Exception as e:
-            print(f"添加日志批量到UI时出错: {str(e)}")
-            import traceback
-            print(f"详细错误信息: {traceback.format_exc()}")
-
-    def _get_level_color(self, level: str):
-        """根据日志级别返回对应的颜色"""
-        level = level.lower()
-        if level == 'error':
-            return ft.Colors.RED_500
-        elif level == 'warning':
-            return ft.Colors.ORANGE_500
-        elif level == 'success':
-            return ft.Colors.GREEN_500
-        elif level == 'info':
-            return ft.Colors.BLUE_500
-        else:
-            return ft.Colors.BLACK
-
-    def _write_log_entries_to_file(self, entries):
-        """将一批日志条目写入文件"""
-        # 检查是否启用日志输出
-        if not self.enable_logging:
-            return
-
-        try:
-            # 创建logs目录（如果不存在）
-            logs_dir = os.path.join(os.getcwd(), "logs")
-            os.makedirs(logs_dir, exist_ok=True)
-
-            # 创建日志文件路径
-            log_file = os.path.join(logs_dir, f"sync_{self.launch_timestamp}.log")
-
-            # 批量写入日志条目
-            with open(log_file, 'a', encoding='utf-8') as f:
-                for entry in entries:
-                    timestamp = entry.get('timestamp', time.strftime("%Y-%m-%d %H:%M:%S"))
-                    level = entry.get('level', 'INFO')
-                    message = entry.get('message', '')
-
-                    # 清理 ANSI 代码用于文件日志
-                    clean_message = ANSI_ESCAPE_REGEX.sub('', message)
-
-                    log_line = f"[{timestamp}] [{level}] {clean_message}\n"
-                    f.write(log_line)
-
-        except Exception as e:
-            print(f"写入日志文件失败: {str(e)}")
-
-    def update_log_setting(self, enabled: bool):
-        """更新日志设置"""
-        self.enable_logging = enabled
-
-    def _stop_async_logging(self):
-        """停止异步日志系统"""
-        # 设置停止事件
-        self._stop_event.set()
-        self._log_file_stop_event.set()
-
-        # 等待线程结束
-        if hasattr(self, '_log_thread') and self._log_thread.is_alive():
-            self._log_thread.join(timeout=2.0)
-
-        if hasattr(self, '_log_file_thread') and self._log_file_thread.is_alive():
-            self._log_file_thread.join(timeout=2.0)
 
 
 def show_sync_dialog(page: ft.Page, data_dir: str, config_manager=None) -> None:
