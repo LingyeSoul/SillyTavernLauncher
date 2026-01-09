@@ -154,21 +154,21 @@ class UniUI():
                     ft.Text("辅助功能", size=18, weight=ft.FontWeight.BOLD),
                     ft.Row(
                         controls=[
-                            ft.ElevatedButton(
+                            ft.Button(
                                 "检查系统环境",
                                 icon=ft.Icons.SETTINGS,
                                 style=self.BSytle,
                                 on_click=self.ui_event.sys_env_check,
                                 height=40
                             ),
-                            ft.ElevatedButton(
+                            ft.Button(
                                 "检查内置环境",
                                 icon=ft.Icons.SETTINGS,
                                 style=self.BSytle,
                                 on_click=self.ui_event.in_env_check,
                                 height=40
                             ),
-                            ft.ElevatedButton(
+                            ft.Button(
                                 "启动命令行",
                                 icon=ft.Icons.SETTINGS,
                                 style=self.BSytle,
@@ -187,7 +187,7 @@ class UniUI():
             return[self.terminal.view,
                    ft.Row(
             [ 
-                        ft.ElevatedButton(
+                        ft.Button(
                             "安装",
                             icon=ft.Icons.DOWNLOAD,
                             tooltip="从仓库拉取最新版本并安装依赖",
@@ -195,7 +195,7 @@ class UniUI():
                             on_click=self.ui_event.install_sillytavern,
                             height=50,
                         ),
-                        ft.ElevatedButton(
+                        ft.Button(
                             "启动",
                             icon=ft.Icons.PLAY_ARROW,
                             tooltip="启动SillyTavern",
@@ -203,7 +203,7 @@ class UniUI():
                             on_click=self.ui_event.check_and_start_sillytavern if self.config_manager.get('stcheckupdate', True) else self.ui_event.start_sillytavern,
                             height=50,
                         ),
-                        ft.ElevatedButton(
+                        ft.Button(
                             "停止",
                             icon=ft.Icons.CANCEL,
                             tooltip="停止SillyTavern",
@@ -211,7 +211,7 @@ class UniUI():
                             on_click=self.ui_event.stop_sillytavern,
                             height=50,
                         ),
-                        ft.ElevatedButton(
+                        ft.Button(
                             "更新",
                             icon=ft.Icons.UPDATE,
                             tooltip="更新到最新版本并更新依赖",
@@ -243,42 +243,42 @@ class UniUI():
         ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
         ft.Text(value=f"版本: {self.version}", size=16),
         ft.Text("作者: 泠夜Soul", size=16),
-        ft.ElevatedButton(
+        ft.Button(
             "访问GitHub仓库",
             icon=ft.Icons.OPEN_IN_BROWSER,
-            on_click=lambda e: e.page.launch_url("https://github.com/LingyeSoul/SillyTavernLauncher", web_window_name="github"),
+            on_click=lambda e: e.page.launch_url("https://github.com/LingyeSoul/SillyTavernLauncher"),
             style=self.BSytle,
             height=40
         ),
-        ft.ElevatedButton(
+        ft.Button(
             "访问启动器官网",
             icon=ft.Icons.OPEN_IN_BROWSER,
-            on_click=lambda e: e.page.launch_url("https://sillytavern.lingyesoul.top", web_window_name="sillytavernlanuncher"),
+            on_click=lambda e: e.page.launch_url("https://sillytavern.lingyesoul.top"),
             style=self.BSytle,
             height=40
         ),
-        ft.ElevatedButton(
+        ft.Button(
             "访问作者B站",
             icon=ft.Icons.OPEN_IN_BROWSER,
-            on_click=lambda e: e.page.launch_url("https://space.bilibili.com/298721157", web_window_name="bilibili"),
+            on_click=lambda e: e.page.launch_url("https://space.bilibili.com/298721157"),
             style=self.BSytle,
             height=40
         ),
-        ft.ElevatedButton(
+        ft.Button(
             "酒馆入门教程",
             icon=ft.Icons.BOOK_ROUNDED,
-            on_click=lambda e: e.page.launch_url("https://www.yuque.com/yinsa-0wzmf/rcv7g3?", web_window_name="sillytaverntutorial"),
+            on_click=lambda e: e.page.launch_url("https://www.yuque.com/yinsa-0wzmf/rcv7g3?"),
             style=self.BSytle,
             height=40
         ),
-        ft.ElevatedButton(
+        ft.Button(
             "打赏作者",
             icon=ft.Icons.ATTACH_MONEY,
-            on_click=lambda e: e.page.launch_url("https://ifdian.net/order/create?user_id=8a03ea64ebc211ebad0e52540025c377", web_window_name="afdian"),
+            on_click=lambda e: e.page.launch_url("https://ifdian.net/order/create?user_id=8a03ea64ebc211ebad0e52540025c377"),
             style=self.BSytle,
             height=40
         ),
-        ft.ElevatedButton(
+        ft.Button(
             "检查更新",
             icon=ft.Icons.UPDATE,
             on_click=check_for_updates,
@@ -521,7 +521,7 @@ class UniUI():
                             ft.Text("加载部分界面失败", size=16, color=ft.Colors.RED_500),
                             ft.Text(str(e), size=14),
                             ft.Text("请重启应用或联系开发者", size=14),
-                            ft.ElevatedButton(
+                            ft.Button(
                                 "重试",
                                 on_click=lambda _: threading.Thread(
                                     target=self._load_views_async,

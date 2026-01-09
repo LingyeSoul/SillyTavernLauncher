@@ -170,12 +170,12 @@ class DataSyncUI:
             label="备份现有数据",
             value=True
         )
-        self._controls['scan_button'] = ft.ElevatedButton(
+        self._controls['scan_button'] = ft.Button(
             "扫描服务器",
             on_click=self._scan_servers,
             icon=ft.Icons.SEARCH
         )
-        self._controls['sync_button'] = ft.ElevatedButton(
+        self._controls['sync_button'] = ft.Button(
             "开始同步",
             on_click=self._start_sync,
             icon=ft.Icons.SYNC,
@@ -232,11 +232,11 @@ class DataSyncUI:
                         self._controls['status_text'],
                         ft.Container(
                             self._controls['current_status'],
-                            margin=ft.margin.only(left=20)
+                            margin=ft.Margin.only(left=20)
                         ),
                         ft.Container(
                             ft.Text("请仅在信任的网络上使用本功能！", size=18, weight=ft.FontWeight.BOLD,color=ft.Colors.RED_500),
-                            margin=ft.margin.only(left=20)
+                            margin=ft.Margin.only(left=20)
                         ),
                   ],     
                 ),
@@ -252,7 +252,7 @@ class DataSyncUI:
                                 self._controls['host_input'],
                                 self._controls['port_input']
                             ]),
-                            margin=ft.margin.only(left=20)
+                            margin=ft.Margin.only(left=20)
                         )
                     ]),
                     self._controls['server_url_text'],
@@ -294,7 +294,7 @@ class DataSyncUI:
                     ft.Text("日志", size=18, weight=ft.FontWeight.BOLD),
                     ft.Container(
                         self._controls['log_area'],
-                        border=ft.border.all(1, ft.Colors.OUTLINE),
+                        border=ft.Border.all(1, ft.Colors.OUTLINE),
                         border_radius=5,
                         padding=10,
                         width=730
@@ -506,9 +506,7 @@ class DataSyncUI:
 
                                 self.terminal.add_log("启动同步服务失败")
                             if self.page:
-                                self.page.snack_bar = ft.SnackBar(content=ft.Text("启动同步服务失败"), bgcolor=ft.Colors.RED_500)
-                                self.page.snack_bar.open = True
-                                self.page.update()
+                                self.page.show_dialog(ft.SnackBar(content=ft.Text("启动同步服务失败"), bgcolor=ft.Colors.RED_500))
                 else:
                     success = self.sync_manager.stop_sync_server()
                     if success:
@@ -606,7 +604,7 @@ class DataSyncUI:
                 self.page.update()
 
         # 不再显示按钮（与关闭按钮样式一致）
-        dont_show_button = ft.ElevatedButton(
+        dont_show_button = ft.Button(
             "不再显示此提醒",
             icon=ft.Icons.BOOKMARK_REMOVE,
             style=ft.ButtonStyle(
@@ -617,7 +615,7 @@ class DataSyncUI:
         )
 
         # 关闭按钮（初始禁用）
-        close_button = ft.ElevatedButton(
+        close_button = ft.Button(
             "关闭",
             icon=ft.Icons.CLOSE,
             disabled=True,
@@ -688,9 +686,7 @@ class DataSyncUI:
 
                             self.terminal.add_log("启动同步服务失败")
                         if self.page:
-                            self.page.snack_bar = ft.SnackBar(content=ft.Text("启动同步服务失败"), bgcolor=ft.Colors.RED_500)
-                            self.page.snack_bar.open = True
-                            self.page.update()
+                            self.page.show_dialog(ft.SnackBar(content=ft.Text("启动同步服务失败"), bgcolor=ft.Colors.RED_500))
                     self._update_ui()
 
                 threading.Thread(target=start_server_after_dialog, daemon=True).start()
@@ -766,7 +762,7 @@ class DataSyncUI:
                                         ]),
                                         ft.Text(f"数据路径: {data_path}", size=11),
                                         ft.Text(f"时间: {timestamp}", size=11, color=ft.Colors.GREY_600),
-                                        ft.ElevatedButton(
+                                        ft.Button(
                                             "使用此服务器",
                                             on_click=lambda _, url=server_url: self._select_server(url),
                                             icon=ft.Icons.CHECK
@@ -846,17 +842,13 @@ class DataSyncUI:
 
                             self.terminal.add_log("数据同步完成!")
                         if self.page:
-                            self.page.snack_bar = ft.SnackBar(content=ft.Text("数据同步完成!"), bgcolor=ft.Colors.GREEN_500)
-                            self.page.snack_bar.open = True
-                            self.page.update()
+                            self.page.show_dialog(ft.SnackBar(content=ft.Text("数据同步完成!"), bgcolor=ft.Colors.GREEN_500))
                     else:
                         if self.terminal:
 
                             self.terminal.add_log("数据同步失败!")
                         if self.page:
-                            self.page.snack_bar = ft.SnackBar(content=ft.Text("数据同步失败!"), bgcolor=ft.Colors.RED_500)
-                            self.page.snack_bar.open = True
-                            self.page.update()
+                            self.page.show_dialog(ft.SnackBar(content=ft.Text("数据同步失败!"), bgcolor=ft.Colors.RED_500))
 
                     self._update_ui()
 
@@ -865,9 +857,7 @@ class DataSyncUI:
 
                     self.terminal.add_log(f"同步过程中出错: {ex}")
                 if self.page:
-                    self.page.snack_bar = ft.SnackBar(content=ft.Text(f"同步失败: {ex}"), bgcolor=ft.Colors.RED_500)
-                    self.page.snack_bar.open = True
-                    self.page.update()
+                    self.page.show_dialog(ft.SnackBar(content=ft.Text(f"同步失败: {ex}"), bgcolor=ft.Colors.RED_500))
 
         # Run in background thread
         threading.Thread(target=sync, daemon=True).start()

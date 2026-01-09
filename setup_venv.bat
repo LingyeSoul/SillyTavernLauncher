@@ -57,7 +57,7 @@ if %errorlevel% neq 0 (
 )
 
 echo Installing flet-desktop...
-pip install flet-desktop==0.28.3
+pip install flet-desktop==0.80.1
 if %errorlevel% neq 0 (
     echo [ERROR] Failed to install flet-desktop
     pause

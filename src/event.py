@@ -91,7 +91,7 @@ class UiEvent:
                     icon=ft.Icons.COPY,
                     on_click=lambda e: self._copy_error_to_clipboard(message, page, dialog)
                 ),
-                ft.ElevatedButton(
+                ft.Button(
                     "确定",
                     on_click=lambda e: self._close_dialog(page, dialog)
                 ),
@@ -127,14 +127,10 @@ class UiEvent:
                 win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
                 win32clipboard.CloseClipboard()
             # 显示复制成功提示
-            page.snack_bar = ft.SnackBar(ft.Text("已复制到剪贴板"))
-            page.snack_bar.open = True
-            page.update()
+            page.show_dialog(ft.SnackBar(ft.Text("已复制到剪贴板")))
         except Exception as e:
             # 如果复制失败，显示错误
-            page.snack_bar = ft.SnackBar(ft.Text(f"复制失败: {str(e)}"))
-            page.snack_bar.open = True
-            page.update()
+            page.show_dialog(ft.SnackBar(ft.Text(f"复制失败: {str(e)}")))
 
     def envCheck(self):
         if os.path.exists(os.path.join(os.getcwd(), "env\\")):
@@ -1111,9 +1107,7 @@ class UiEvent:
 
     def showMsg(self, msg):
         # 使用正确的 API 显示 SnackBar（适配 Flet 0.80.1）
-        self.page.snack_bar = ft.SnackBar(ft.Text(msg), show_close_icon=True, duration=3000)
-        self.page.snack_bar.open = True
-        self.page.update()
+        self.page.show_dialog(ft.SnackBar(ft.Text(msg), show_close_icon=True, duration=3000))
 
     def update_mirror_setting(self, e):
         mirror_type = e.data  # DropdownM2使用data属性获取选中值
@@ -1250,9 +1244,7 @@ class UiEvent:
 
             self.stCfg.port = port
             self.stCfg.save_config()
-            self.page.snack_bar = ft.SnackBar(ft.Text("端口设置已保存"))
-            self.page.snack_bar.open = True
-            self.page.update()
+            self.page.show_dialog(ft.SnackBar(ft.Text("端口设置已保存")))
         except ValueError:
             self.show_error_dialog("端口错误", "请输入有效的端口号")
 
@@ -1266,9 +1258,7 @@ class UiEvent:
             self.stCfg.proxy_url = value
             self.stCfg.config_data['requestProxy']['url'] = value
             self.stCfg.save_config()
-            self.page.snack_bar = ft.SnackBar(ft.Text("代理设置已保存"))
-            self.page.snack_bar.open = True
-            self.page.update()
+            self.page.show_dialog(ft.SnackBar(ft.Text("代理设置已保存")))
         except Exception as e:
             self.show_error_dialog("保存失败", f"保存代理设置失败: {str(e)}")
 
@@ -1307,9 +1297,7 @@ class UiEvent:
             try:
                 from tray import Tray
                 self.tray = Tray(self.page, self)
-                self.page.snack_bar = ft.SnackBar(ft.Text("托盘功能已开启"))
-                self.page.snack_bar.open = True
-                self.page.update()
+                self.page.show_dialog(ft.SnackBar(ft.Text("托盘功能已开启")))
             except Exception as ex:
                 self.show_error_dialog("托盘错误", f"托盘功能开启失败: {str(ex)}")
         elif not e.control.value and self.tray is not None:
@@ -1317,17 +1305,13 @@ class UiEvent:
             try:
                 self.tray.tray.stop()
                 self.tray = None
-                self.page.snack_bar = ft.SnackBar(ft.Text("托盘功能已关闭"))
-                self.page.snack_bar.open = True
-                self.page.update()
+                self.page.show_dialog(ft.SnackBar(ft.Text("托盘功能已关闭")))
             except Exception as ex:
                 self.show_error_dialog("托盘错误", f"托盘功能关闭失败: {str(ex)}")
         else:
             # 其他情况（已开启再次开启，或已关闭再次关闭）
             status = "开启" if e.control.value else "关闭"
-            self.page.snack_bar = ft.SnackBar(ft.Text(f"托盘功能已{status}"))
-            self.page.snack_bar.open = True
-            self.page.update()
+            self.page.show_dialog(ft.SnackBar(ft.Text(f"托盘功能已{status}")))
 
     def autostart_changed(self, e):
         """处理自动启动开关变化"""
@@ -1712,9 +1696,7 @@ class UiEvent:
             )
 
             self.terminal.add_log("命令行窗口已启动")
-            self.page.snack_bar = ft.SnackBar(ft.Text("命令行窗口已启动"))
-            self.page.snack_bar.open = True
-            self.page.update()
+            self.page.show_dialog(ft.SnackBar(ft.Text("命令行窗口已启动")))
 
         except Exception as ex:
             self.terminal.add_log(f"启动命令行失败: {str(ex)}")
@@ -1792,9 +1774,7 @@ class UiEvent:
                 self._refresh_version_view()
 
                 # 成功消息使用 SnackBar
-                self.page.snack_bar = ft.SnackBar(ft.Text(f"成功切换到版本 v{version_info['version']}"))
-                self.page.snack_bar.open = True
-                self.page.update()
+                self.page.show_dialog(ft.SnackBar(ft.Text(f"成功切换到版本 v{version_info['version']}")))
 
                 # 4. 询问是否安装依赖
                 self._ask_install_dependencies()
@@ -1843,7 +1823,7 @@ class UiEvent:
             ], tight=True),
             actions=[
                 ft.TextButton("暂不安装", on_click=lambda e: self._close_dialog(page, dialog)),
-                ft.ElevatedButton(
+                ft.Button(
                     "立即安装",
                     on_click=lambda e: self._do_install_npm(page, dialog)
                 ),
@@ -1892,9 +1872,7 @@ class UiEvent:
                         loop.run_until_complete(process.wait())
                         self.terminal.add_log("✓ npm依赖安装完成")
                         # 使用对话框显示成功消息
-                        self.page.snack_bar = ft.SnackBar(ft.Text("依赖安装完成"))
-                        self.page.snack_bar.open = True
-                        self.page.update()
+                        self.page.show_dialog(ft.SnackBar(ft.Text("依赖安装完成")))
                     else:
                         self.terminal.add_log("错误: 无法执行npm install")
                         self.show_error_dialog("安装失败", "无法执行npm install")

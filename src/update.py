@@ -21,9 +21,7 @@ class VersionChecker:
         self.context.verify_mode = ssl.CERT_NONE
     def _showMsg(self, v):
         # 使用正确的 API 显示 SnackBar（适配 Flet 0.80.1）
-        self.page.snack_bar = ft.SnackBar(ft.Text(v), show_close_icon=True, duration=3000)
-        self.page.snack_bar.open = True
-        self.page.update()
+        self.page.show_dialog(ft.SnackBar(ft.Text(v), show_close_icon=True, duration=3000))
 
     async def run_check(self):
         result = await self.check_for_updates()
