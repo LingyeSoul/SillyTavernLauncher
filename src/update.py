@@ -3,6 +3,7 @@ import urllib.request
 import urllib.error
 from config import ConfigManager
 import flet as ft
+from flet import UrlLauncher
 import ssl
 import asyncio
 import aiohttp
@@ -28,6 +29,10 @@ class VersionChecker:
         if result["has_error"]:
             self._showMsg(f"检查更新失败: {result['error_message']}")
         elif result["has_update"]:
+            # 创建URL打开函数
+            async def open_download_page(e):
+                await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top/update.html")
+
             update_dialog = ft.AlertDialog(
                 title=ft.Text("发现新版本"),
                 content=ft.Column([
@@ -36,7 +41,7 @@ class VersionChecker:
                     ft.Text("建议更新到最新版本以获得更好的体验和新功能。", size=14),
                 ], width=400, height=120),
                 actions=[
-                    ft.TextButton("前往下载", on_click=lambda e: self.page.launch_url("https://sillytavern.lingyesoul.top/update.html")),
+                    ft.TextButton("前往下载", on_click=open_download_page),
                     ft.TextButton("稍后提醒", on_click=lambda e: self._close_dialog(update_dialog)),
                 ],
                 actions_alignment=ft.MainAxisAlignment.END,

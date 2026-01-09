@@ -6,6 +6,7 @@
 
 import random
 import flet as ft
+from flet import UrlLauncher
 from config import ConfigManager
 
 
@@ -245,6 +246,13 @@ class WelcomeDialog:
 
     def show(self):
         """显示欢迎对话框"""
+        # 创建URL打开函数
+        async def open_tutorial(e):
+            await UrlLauncher().launch_url("https://www.yuque.com/yinsa-0wzmf/rcv7g3?")
+
+        async def open_website(e):
+            await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top")
+
         # 随机抽取5题并按ID排序
         self.selected_questions = random.sample(self.QUESTION_BANK, 5)
         self.selected_questions.sort(key=lambda x: x['id'])
@@ -308,11 +316,11 @@ class WelcomeDialog:
             actions=[
                 ft.TextButton(
                     "酒馆入门教程",
-                    on_click=lambda _: self.page.launch_url("https://www.yuque.com/yinsa-0wzmf/rcv7g3?")
+                    on_click=open_tutorial
                 ),
                 ft.TextButton(
                     "启动器官网",
-                    on_click=lambda _: self.page.launch_url("https://sillytavern.lingyesoul.top")
+                    on_click=open_website
                 ),
                 ft.Button(
                     "验证答案",
