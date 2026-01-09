@@ -20,31 +20,43 @@ class VersionChecker:
         self.context.check_hostname = False
         self.context.verify_mode = ssl.CERT_NONE
     def _showMsg(self, v):
-        self.page.open(ft.SnackBar(ft.Text(v), show_close_icon=True, duration=3000))
+        # 使用正确的 API 显示 SnackBar（适配 Flet 0.80.1）
+        self.page.snack_bar = ft.SnackBar(ft.Text(v), show_close_icon=True, duration=3000)
+        self.page.snack_bar.open = True
+        self.page.update()
 
     async def run_check(self):
-        async def show_update_dialog(self):
-            update_dialog = ft.AlertDialog(
-            title=ft.Text("发现新版本"),
-            content=ft.Column([
-                    ft.Text(f"当前版本: {result['current_version']}", size=14),
-                        ft.Text(f"最新版本: {result['latest_version']}", size=14),
-                        ft.Text("建议更新到最新版本以获得更好的体验和新功能。", size=14),
-                    ], width=400, height=120),
-                    actions=[
-                        ft.TextButton("前往下载", on_click=lambda e: self.page.launch_url("https://sillytavern.lingyesoul.top/update.html")),
-                        ft.TextButton("稍后提醒", on_click=lambda e: self.page.close(update_dialog)),
-                        ],
-                        actions_alignment=ft.MainAxisAlignment.END,
-                    )
-            self.page.open(update_dialog)
         result = await self.check_for_updates()
         if result["has_error"]:
             self._showMsg(f"检查更新失败: {result['error_message']}")
         elif result["has_update"]:
-            await show_update_dialog(self)
+            update_dialog = ft.AlertDialog(
+                title=ft.Text("发现新版本"),
+                content=ft.Column([
+                    ft.Text(f"当前版本: {result['current_version']}", size=14),
+                    ft.Text(f"最新版本: {result['latest_version']}", size=14),
+                    ft.Text("建议更新到最新版本以获得更好的体验和新功能。", size=14),
+                ], width=400, height=120),
+                actions=[
+                    ft.TextButton("前往下载", on_click=lambda e: self.page.launch_url("https://sillytavern.lingyesoul.top/update.html")),
+                    ft.TextButton("稍后提醒", on_click=lambda e: self._close_dialog(update_dialog)),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+            # 使用 overlay 显示对话框（适配 Flet 0.80.1）
+            self.page.overlay.append(update_dialog)
+            update_dialog.open = True
+            self.page.update()
         else:
             self._showMsg("当前已是最新版本")
+
+    def _close_dialog(self, dialog):
+        """正确关闭对话框的辅助方法（适配 Flet 0.80.1）"""
+        dialog.open = False
+        self.page.update()
+        if dialog in self.page.overlay:
+            self.page.overlay.remove(dialog)
+            self.page.update()
     
     def run_check_sync(self):
         """

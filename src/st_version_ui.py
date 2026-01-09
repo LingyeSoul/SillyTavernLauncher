@@ -103,7 +103,7 @@ def show_version_switch_dialog(page, version_str, version_data, on_confirm):
         actions=[
             ft.TextButton(
                 "取消",
-                on_click=lambda e: page.close(dialog)
+                on_click=lambda e: _close_dialog(page, dialog)
             ),
             ft.ElevatedButton(
                 "确认",
@@ -114,10 +114,22 @@ def show_version_switch_dialog(page, version_str, version_data, on_confirm):
     )
 
     def do_switch():
-        page.close(dialog)
+        _close_dialog(page, dialog)
         on_confirm()
 
-    page.open(dialog)
+    # 使用 overlay 显示对话框（适配 Flet 0.80.1）
+    page.overlay.append(dialog)
+    dialog.open = True
+    page.update()
+
+
+def _close_dialog(page, dialog):
+    """正确关闭对话框的辅助方法（适配 Flet 0.80.1）"""
+    dialog.open = False
+    page.update()
+    if dialog in page.overlay:
+        page.overlay.remove(dialog)
+        page.update()
 
 
 def create_version_switch_view(page, terminal, ui_event):

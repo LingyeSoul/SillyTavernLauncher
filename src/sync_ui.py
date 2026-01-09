@@ -724,8 +724,8 @@ class DataSyncUI:
         close_button.on_click = on_close
 
         try:
-            # 显示对话框
-            self.page.open(self._first_server_dialog) 
+            # 使用 overlay 显示对话框（适配 Flet 0.80.1）
+            self.page.overlay.append(self._first_server_dialog)
             self._first_server_dialog.open = True
             self.page.update()
 

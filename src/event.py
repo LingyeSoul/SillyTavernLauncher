@@ -93,13 +93,24 @@ class UiEvent:
                 ),
                 ft.ElevatedButton(
                     "确定",
-                    on_click=lambda e: page.close(dialog)
+                    on_click=lambda e: self._close_dialog(page, dialog)
                 ),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
 
-        page.open(dialog)
+        # 使用 overlay 显示对话框（适配 Flet 0.80.1）
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
+
+    def _close_dialog(self, page, dialog):
+        """正确关闭对话框的辅助方法（适配 Flet 0.80.1）"""
+        dialog.open = False
+        page.update()
+        if dialog in page.overlay:
+            page.overlay.remove(dialog)
+            page.update()
 
     def _copy_error_to_clipboard(self, text, page, dialog):
         """复制错误信息到剪贴板"""
@@ -170,7 +181,9 @@ class UiEvent:
             except Exception:
                 pass
             try:
-                self.page.window.close()
+                async def async_close():
+                    await self.page.window.close()
+                self.page.run_task(async_close)
             except Exception:
                 pass
 
@@ -1097,7 +1110,10 @@ class UiEvent:
         self.showMsg('设置已保存')
 
     def showMsg(self, msg):
-        self.page.open(ft.SnackBar(ft.Text(msg), show_close_icon=True, duration=3000))
+        # 使用正确的 API 显示 SnackBar（适配 Flet 0.80.1）
+        self.page.snack_bar = ft.SnackBar(ft.Text(msg), show_close_icon=True, duration=3000)
+        self.page.snack_bar.open = True
+        self.page.update()
 
     def update_mirror_setting(self, e):
         mirror_type = e.data  # DropdownM2使用data属性获取选中值
@@ -1826,7 +1842,7 @@ class UiEvent:
                 ),
             ], tight=True),
             actions=[
-                ft.TextButton("暂不安装", on_click=lambda e: page.close(dialog)),
+                ft.TextButton("暂不安装", on_click=lambda e: self._close_dialog(page, dialog)),
                 ft.ElevatedButton(
                     "立即安装",
                     on_click=lambda e: self._do_install_npm(page, dialog)
@@ -1835,11 +1851,14 @@ class UiEvent:
             actions_alignment=ft.MainAxisAlignment.END,
         )
 
-        page.open(dialog)
+        # 使用 overlay 显示对话框（适配 Flet 0.80.1）
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
 
     def _do_install_npm(self, page, dialog):
         """执行npm依赖安装"""
-        page.close(dialog)
+        self._close_dialog(page, dialog)
         self.terminal.add_log("正在安装npm依赖...")
         self.install_npm_dependencies()
 

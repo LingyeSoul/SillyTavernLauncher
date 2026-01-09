@@ -239,7 +239,9 @@ class WelcomeDialog:
         config_manager = ConfigManager()
         config_manager.set("first_run", False)
         config_manager.save_config()
-        self.page.close(self.dialog)
+        # 使用正确的 API 关闭对话框（适配 Flet 0.80.1）
+        self.dialog.open = False
+        self.page.update()
 
     def show(self):
         """显示欢迎对话框"""
@@ -326,7 +328,10 @@ class WelcomeDialog:
         # 保存按钮引用
         self.ui_controls['action_button'] = self.dialog.actions[2]  # 操作按钮（验证答案/完成并关闭）
 
-        self.page.open(self.dialog)
+        # 使用 overlay 显示对话框（适配 Flet 0.80.1）
+        self.page.overlay.append(self.dialog)
+        self.dialog.open = True
+        self.page.update()
 
 
 def show_welcome_dialog(page):

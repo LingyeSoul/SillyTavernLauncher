@@ -432,7 +432,7 @@ class UniUI():
                     ft.ProgressBar(visible=True)
                 ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                 height=400,
-                alignment=ft.alignment.center
+                alignment=ft.alignment.Alignment(0, 0)
             )
             self._content.controls.append(loading_content)
             self._page.update()
@@ -531,7 +531,7 @@ class UniUI():
                             )
                         ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                         height=400,
-                        alignment=ft.alignment.center
+                        alignment=ft.alignment.Alignment(0, 0)
                     )
                     self._content.controls.append(error_content)
                     page.update()
