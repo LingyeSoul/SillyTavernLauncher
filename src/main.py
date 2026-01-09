@@ -10,7 +10,7 @@ from sysenv import SysEnv
 from welcome_dialog import show_welcome_dialog
 
 async def main(page: ft.Page):
-    page.window.center()
+    await page.window.center()
     page.title = "SillyTavernLauncher"
     page.theme = ft.Theme(color_scheme_seed=ft.Colors.BLUE,font_family="Microsoft YaHei")
     page.dark_theme=ft.Theme(color_scheme_seed=ft.Colors.BLUE,font_family="Microsoft YaHei")
@@ -38,12 +38,19 @@ async def main(page: ft.Page):
     # 显示系统环境缺失对话框
     def show_system_env_missing_dialog(missing_items):
         def close_dialog(e):
-            page.close(dialog)
+            # 使用正确的 API 关闭对话框（适配 Flet 0.80.1）
+            dialog.open = False
+            page.update()
+            if dialog in page.overlay:
+                page.overlay.remove(dialog)
+                page.update()
             # 关闭整个应用程序
             page.window.visible = False
             page.window.prevent_close = False
             page.update()
-            page.window.close()
+            async def async_close():
+                await page.window.close()
+            page.run_task(async_close)
             
         def open_git_download(e):
             page.launch_url("https://git-scm.com/install/windows")
@@ -75,7 +82,10 @@ async def main(page: ft.Page):
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
-        page.open(dialog)
+        # 使用 overlay 显示对话框（适配 Flet 0.80.1）
+        page.overlay.append(dialog)
+        dialog.open = True
+        page.update()
     # 检查系统环境
     def check_system_environment():
         config_manager = ConfigManager()
@@ -181,4 +191,4 @@ async def main(page: ft.Page):
     page.window.visible = True
     page.update()
 
-ft.app(target=main, view=ft.AppView.FLET_APP_HIDDEN)
+ft.run(main, view=ft.AppView.FLET_APP_HIDDEN)

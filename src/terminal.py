@@ -98,7 +98,7 @@ class AsyncTerminal:
                 ft.Row([
                         ft.Text("终端", size=24, weight=ft.FontWeight.BOLD),
                         ft.Text(title_text, size=16, color=ft.Colors.BLUE_300),
-                        ], alignment=ft.CrossAxisAlignment.CENTER),
+                        ], alignment=ft.CrossAxisAlignment.START),
 
                 ft.Container(
                     content=self.logs,
