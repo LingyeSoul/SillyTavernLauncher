@@ -187,9 +187,10 @@ class UniUI():
         
     def getTerminalView(self):
         if self.platform == "Windows":
-            return[self.terminal.view,
-                   ft.Row(
-            [ 
+            # 修复：缓存按钮行，避免每次切换视图时重新创建
+            if not hasattr(self, '_terminal_button_row'):
+                self._terminal_button_row = ft.Row(
+                    [
                         ft.Button(
                             "安装",
                             icon=ft.Icons.DOWNLOAD,
@@ -222,11 +223,11 @@ class UniUI():
                             on_click=self.ui_event.update_sillytavern,
                             height=50,
                         ),
-                        ],
-            alignment=ft.MainAxisAlignment.CENTER,
-            expand=True 
-        ),
-        ]
+                    ],
+                    alignment=ft.MainAxisAlignment.CENTER,
+                    expand=True
+                )
+            return [self.terminal.view, self._terminal_button_row]
         
 
 
@@ -424,6 +425,11 @@ class UniUI():
             )
         )
 
+        # 修复：标记页面已就绪，确保终端可以安全更新 UI
+        # 这必须在 page.add() 之后调用，因为此时控件才被添加到页面树
+        if hasattr(self, 'terminal'):
+            self.terminal.set_page_ready(True)
+
     def _handle_view_change(self, index):
         """处理视图切换 - 支持延迟加载"""
         if not hasattr(self, '_views_loaded') or not self._views_loaded:
@@ -444,7 +450,7 @@ class UniUI():
         # 正常切换视图
         self._content.controls.clear()
         if index == 0:
-            # 修复：每次切换到终端视图时重新获取视图，确保按钮事件有效
+            # 修复：使用缓存的按钮行，避免重新创建控件
             terminal_view = self.getTerminalView()
             self._content.controls.extend(terminal_view)
         elif index == 1 and hasattr(self, 'version_view'):

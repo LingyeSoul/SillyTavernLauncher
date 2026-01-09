@@ -138,8 +138,6 @@ class AsyncTerminal:
         self._processing = False  # 阻止并发处理的标志
         self._batch_size_threshold = 30  # 优化为30
         self._max_log_entries = 1500  # 优化为1500
-        self._page_ready = False  # 页面就绪标志
-        self._schedule_retry_count = 0  # 调度重试计数
 
         # 日志文件写入线程相关属性
         self._log_file_queue = queue.Queue(maxsize=10000)  # 有界队列
@@ -152,10 +150,11 @@ class AsyncTerminal:
         self._update_pending = False
         self._update_lock = threading.Lock()
         self._update_timer = None  # 存储Timer对象以便取消
-        self._last_ui_update = 0  # 记录上次UI更新时间
+        self._last_ui_update = time.time()  # 修复：初始化为当前时间，避免第一次计算异常
         self._is_shutting_down = False  # 关闭标志，防止更新已关闭的页面
         self._ui_update_fail_count = 0  # UI更新失败计数器
         self._ui_processing_lock = threading.RLock()  # 添加UI处理锁，使用RLock允许同一线程多次获取
+        self._page_ready = False  # 添加页面就绪标志，确保控件已添加到页面
         
         # 添加_stop_event用于停止后台日志处理线程
         self._stop_event = threading.Event()
@@ -600,33 +599,23 @@ class AsyncTerminal:
                 # ⭐ 优化：减少UI更新频率，只在必要时更新
                 current_time = time.time()
                 if current_time - self._last_ui_update > 0.05:  # 至少50ms才更新一次UI
-                    # ⭐ 关键：直接更新 UI（已在主线程中，不需要 page.run_task）
-                    if (hasattr(self, 'view') and
-                        self.view.page is not None and
-                        not getattr(self.view.page, 'closed', False)):
+                    # 修复：检查页面是否就绪（控件已添加到页面）
+                    if self._page_ready:
                         try:
-                            # 直接调用 update，因为已在主线程
-                            self.logs.update()
-                            self._last_ui_update = current_time
-                        except AssertionError as e:
-                            # 详细记录错误信息
-                            import threading
-                            import traceback
-                            error_msg = str(e) if str(e) else "控件 __uid 为 None"
-                            print(f"=== UI更新失败(AssertionError) ===")
-                            print(f"错误信息: {error_msg}")
-                            print(f"当前线程: {threading.current_thread().name}")
-                            print(f"日志控件数量: {len(self.logs.controls)}")
-                            print(f"MAX_LOG_ENTRIES: {self.MAX_LOG_ENTRIES}")
-                            print(f"队列大小: {self._log_queue.qsize()}")
-                            print(f"批量处理数量: {len(new_controls)}")
-                            print(f"堆栈信息:")
-                            traceback.print_stack()
-                            print(f"===================================")
-                        except RuntimeError as e:
-                            # 事件循环已关闭
-                            if "Event loop is closed" not in str(e):
-                                raise
+                            # 修复：更健壮的页面状态检查
+                            if (hasattr(self, 'view') and
+                                self.view is not None and
+                                hasattr(self.view, 'page') and
+                                self.view.page is not None and
+                                not getattr(self.view.page, 'closed', False)):
+                                # 直接调用 update，因为已在主线程
+                                self.logs.update()
+                                self._last_ui_update = current_time
+                        except (AssertionError, RuntimeError) as e:
+                            # 控件未就绪或页面已关闭，静默处理
+                            # AssertionError: 控件 __uid 为 None
+                            # RuntimeError: Control must be added to the page first / Event loop is closed
+                            pass
 
         except Exception as e:
             import traceback
@@ -635,43 +624,39 @@ class AsyncTerminal:
         finally:
             # 确保_processing标志被重置
             self._processing = False
+
+            # ⭐ 关键：如果队列已空，强制刷新UI确保最后的日志显示
+            if self._log_queue.empty() and log_entries:
+                # 修复：检查页面是否就绪
+                if self._page_ready:
+                    try:
+                        if (hasattr(self, 'view') and
+                            self.view is not None and
+                            hasattr(self.view, 'page') and
+                            self.view.page is not None and
+                            not getattr(self.view.page, 'closed', False)):
+                            self.logs.update()
+                    except (AssertionError, RuntimeError):
+                        pass
+
             # 如果队列中还有未处理的日志，安排下一次处理
             if not self._log_queue.empty():
                 # ⭐ 递归调度（通过 page.run_task）
                 self._schedule_batch_process()
 
     def _schedule_batch_process(self):
-        """安排批量处理（确保页面就绪后再处理）"""
+        """安排批量处理"""
         # 快速检查：如果已停止，直接返回
         if self._stop_event.is_set():
             return
 
-        # 检查页面是否可用
-        page_available = False
+        # 直接执行批处理，不再检查页面可用性
+        # 页面状态由 _process_batch() 内部处理
         try:
-            if (hasattr(self, 'view') and self.view is not None and
-                hasattr(self.view, 'page') and self.view.page is not None and
-                not getattr(self.view.page, 'closed', False)):
-                page_available = True
-        except Exception:
-            page_available = False
-
-        # 如果页面可用，执行批处理
-        if page_available:
-            try:
-                # 设置页面就绪标志
-                self._page_ready = True
-                self._schedule_retry_count = 0
-                self._process_batch()
-            except Exception as e:
-                print(f"[DEBUG] 批处理异常: {type(e).__name__}: {str(e)}")
-                import traceback
-                traceback.print_exc()
-        else:
-            # 如果页面不可用，增加重试计数，但不执行处理
-            self._schedule_retry_count += 1
-            if self._schedule_retry_count % 10 == 0:  # 每10次打印一次日志
-                print(f"[DEBUG] 页面暂不可用，重试次数: {self._schedule_retry_count}")
+            self._process_batch()
+        except Exception as e:
+            # 静默处理异常，避免大量错误日志
+            pass
 
     def _schedule_ui_update(self):
         """触发 UI 更新"""
@@ -740,7 +725,7 @@ class AsyncTerminal:
             # 智能调度处理（优化响应速度）
             queue_size = self._log_queue.qsize()
             current_time = time.time()
-            
+
             # 检查是否需要立即处理 - 降低延迟
             needs_immediate_processing = (
                 queue_size >= 3 or  # 队列中有一定数量的日志（降低阈值）
@@ -764,18 +749,16 @@ class AsyncTerminal:
                     except Exception:
                         pass
 
-                # 使用 threading.Timer 安排延迟处理（更短延迟）
-                if (hasattr(self, 'view') and
-                    self.view.page is not None and
-                    not getattr(self.view.page, 'closed', False)):
-                    try:
-                        # 根据队列大小动态调整延迟时间
-                        delay = 0.01 if queue_size > 1 else 0.03  # 降低延迟时间
-                        self._update_timer = threading.Timer(delay, self._schedule_batch_process)
-                        self._update_timer.start()
-                    except:
-                        # 定时器设置失败，直接安排处理
-                        self._schedule_batch_process()
+                # 修复：改进页面检查逻辑 - 即使页面未就绪也安排处理
+                try:
+                    # 根据队列大小动态调整延迟时间
+                    delay = 0.01 if queue_size > 1 else 0.03  # 降低延迟时间
+                    # 直接创建定时器，不检查页面状态（页面检查在 _process_batch 中进行）
+                    self._update_timer = threading.Timer(delay, self._schedule_batch_process)
+                    self._update_timer.start()
+                except Exception:
+                    # 定时器设置失败，直接安排处理
+                    self._schedule_batch_process()
 
         except (TypeError, IndexError, AttributeError) as e:
             import traceback
@@ -834,6 +817,22 @@ class AsyncTerminal:
 
         with self._log_queue.mutex:
             self._log_queue.queue.clear()
+
+    def set_page_ready(self, ready=True):
+        """
+        设置页面就绪标志
+
+        当控件被添加到页面后，应该调用此方法标记页面就绪，
+        这样日志处理线程才能安全地更新 UI。
+
+        Args:
+            ready (bool): True 表示页面已就绪，False 表示页面未就绪
+        """
+        self._page_ready = ready
+        if ready:
+            # 页面就绪后，立即处理队列中的日志
+            if not self._log_queue.empty():
+                self._schedule_batch_process()
 
     def _write_log_entries_to_file(self, entries):
         """将一批日志条目写入文件（优化版 - 使用保持打开的文件句柄）"""
