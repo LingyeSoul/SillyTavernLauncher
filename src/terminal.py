@@ -5,7 +5,6 @@ import threading
 import queue
 import time
 import os
-import asyncio
 
 
 # ANSI颜色代码正则表达式
@@ -63,18 +62,18 @@ def parse_ansi_text(text):
 
 class AsyncTerminal:
     # 性能优化常量
-    MAX_QUEUE_SIZE = 10000  # 增加队列最大条目数（从1000提升到10000）
-    MAX_LOG_ENTRIES = 1500  # 增加UI控件数量限制（从200提升到1500）
+    MAX_QUEUE_SIZE = 10000  # 增加队列最大条目数
+    MAX_LOG_ENTRIES = 1500  # 增加UI控件数量限制
     LOG_MAX_LENGTH = 1000  # 单条日志长度限制
     LOG_MAX_LENGTH_DETAILED = 5000  # 详细日志（如traceback）的长度限制
-    BATCH_SIZE_THRESHOLD = 30  # 增加批量处理阈值（从50提升到30，更频繁处理）
-    PROCESS_INTERVAL = 0.02  # 处理间隔优化为20ms（从50ms降低）
+    BATCH_SIZE_THRESHOLD = 30  # 批量处理阈值
+    PROCESS_INTERVAL = 0.02  # 处理间隔（20ms）
 
-    # ⚡ 新增：日志显示和记录分离
-    MAX_DISPLAY_LOGS = 150  # 终端最多显示150条（保持不变）
-    HIGH_LOAD_THRESHOLD = 500  # 提高高负载阈值（从200提升到500）
-    OVERLOAD_THRESHOLD = 2000  # 提高过载阈值（从500提升到2000）
-    
+    # 日志显示和记录分离
+    MAX_DISPLAY_LOGS = 150  # 终端最多显示150条
+    HIGH_LOAD_THRESHOLD = 500  # 高负载阈值
+    OVERLOAD_THRESHOLD = 2000  # 过载阈值
+
     # 日志文件大小限制（100MB）
     MAX_LOG_FILE_SIZE = 100 * 1024 * 1024
 
@@ -82,7 +81,7 @@ class AsyncTerminal:
         self.logs = ft.ListView(
             expand=True,
             spacing=5,
-            auto_scroll=True,  # 启用自动滚动
+            auto_scroll=True,
             padding=10
         )
         # 初始化启动时间戳
@@ -122,193 +121,67 @@ class AsyncTerminal:
             ])
 
         self.active_processes = []
-        self.is_running = False  # 添加运行状态标志
+        self.is_running = False
+        self._output_threads = []  # 存储输出处理线程
         self.enable_logging = enable_logging
 
         # DEBUG 模式控制
-        self._debug_mode = False  # 是否启用 DEBUG 模式（显示所有 DEBUG 信息）
+        self._debug_mode = False
 
-        # ============ 异步原语（延迟初始化）============
-        self._log_queue = None  # asyncio.Queue，稍后在异步上下文中初始化
-        self._stop_event = None  # asyncio.Event
-        self._processing_lock = None  # asyncio.Lock
-        self._background_check_stop_event = None  # asyncio.Event
-        self._process_monitor_stop_event = None  # asyncio.Event
-        self._ui_processing_lock = None  # asyncio.Lock
-        self._async_initialized = False  # 标记异步是否已初始化
-        self._async_tasks = []  # 存储异步任务引用
-        self._page = page  # 保存page引用用于异步初始化
+        # ============ 线程相关变量 ============
+        # 日志队列（使用线程安全的队列）
+        self._log_queue = queue.Queue(maxsize=10000)
+        self._last_process_time = 0
+        self._process_interval = 0.02
+        self._processing = False
+        self._batch_size_threshold = 30
+        self._stop_event = threading.Event()
+        self._max_log_entries = 1500
 
-        # ============ 保留的线程相关变量（文件I/O）============
         # 日志文件写入线程相关属性
-        self._log_file_queue = queue.Queue(maxsize=10000)  # 有界队列
+        self._log_file_queue = queue.Queue(maxsize=10000)
         self._log_file_thread = None
         self._log_file_stop_event = threading.Event()
         self._log_file_handle = None  # 文件句柄，保持打开以减少I/O
         self._log_file_lock = threading.Lock()
 
-        # ============ 性能优化常量 ============
-        self._last_process_time = time.time()  # 初始化为当前时间
-        self._process_interval = 0.02  # 20ms
-        self._processing = False  # 阻止并发处理的标志
-        self._batch_size_threshold = 30
-        self._max_log_entries = 1500
-
-        # UI更新防抖（避免频繁更新）
+        # UI更新防抖
         self._update_pending = False
-        self._update_lock = threading.Lock()  # 保留，用于UI更新同步
-        self._update_timer = None  # 存储Timer对象以便取消
+        self._update_lock = threading.Lock()
+        self._update_timer = None
         self._last_ui_update = time.time()
-        self._is_shutting_down = False  # 关闭标志
+        self._is_shutting_down = False
         self._ui_update_fail_count = 0
-        self._page_ready = False  # 页面就绪标志
-
-        # 记录上次UI刷新时间，用于避免重复刷新
+        self._page_ready = False
         self._last_refresh_time = 0
-        self._refresh_cooldown = 0.05  # 50ms 刷新冷却时间
+        self._refresh_cooldown = 0.05
 
-        # ============ 调度异步初始化 ============
-        self._schedule_async_init()
+        # 启动日志处理循环
+        self._start_log_processing_loop()
 
-        # 启动日志文件写入线程（保留线程）
+        # 启动日志文件写入线程
         if self.enable_logging:
             self._start_log_file_thread()
 
-    # ============ 异步初始化方法 ============
+    # ============ 日志处理循环 ============
 
-    def _schedule_async_init(self):
-        """调度异步初始化"""
-        try:
-            self._page.run_task(self._async_initialize)
-        except Exception as e:
-            print(f"Failed to schedule async init: {e}")
+    def _start_log_processing_loop(self):
+        """启动日志处理循环"""
+        def log_processing_worker():
+            while not self._stop_event.is_set():
+                try:
+                    # 检查队列是否有项目
+                    if not self._log_queue.empty():
+                        self._process_batch()
+                    time.sleep(0.02)
+                except Exception as e:
+                    print(f"日志处理循环错误: {str(e)}")
 
-    async def _async_initialize(self):
-        """在事件循环中初始化异步原语"""
-        if self._async_initialized:
-            return
+        # 在单独的线程中运行日志处理循环
+        self._log_thread = threading.Thread(target=log_processing_worker, daemon=True)
+        self._log_thread.start()
 
-        try:
-            # 初始化异步原语
-            self._log_queue = asyncio.Queue(maxsize=10000)
-            self._stop_event = asyncio.Event()
-            self._processing_lock = asyncio.Lock()
-            self._background_check_stop_event = asyncio.Event()
-            self._process_monitor_stop_event = asyncio.Event()
-            self._ui_processing_lock = asyncio.Lock()
-
-            # 启动异步工作器
-            self._start_async_workers()
-
-            self._async_initialized = True
-            print("AsyncTerminal async initialization complete")
-        except Exception as e:
-            print(f"Async initialization failed: {e}")
-            import traceback
-            traceback.print_exc()
-
-    def _start_async_workers(self):
-        """启动所有异步工作器"""
-        # 日志处理工作器
-        task1 = asyncio.create_task(self._log_processing_worker())
-        # 后台检查工作器
-        task2 = asyncio.create_task(self._background_check_worker())
-        # 进程监控工作器
-        task3 = asyncio.create_task(self._process_monitor_worker())
-
-        self._async_tasks.extend([task1, task2, task3])
-
-    # ============ 异步工作器 ============
-
-    async def _log_processing_worker(self):
-        """主日志处理工作器（替换 _log_thread）"""
-        while not self._stop_event.is_set():
-            try:
-                # 检查队列是否有项目
-                if not self._log_queue.empty():
-                    await self._schedule_batch_process_async()
-                    # 高负载时立即继续处理，不要等待
-                    continue
-
-                # 队列空时才小睡（减少延迟）
-                await asyncio.sleep(0.001)  # 1ms（从20ms优化到1ms）
-            except Exception as e:
-                print(f"Log processing worker error: {e}")
-
-    async def _background_check_worker(self):
-        """后台检查工作器（替换 _background_check_thread）"""
-        while not self._background_check_stop_event.is_set():
-            try:
-                current_time = time.time()
-
-                # 如果超过1秒没有更新UI，且队列为空，尝试刷新
-                if (current_time - self._last_ui_update > 1.0 and
-                    self._log_queue.empty() and
-                    current_time - self._last_refresh_time > self._refresh_cooldown):
-
-                    async with self._ui_processing_lock:
-                        if self._page_ready and self._is_page_available():
-                            try:
-                                await self._update_ui_async()
-                                self._last_ui_update = current_time
-                                self._last_refresh_time = current_time
-                            except Exception:
-                                pass
-
-                await asyncio.sleep(0.1)  # 100ms
-            except Exception as e:
-                print(f"Background check worker error: {e}")
-
-    async def _process_monitor_worker(self):
-        """进程监控工作器（替换 _process_monitor_thread）"""
-        # 记录已报告退出的进程，避免重复日志
-        reported_exited_pids = {}
-
-        while not self._process_monitor_stop_event.is_set():
-            try:
-                if self.is_running and self.active_processes:
-                    all_stopped = True
-                    current_time = time.time()
-
-                    # 清理超过1小时的已退出进程记录
-                    expired_pids = [pid for pid, report_time in reported_exited_pids.items()
-                                   if current_time - report_time > 3600]
-                    for pid in expired_pids:
-                        del reported_exited_pids[pid]
-
-                    for proc_info in self.active_processes:
-                        process = proc_info.get('process')
-                        pid = proc_info.get('pid')
-
-                        # 检查进程是否仍在运行
-                        is_running = False
-                        if hasattr(process, 'poll'):  # subprocess.Popen
-                            is_running = process.poll() is None
-                        elif hasattr(process, 'returncode'):  # asyncio.subprocess.Process
-                            is_running = process.returncode is None
-
-                        if is_running:
-                            all_stopped = False
-                            # 如果进程还在运行，从已退出集合中移除
-                            reported_exited_pids.pop(pid, None)
-                        else:
-                            # 进程已退出，只记录一次日志（并在1小时内不再重复记录）
-                            if pid not in reported_exited_pids:
-                                self.add_log(f"[DEBUG] 进程 PID={pid} 已退出")
-                                reported_exited_pids[pid] = current_time  # 记录退出时间
-
-                    # 如果所有进程都已停止，更新状态并清空记录
-                    if all_stopped:
-                        if self.is_running:
-                            self.add_log("检测到所有进程已停止")
-                            self.is_running = False
-                            reported_exited_pids.clear()
-
-                await asyncio.sleep(1.0)  # 每秒检查一次
-            except Exception as e:
-                print(f"Process monitor worker error: {e}")
-
-    # ============ 日志文件写入线程（保留）============
+    # ============ 日志文件写入线程 ============
 
     def _start_log_file_thread(self):
         """启动日志文件写入线程"""
@@ -363,7 +236,7 @@ class AsyncTerminal:
 
             with self._log_file_lock:
                 if self._log_file_handle is None:
-                    self._log_file_handle = open(log_file_path, "a", encoding="utf-8", buffering=8192)  # 8KB缓冲区
+                    self._log_file_handle = open(log_file_path, "a", encoding="utf-8", buffering=8192)
         except Exception as e:
             print(f"打开日志文件失败: {str(e)}")
 
@@ -391,7 +264,6 @@ class AsyncTerminal:
             try:
                 return self._log_file_handle.tell()
             except:
-                # 如果无法获取当前位置，尝试获取文件大小
                 try:
                     log_file_path = os.path.join(os.getcwd(), "logs", f"{self.launch_timestamp}.log")
                     return os.path.getsize(log_file_path) if os.path.exists(log_file_path) else 0
@@ -402,11 +274,8 @@ class AsyncTerminal:
     def _rotate_log_file_if_needed(self):
         """检查是否需要轮转日志文件"""
         if self._get_current_log_file_size() >= self.MAX_LOG_FILE_SIZE:
-            # 关闭当前文件
             self._close_log_file()
-            # 创建新时间戳
             self.launch_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            # 打开新文件
             self._open_log_file()
             self.add_log(f"[INFO] 日志文件轮转到新文件: {self.launch_timestamp}.log")
 
@@ -427,8 +296,6 @@ class AsyncTerminal:
             if result.stdout:
                 self.add_log(f"[DEBUG] tasklist 输出: {result.stdout[:200]}")
 
-            # tasklist 返回 0 表示找到进程
-            # 检查输出中是否包含 PID
             is_running = str(pid) in result.stdout and result.returncode == 0
             self.add_log(f"[DEBUG] PID={pid} 是否运行: {is_running}")
             return is_running
@@ -436,51 +303,13 @@ class AsyncTerminal:
             self.add_log(f"[DEBUG] 验证 PID={pid} 时出错: {str(e)}")
             return False
 
-    def _get_all_node_processes(self):
-        """获取所有 node.exe 进程的 PID 列表"""
-        import subprocess
-        try:
-            result = subprocess.run(
-                ['tasklist', '/FI', 'IMAGENAME eq node.exe', '/FO', 'CSV'],
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                encoding='gbk',
-                errors='ignore'
-            )
-
-            if result.returncode != 0:
-                return []
-
-            # 解析 CSV 输出，提取 PID
-            pids = []
-            lines = result.stdout.strip().split('\n')
-            for line in lines[1:]:  # 跳过标题行
-                if 'node.exe' in line:
-                    parts = line.split(',')
-                    if len(parts) >= 2:
-                        try:
-                            pid = int(parts[1].strip('"'))
-                            pids.append(pid)
-                        except ValueError:
-                            pass
-
-            return pids
-        except Exception:
-            return []
-
     def _kill_process_by_pid(self, pid, use_tree=True):
-        """使用 taskkill 强制杀死指定 PID 的进程（微软官方工具，更安全）
-
-        Args:
-            pid: 进程 ID
-            use_tree: 是否使用 /T 参数终止进程树（包括子进程）
-        """
+        """使用 taskkill 强制杀死指定 PID 的进程"""
         import subprocess
         try:
             cmd = ['taskkill', '/F', '/PID', str(pid)]
             if use_tree:
-                cmd.append('/T')  # 终止进程树
+                cmd.append('/T')
 
             result = subprocess.run(
                 cmd,
@@ -491,60 +320,125 @@ class AsyncTerminal:
                 errors='ignore'
             )
 
-            # taskkill 返回 0 表示成功，返回 1 表示进程不存在
             return result.returncode in [0, 1]
         except Exception:
             return False
 
-    # ============ 异步工作器停止 ============
+    # ============ 批处理方法（使用旧版本实现）============
 
-    def _stop_async_workers(self):
-        """停止所有异步工作器"""
-        if not self._async_initialized:
+    def _process_batch(self):
+        """处理批量日志条目"""
+        if self._processing:
             return
 
-        # 设置停止事件
-        if self._stop_event:
-            self._stop_event.set()
-        if self._background_check_stop_event:
-            self._background_check_stop_event.set()
-        if self._process_monitor_stop_event:
-            self._process_monitor_stop_event.set()
+        current_time = time.time()
+        queue_size = self._log_queue.qsize()
+        time_to_process = (current_time - self._last_process_time) >= self._process_interval
+        size_to_process = queue_size >= self._batch_size_threshold
 
-        # 取消任务
-        for task in self._async_tasks:
-            if not task.done():
-                task.cancel()
+        if not time_to_process and not size_to_process and queue_size > 0:
+            size_to_process = True
+            batch_limit = min(3, queue_size)
+        else:
+            batch_limit = min(self._batch_size_threshold, queue_size) if queue_size > 0 else self._batch_size_threshold
 
-        self._async_tasks.clear()
-        self._async_initialized = False
+        self._processing = True
+        try:
+            log_entries = []
+            processed_count = 0
+            while processed_count < batch_limit:
+                try:
+                    entry = self._log_queue.get_nowait()
+                    log_entries.append(entry)
+                    processed_count += 1
+                except queue.Empty:
+                    break
+
+            if not log_entries:
+                return
+
+            # 创建日志控件
+            new_controls = []
+            for processed_text in log_entries:
+                if ANSI_ESCAPE_REGEX.search(processed_text):
+                    spans = parse_ansi_text(processed_text)
+                    new_text = ft.Text(spans=spans, selectable=True, size=14)
+                else:
+                    new_text = ft.Text(processed_text, selectable=True, size=14)
+                new_controls.append(new_text)
+
+            # 批量更新日志控件
+            self.logs.controls.extend(new_controls)
+
+            # 限制日志数量
+            if len(self.logs.controls) > self._max_log_entries:
+                self.logs.controls = self.logs.controls[-self._max_log_entries//2:]
+
+            self._last_process_time = current_time
+
+            # 批量更新UI
+            if hasattr(self, 'view') and self.view.page is not None:
+                try:
+                    self.logs.update()
+                except AssertionError:
+                    pass
+                except RuntimeError as e:
+                    if "Event loop is closed" not in str(e):
+                        raise
+
+        except Exception as e:
+            import traceback
+            print(f"批量处理失败: {str(e)}")
+            print(f"错误详情: {traceback.format_exc()}")
+        finally:
+            self._processing = False
+            if not self._log_queue.empty():
+                self._schedule_batch_process()
+
+    def _schedule_batch_process(self):
+        """安排批量处理"""
+        if hasattr(self, 'view') and self.view.page is not None:
+            try:
+                async def async_process_batch():
+                    self._process_batch()
+
+                self.view.page.run_task(async_process_batch)
+            except (AssertionError, RuntimeError, Exception) as e:
+                if "Event loop is closed" in str(e):
+                    try:
+                        self._process_batch()
+                    except Exception as fallback_error:
+                        print(f"日志处理失败: {str(fallback_error)}")
+                else:
+                    try:
+                        self._process_batch()
+                    except Exception as fallback_error:
+                        print(f"日志处理失败: {str(fallback_error)}")
 
     # ============ 进程管理 ============
 
     def stop_processes(self):
-        """停止所有由execute_command启动的进程
-
-        使用多阶段终止策略：
-        1. 优雅终止（SIGTERM）
-        2. 强制终止（SIGKILL）
-        3. taskkill /F 终止残留进程
-        """
-        # 检查是否有活跃的进程
+        """停止所有进程（多阶段终止策略）"""
         if not self.active_processes:
-            return False  # 没有进程需要停止
+            return False
 
         self.add_log("正在终止所有进程...")
 
         # 刷新日志缓冲区
         self._flush_log_buffer()
 
-        # 停止异步工作器
-        self._stop_async_workers()
-
-        # 设置停止事件（仅日志文件线程）
+        # 设置停止事件
+        self._stop_event.set()
         self._log_file_stop_event.set()
 
-        # 停止所有异步任务（来自execute_command的输出读取任务）
+        # 停止所有输出线程
+        for thread in self._output_threads:
+            if thread.is_alive():
+                thread.join(timeout=2.0)
+
+        self._output_threads = []
+
+        # 停止所有异步任务
         if hasattr(self, '_output_tasks'):
             for task in self._output_tasks:
                 if not task.done():
@@ -564,9 +458,9 @@ class AsyncTerminal:
 
                 # 检查进程是否仍在运行
                 is_running = False
-                if hasattr(process, 'poll'):  # subprocess.Popen
+                if hasattr(process, 'poll'):
                     is_running = process.poll() is None
-                elif hasattr(process, 'returncode'):  # asyncio.subprocess.Process
+                elif hasattr(process, 'returncode'):
                     is_running = process.returncode is None
 
                 if not is_running:
@@ -575,9 +469,9 @@ class AsyncTerminal:
 
                 # 阶段 1: 优雅终止（SIGTERM）
                 try:
-                    if hasattr(process, 'terminate'):  # subprocess.Popen
+                    if hasattr(process, 'terminate'):
                         process.terminate()
-                    elif hasattr(process, 'send_signal'):  # asyncio.subprocess.Process
+                    elif hasattr(process, 'send_signal'):
                         process.send_signal(signal.SIGTERM)
                 except Exception:
                     pass
@@ -632,10 +526,9 @@ class AsyncTerminal:
 
         for proc_info in processes_to_verify:
             pid = proc_info['pid']
-            # 使用 tasklist 验证进程是否仍在运行
             if self._verify_process_running(pid):
                 self.add_log(f"  发现残留进程 PID={pid}，正在清理...")
-                if self._kill_process_by_pid(pid, use_tree=False):  # 不需要 /T，因为没有进程组
+                if self._kill_process_by_pid(pid, use_tree=False):
                     self.add_log(f"  ✓ 成功清理 PID={pid}")
                     killed_count += 1
                 else:
@@ -646,179 +539,24 @@ class AsyncTerminal:
         else:
             self.add_log("✓ 所有进程已成功终止")
 
-        # 标记为不再运行
         self.is_running = False
-
-        # 重置停止事件，允许后续日志处理
         self._stop_event.clear()
 
         return True
 
-    # ============ 异步批处理和UI更新 ============
-
-    async def _schedule_batch_process_async(self):
-        """异步批处理"""
-        if self._processing:
-            return
-
-        async with self._processing_lock:
-            try:
-                # 循环处理直到队列为空（防止递归调用因锁而失败）
-                batch_count = 0
-                while True:
-                    queue_size = self._log_queue.qsize()
-                    if queue_size == 0:
-                        break
-
-                    # 自适应批量大小（针对高负载优化）
-                    if queue_size > 1000:
-                        batch_limit = 500  # 极高负载：500条/批
-                    elif queue_size > 500:
-                        batch_limit = 300  # 高负载：300条/批
-                    elif queue_size > 200:
-                        batch_limit = 200  # 中高负载：200条/批
-                    elif queue_size > 50:
-                        batch_limit = 100  # 中等负载：100条/批
-                    else:
-                        batch_limit = 50  # 低负载：50条/批
-
-                    batch_limit = min(batch_limit, queue_size)
-
-                    # 收集日志条目
-                    log_entries = []
-                    for _ in range(batch_limit):
-                        try:
-                            entry = self._log_queue.get_nowait()
-                            log_entries.append(entry)
-                        except asyncio.QueueEmpty:
-                            break
-
-                    if not log_entries:
-                        break
-
-                    # 创建UI控件
-                    new_controls = []
-                    for processed_text in log_entries:
-                        if ANSI_ESCAPE_REGEX.search(processed_text):
-                            spans = parse_ansi_text(processed_text)
-                            new_text = ft.Text(spans=spans, selectable=True, size=14)
-                        else:
-                            new_text = ft.Text(processed_text, selectable=True, size=14)
-                        new_controls.append(new_text)
-
-                    # 更新UI
-                    async with self._ui_processing_lock:
-                        self.logs.controls.extend(new_controls)
-                        while len(self.logs.controls) > self.MAX_LOG_ENTRIES:
-                            del self.logs.controls[0]
-                        self._last_process_time = time.time()
-
-                        # 调度UI更新（高负载时降低刷新限制）
-                        current_time = time.time()
-                        # 高负载时（队列>500）降低冷却时间到5ms，否则使用正常冷却时间
-                        cooldown = 0.005 if queue_size > 500 else self._refresh_cooldown
-                        if current_time - self._last_refresh_time > cooldown:
-                            if self._page_ready:
-                                await self._update_ui_async()
-                                self._last_ui_update = current_time
-                                self._last_refresh_time = current_time
-
-                    # 每处理5个批次后短暂yield，避免阻塞其他协程
-                    batch_count += 1
-                    if batch_count % 5 == 0:
-                        await asyncio.sleep(0)
-
-                    # 继续循环处理剩余日志
-
-            except Exception as e:
-                print(f"Batch processing error: {e}")
-            finally:
-                self._processing = False
-
-    async def _update_ui_async(self):
-        """异步UI更新"""
-        if self._is_page_available():
-            try:
-                # 使用同步回调进行UI更新
-                self.logs.update()
-            except Exception:
-                pass
-
-    def _is_page_available(self):
-        """检查页面是否可用"""
-        try:
-            return (hasattr(self, 'view') and
-                    self.view is not None and
-                    hasattr(self.view, 'page') and
-                    self.view.page is not None and
-                    not getattr(self.view.page, 'closed', False))
-        except Exception:
-            return False
-
     # ============ 公共API方法 ============
 
     def enable_debug_mode(self, enabled=True):
-        """
-        启用或禁用 DEBUG 模式
-
-        Args:
-            enabled (bool): True 启用 DEBUG 模式，False 禁用
-        """
+        """启用或禁用 DEBUG 模式"""
         self._debug_mode = enabled
         if enabled:
             self.add_log("[DEBUG] DEBUG 模式已启用 - 将显示所有调试信息")
         else:
             self.add_log("[DEBUG] DEBUG 模式已禁用 - 将隐藏调试信息")
 
-    # ============ 桥接机制 ============
-
-    def _enqueue_log_async(self, processed_text: str):
-        """桥接同步到异步"""
-        # 如果异步未初始化，直接同步处理
-        if not self._async_initialized:
-            self._process_log_sync(processed_text)
-            return
-
-        # 异步已初始化，尝试放入队列
-        # 使用 try/except 避免队列满时阻塞
-        try:
-            self._log_queue.put_nowait(processed_text)
-        except asyncio.QueueFull:
-            # 队列满时，同步处理
-            self._process_log_sync(processed_text)
-
-    async def _put_log_async(self, text: str):
-        """异步放入队列"""
-        try:
-            if self._log_queue and not self._log_queue.full():
-                await self._log_queue.put(text)
-        except Exception as e:
-            print(f"Failed to put log in queue: {e}")
-
-    def _process_log_sync(self, text: str):
-        """同步日志处理回退"""
-        # 直接UI更新
-        if ANSI_ESCAPE_REGEX.search(text):
-            spans = parse_ansi_text(text)
-            new_text = ft.Text(spans=spans, selectable=True, size=14)
-        else:
-            new_text = ft.Text(text, selectable=True, size=14)
-
-        try:
-            self.logs.controls.append(new_text)
-            while len(self.logs.controls) > self.MAX_LOG_ENTRIES:
-                del self.logs.controls[0]
-            if self._page_ready and self._is_page_available():
-                self.logs.update()
-        except Exception:
-            pass
-
-    # ============ 公共API方法 ============
-
     def add_log(self, text: str):
-        """线程安全的日志添加方法（桥接到异步）"""
+        """线程安全的日志添加方法"""
         try:
-            # 优先处理空值情况
             if not text:
                 return
 
@@ -827,7 +565,6 @@ class AsyncTerminal:
 
             # 如果不是 DEBUG 模式且是 DEBUG 日志，则跳过显示（但仍然记录到文件）
             if is_debug and not self._debug_mode:
-                # 只记录到文件，不显示在终端
                 if self.enable_logging:
                     processed_text = text[:self.LOG_MAX_LENGTH]
                     processed_text = re.sub(r'(\r?\n){3,}', '\n\n', processed_text.strip())
@@ -840,9 +577,7 @@ class AsyncTerminal:
 
             # 日志文件记录
             if self.enable_logging:
-                # 检查是否需要轮转日志文件
                 self._rotate_log_file_if_needed()
-
                 timestamp = datetime.datetime.now()
                 self._log_file_queue.put((timestamp, clean_text))
 
@@ -856,8 +591,22 @@ class AsyncTerminal:
             else:
                 processed_text = clean_text
 
-            # 桥接：异步上下文检测和调度
-            self._enqueue_log_async(processed_text)
+            # 添加到队列
+            self._log_queue.put(processed_text)
+
+            # 立即安排处理少量日志
+            queue_size = self._log_queue.qsize()
+            current_time = time.time()
+
+            if queue_size > 0 and (queue_size >= 3 or (current_time - self._last_process_time) >= 0.05):
+                self._schedule_batch_process()
+            elif queue_size > 0:
+                if hasattr(self, 'view') and self.view.page is not None:
+                    try:
+                        timer = threading.Timer(0.03, self._schedule_batch_process)
+                        timer.start()
+                    except:
+                        self._schedule_batch_process()
 
         except (TypeError, IndexError, AttributeError) as e:
             import traceback
@@ -868,59 +617,18 @@ class AsyncTerminal:
             print(f"未知错误: {str(e)}")
             print(f"错误详情: {traceback.format_exc()}")
 
-    def _clear_logs_async(self):
-        """异步清空日志"""
-        def clear_logs():
-            try:
-                self.logs.controls.clear()
-                if hasattr(self, 'view') and self.view.page is not None:
-                    self.logs.update()
-            except Exception as e:
-                print(f"清空日志失败: {str(e)}")
-
-        if hasattr(self, 'view') and self.view.page is not None:
-            try:
-                async def async_clear_logs():
-                    clear_logs()
-                self.view.page.run_task(async_clear_logs)
-            except (RuntimeError, Exception):
-                clear_logs()
-
-        # 清空异步队列（asyncio.Queue 没有简单的 clear 方法）
-        if self._async_initialized and self._log_queue:
-            async def clear_queue():
-                while not self._log_queue.empty():
-                    try:
-                        self._log_queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
-            try:
-                self._page.run_task(clear_queue)
-            except Exception:
-                pass  # 如果清空失败，忽略
-
     def set_page_ready(self, ready=True):
-        """
-        设置页面就绪标志
-
-        当控件被添加到页面后，应该调用此方法标记页面就绪，
-        这样日志处理线程才能安全地更新 UI。
-
-        Args:
-            ready (bool): True 表示页面已就绪，False 表示页面未就绪
-        """
+        """设置页面就绪标志"""
         self._page_ready = ready
         if ready:
-            # 页面就绪后，立即处理队列中的日志（如果异步初始化已完成）
-            if self._async_initialized and self._log_queue and not self._log_queue.empty():
-                # 调度异步批处理
+            if not self._log_queue.empty():
                 try:
-                    self._page.run_task(self._schedule_batch_process_async)
+                    self._schedule_batch_process()
                 except Exception:
-                    pass  # 如果调度失败，忽略
+                    pass
 
     def _write_log_entries_to_file(self, entries):
-        """将一批日志条目写入文件（优化版 - 使用保持打开的文件句柄）"""
+        """将一批日志条目写入文件"""
         if not self.enable_logging:
             return
 
@@ -929,24 +637,20 @@ class AsyncTerminal:
                 if self._log_file_handle is None:
                     return
 
-                # 准备日志内容
                 log_lines = []
                 for timestamp, text in entries:
-                    formatted_timestamp = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]  # 包含毫秒
+                    formatted_timestamp = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
                     clean_text = re.sub(r'\x1b\[[0-9;]*m', '', text)
                     log_lines.append(f"[{formatted_timestamp}] {clean_text}\n")
 
-                # 批量写入并flush
                 try:
                     self._log_file_handle.writelines(log_lines)
-                    self._log_file_handle.flush()  # 确保写入磁盘
+                    self._log_file_handle.flush()
                 except OSError as e:
                     print(f"写入日志文件时发生IO错误: {str(e)}")
-                    # 尝试重新打开文件
                     try:
                         self._log_file_handle.close()
                         self._open_log_file()
-                        # 重试写入
                         self._log_file_handle.writelines(log_lines)
                         self._log_file_handle.flush()
                     except Exception as retry_error:
@@ -962,16 +666,14 @@ class AsyncTerminal:
             try:
                 self._log_file_queue.put_nowait((timestamp, text))
             except queue.Full:
-                pass  # 队列满时丢弃
+                pass
 
     def _flush_log_buffer(self):
-        """刷新日志缓冲区，确保所有日志都被写入文件（优化版）"""
-        # 等待日志文件队列处理完毕（最多5秒）
+        """刷新日志缓冲区"""
         timeout = time.time() + 5
         while not self._log_file_queue.empty() and time.time() < timeout:
             time.sleep(0.01)
 
-        # 强制flush文件
         with self._log_file_lock:
             if self._log_file_handle:
                 try:
