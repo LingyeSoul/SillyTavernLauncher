@@ -308,13 +308,13 @@ class WelcomeDialog:
             actions=[
                 ft.TextButton(
                     "酒馆入门教程",
-                    on_click=lambda _: self.page.launch_url("https://www.yuque.com/yinsa-0wzmf/rcv7g3?", web_window_name="sillytaverntutorial")
+                    on_click=lambda _: self.page.launch_url("https://www.yuque.com/yinsa-0wzmf/rcv7g3?")
                 ),
                 ft.TextButton(
                     "启动器官网",
-                    on_click=lambda _: self.page.launch_url("https://sillytavern.lingyesoul.top", web_window_name="sillytavernlauncher")
+                    on_click=lambda _: self.page.launch_url("https://sillytavern.lingyesoul.top")
                 ),
-                ft.ElevatedButton(
+                ft.Button(
                     "验证答案",
                     icon=ft.Icons.CHECK,
                     bgcolor=ft.Colors.BLUE_600,

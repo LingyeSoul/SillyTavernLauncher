@@ -26,7 +26,7 @@ def create_version_card(version_str, version_data, is_current=False, on_click=No
     current_badge = ft.Container(
         content=ft.Text("当前", size=11, color=ft.Colors.WHITE),
         bgcolor=ft.Colors.BLUE,
-        padding=ft.padding.symmetric(horizontal=6, vertical=2),
+        padding=ft.Padding.symmetric(horizontal=6, vertical=2),
         border_radius=4,
         visible=is_current,
     )
@@ -64,7 +64,7 @@ def create_version_card(version_str, version_data, is_current=False, on_click=No
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, expand=True),
         padding=12,
         bgcolor=None,
-        border=ft.border.all(1, ft.Colors.BLUE if is_current else ft.Colors.GREY_300),
+        border=ft.Border.all(1, ft.Colors.BLUE if is_current else ft.Colors.GREY_300),
         border_radius=8,
         on_click=on_click,
         ink=True,
@@ -105,7 +105,7 @@ def show_version_switch_dialog(page, version_str, version_data, on_confirm):
                 "取消",
                 on_click=lambda e: _close_dialog(page, dialog)
             ),
-            ft.ElevatedButton(
+            ft.Button(
                 "确认",
                 on_click=lambda e: do_switch(),
             ),
@@ -277,7 +277,7 @@ def create_version_switch_view(page, terminal, ui_event):
                     current_commit_text,
                 ], horizontal_alignment=ft.CrossAxisAlignment.END),
             ], expand=True),
-            padding=ft.padding.symmetric(horizontal=10, vertical=12),
+            padding=ft.Padding.symmetric(horizontal=10, vertical=12),
             border_radius=8,
         ),
 
