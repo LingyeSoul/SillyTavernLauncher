@@ -62,12 +62,18 @@ def parse_ansi_text(text):
 
 
 class AsyncTerminal:
-    # 性能优化常量（简化版 - 移除过载阈值）
-    MAX_LOG_ENTRIES = 200  # UI最多显示200条
+    # 性能优化常量
+    MAX_QUEUE_SIZE = 10000  # 增加队列最大条目数（从1000提升到10000）
+    MAX_LOG_ENTRIES = 1500  # 增加UI控件数量限制（从200提升到1500）
     LOG_MAX_LENGTH = 1000  # 单条日志长度限制
     LOG_MAX_LENGTH_DETAILED = 5000  # 详细日志（如traceback）的长度限制
-    BATCH_SIZE_THRESHOLD = 50  # 批量处理阈值
-    PROCESS_INTERVAL = 0.05  # 处理间隔50ms
+    BATCH_SIZE_THRESHOLD = 30  # 增加批量处理阈值（从50提升到30，更频繁处理）
+    PROCESS_INTERVAL = 0.02  # 处理间隔优化为20ms（从50ms降低）
+
+    # ⚡ 新增：日志显示和记录分离
+    MAX_DISPLAY_LOGS = 150  # 终端最多显示150条（保持不变）
+    HIGH_LOAD_THRESHOLD = 500  # 提高高负载阈值（从200提升到500）
+    OVERLOAD_THRESHOLD = 2000  # 提高过载阈值（从500提升到2000）
 
     def __init__(self, page, enable_logging=True, local_enabled=False):
         self.logs = ft.ListView(
@@ -125,29 +131,60 @@ class AsyncTerminal:
         self._process_monitor_stop_event = threading.Event()
         self._start_process_monitor()
 
-        # 异步处理相关属性 - 使用无界队列（简化版）
-        self._log_queue = queue.Queue()  # 无界队列，避免背压
+        # 异步处理相关属性 - 使用有界队列防止内存溢出
+        self._log_queue = queue.Queue(maxsize=10000)  # 有界队列，防止内存溢出
         self._last_process_time = time.time()  # 初始化为当前时间，避免第一次时间差计算异常
-        self._process_interval = self.PROCESS_INTERVAL
-        self._processing = False  # 阻止并发处理
-        self._batch_size_threshold = self.BATCH_SIZE_THRESHOLD
-        self._max_log_entries = self.MAX_LOG_ENTRIES
+        self._process_interval = 0.02  # 优化为20ms
+        self._processing = False  # 阻止并发处理的标志
+        self._batch_size_threshold = 30  # 优化为30
+        self._max_log_entries = 1500  # 优化为1500
         self._page_ready = False  # 页面就绪标志
         self._schedule_retry_count = 0  # 调度重试计数
 
         # 日志文件写入线程相关属性
-        self._log_file_queue = queue.Queue()  # 无界队列
+        self._log_file_queue = queue.Queue(maxsize=10000)  # 有界队列
         self._log_file_thread = None
         self._log_file_stop_event = threading.Event()
         self._log_file_handle = None  # 文件句柄，保持打开以减少I/O
         self._log_file_lock = threading.Lock()
 
+        # UI更新防抖（避免频繁更新）
+        self._update_pending = False
+        self._update_lock = threading.Lock()
+        self._update_timer = None  # 存储Timer对象以便取消
+        self._last_ui_update = 0  # 记录上次UI更新时间
+        self._is_shutting_down = False  # 关闭标志，防止更新已关闭的页面
+        self._ui_update_fail_count = 0  # UI更新失败计数器
+        self._ui_processing_lock = threading.RLock()  # 添加UI处理锁，使用RLock允许同一线程多次获取
+        
         # 添加_stop_event用于停止后台日志处理线程
         self._stop_event = threading.Event()
 
+        # 启动后台日志处理循环
+        self._start_log_processing_loop()
+        
         # 启动日志文件写入线程
         if self.enable_logging:
             self._start_log_file_thread()
+
+    def _start_log_processing_loop(self):
+        """启动后台日志处理循环（仅调度，不处理）"""
+        def log_processing_worker():
+            while not self._stop_event.is_set():
+                try:
+                    # 只检查队列并调度，不直接处理
+                    if not self._log_queue.empty():
+                        self._schedule_batch_process()
+                    time.sleep(0.02)  # 降低到20ms检查间隔，提高响应速度
+                except Exception as e:
+                    print(f"后台日志处理错误: {str(e)}")
+
+        self._log_thread = threading.Thread(
+            target=log_processing_worker,
+            daemon=True,
+            name="LogProcessingWorker"  # 给线程命名方便调试
+        )
+        self._log_thread.start()
 
     def _start_log_file_thread(self):
         """启动日志文件写入线程"""
@@ -192,6 +229,9 @@ class AsyncTerminal:
         """启动进程监控线程，定期检查进程状态"""
         def process_monitor_worker():
             """进程监控工作线程"""
+            # 记录已报告退出的进程，避免重复日志
+            reported_exited_pids = set()
+
             while not self._process_monitor_stop_event.is_set():
                 try:
                     if self.is_running and self.active_processes:
@@ -210,16 +250,20 @@ class AsyncTerminal:
 
                             if is_running:
                                 all_stopped = False
-                                break
+                                # 如果进程还在运行，从已退出集合中移除
+                                reported_exited_pids.discard(pid)
                             else:
-                                # 进程已退出，记录日志
-                                self.add_log(f"[DEBUG] 进程 PID={pid} 已退出")
+                                # 进程已退出，只记录一次日志
+                                if pid not in reported_exited_pids:
+                                    self.add_log(f"[DEBUG] 进程 PID={pid} 已退出")
+                                    reported_exited_pids.add(pid)
 
-                        # 如果所有进程都已停止，更新状态
+                        # 如果所有进程都已停止，更新状态并清空记录
                         if all_stopped:
                             if self.is_running:
                                 self.add_log("检测到所有进程已停止")
                                 self.is_running = False
+                                reported_exited_pids.clear()
 
                     time.sleep(1.0)  # 每秒检查一次
                 except Exception as e:
@@ -491,10 +535,13 @@ class AsyncTerminal:
         # 标记为不再运行
         self.is_running = False
 
+        # 重置停止事件，允许后续日志处理
+        self._stop_event.clear()
+
         return True
 
     def _process_batch(self):
-        """处理批量日志条目（简化的自适应批量）"""
+        """⭐ 处理批量日志条目（优化版 - 减少UI更新频率，增加线程安全）"""
         # 阻止并发处理
         if self._processing:
             return
@@ -503,198 +550,128 @@ class AsyncTerminal:
         try:
             queue_size = self._log_queue.qsize()
 
-            # 简化的自适应批量大小（3档）
-            if queue_size > 100:
-                batch_limit = 50  # 高负载
-            elif queue_size > 30:
-                batch_limit = 30  # 中负载
+            # ⚡ 自适应批量大小：根据队列深度动态调整
+            if queue_size > 200:
+                batch_limit = 100  # 高负载：大批量处理
+            elif queue_size > 50:
+                batch_limit = 50  # 中负载：中批量处理
             else:
-                batch_limit = 15  # 低负载
+                batch_limit = 20  # 低负载：小批量处理
 
             batch_limit = min(batch_limit, queue_size)
 
-            # 如果队列为空，直接返回
-            if batch_limit == 0:
-                return
-
             # 收集日志条目
             log_entries = []
-            for _ in range(batch_limit):
+            processed_count = 0
+            while processed_count < batch_limit:
                 try:
                     entry = self._log_queue.get_nowait()
                     log_entries.append(entry)
+                    processed_count += 1
                 except queue.Empty:
                     break
 
             if not log_entries:
                 return
 
-            # 添加调试日志
-            print(f"[DEBUG] _process_batch: 队列={queue_size}, 取出={len(log_entries)}")
-
-            # 创建日志控件（限制每次创建的数量，避免UI卡顿）
+            # 创建日志控件 - 批量操作优化，使用原来字体大小
             new_controls = []
-            max_controls_per_batch = 20  # 每次最多创建20个控件
+            for processed_text in log_entries:
+                if ANSI_ESCAPE_REGEX.search(processed_text):
+                    spans = parse_ansi_text(processed_text)
+                    new_text = ft.Text(spans=spans, selectable=True, size=14)  # 还原字体大小
+                else:
+                    new_text = ft.Text(processed_text, selectable=True, size=14)  # 还原字体大小
+                new_controls.append(new_text)
 
-            for i, text in enumerate(log_entries):
-                if i >= max_controls_per_batch:
-                    # 超过限制，将剩余日志放回队列
-                    for remaining_text in log_entries[i:]:
+            # ⭐ 关键：批量添加控件以提高性能 - 在锁内操作
+            with self._ui_processing_lock:
+                self.logs.controls.extend(new_controls)
+
+                # 限制日志数量 - 增加保留数量以保持更多历史
+                if len(self.logs.controls) > self.MAX_LOG_ENTRIES:
+                    # 保留更多的日志，只移除最旧的部分
+                    excess = len(self.logs.controls) - self.MAX_LOG_ENTRIES
+                    self.logs.controls = self.logs.controls[excess:]
+
+                # 更新处理时间
+                self._last_process_time = time.time()
+
+                # ⭐ 优化：减少UI更新频率，只在必要时更新
+                current_time = time.time()
+                if current_time - self._last_ui_update > 0.05:  # 至少50ms才更新一次UI
+                    # ⭐ 关键：直接更新 UI（已在主线程中，不需要 page.run_task）
+                    if (hasattr(self, 'view') and
+                        self.view.page is not None and
+                        not getattr(self.view.page, 'closed', False)):
                         try:
-                            self._log_queue.put_nowait(remaining_text)
-                        except queue.Full:
-                            pass
-                    break
-
-                if ANSI_ESCAPE_REGEX.search(text):
-                    spans = parse_ansi_text(text)
-                    new_controls.append(ft.Text(spans=spans, selectable=True, size=14))
-                else:
-                    new_controls.append(ft.Text(text, selectable=True, size=14))
-
-            # 检查是否创建了任何控件
-            if not new_controls:
-                print(f"[DEBUG] 未创建任何控件")
-                return
-
-            # 更新UI
-            self.logs.controls.extend(new_controls)
-            print(f"[DEBUG] 创建了 {len(new_controls)} 个控件，总计 {len(self.logs.controls)}")
-
-            # 限制日志数量（使用del而不是列表替换，避免ListView内部状态问题）
-            if len(self.logs.controls) > self.MAX_LOG_ENTRIES:
-                excess_count = len(self.logs.controls) - self.MAX_LOG_ENTRIES
-                del self.logs.controls[:excess_count]
-                print(f"[DEBUG] 删除了 {excess_count} 个旧控件")
-
-            self._last_process_time = time.time()
-
-            # 更新UI（增强的错误处理）
-            try:
-                # 使用 try-except 保护整个 UI 更新流程
-                if (hasattr(self, 'view') and
-                    self.view is not None and
-                    hasattr(self.view, 'page') and
-                    self.view.page is not None and
-                    not getattr(self.view.page, 'closed', False)):
-                    # 页面可用，尝试更新 UI
-                    print(f"[DEBUG] 尝试更新UI，控件数: {len(self.logs.controls)}")
-                    self.logs.update()
-                    print(f"[DEBUG] UI更新成功")
-                else:
-                    print(f"[DEBUG] 页面不可用，跳过UI更新")
-            except (RuntimeError, AssertionError, AttributeError) as e:
-                # 已知的 UI 更新错误，静默处理
-                print(f"[DEBUG] UI更新错误 ({type(e).__name__}): {str(e)}")
-            except Exception as e:
-                # 其他未知错误，打印日志但不中断处理
-                print(f"[DEBUG] UI更新异常: {type(e).__name__}: {str(e)}")
+                            # 直接调用 update，因为已在主线程
+                            self.logs.update()
+                            self._last_ui_update = current_time
+                        except AssertionError as e:
+                            # 详细记录错误信息
+                            import threading
+                            import traceback
+                            error_msg = str(e) if str(e) else "控件 __uid 为 None"
+                            print(f"=== UI更新失败(AssertionError) ===")
+                            print(f"错误信息: {error_msg}")
+                            print(f"当前线程: {threading.current_thread().name}")
+                            print(f"日志控件数量: {len(self.logs.controls)}")
+                            print(f"MAX_LOG_ENTRIES: {self.MAX_LOG_ENTRIES}")
+                            print(f"队列大小: {self._log_queue.qsize()}")
+                            print(f"批量处理数量: {len(new_controls)}")
+                            print(f"堆栈信息:")
+                            traceback.print_stack()
+                            print(f"===================================")
+                        except RuntimeError as e:
+                            # 事件循环已关闭
+                            if "Event loop is closed" not in str(e):
+                                raise
 
         except Exception as e:
             import traceback
             print(f"批量处理失败: {str(e)}")
             print(f"错误详情: {traceback.format_exc()}")
         finally:
+            # 确保_processing标志被重置
             self._processing = False
-            # 如果队列已空，滚动到底部（仅在长队列处理完成时滚动）
-            if (self._log_queue.empty() and
-                hasattr(self, 'view') and
-                self.view is not None and
-                hasattr(self.view, 'page') and
-                self.view.page is not None and
-                not getattr(self.view.page, 'closed', False)):
-                try:
-                    self.logs.scroll_to(offset=-1, duration=0)
-                    print(f"[DEBUG] 队列处理完成，滚动到底部")
-                except Exception as scroll_ex:
-                    print(f"[DEBUG] 滚动失败: {scroll_ex}")
-
-            # 如果队列中还有未处理的日志且未关闭，继续处理
-            if not self._log_queue.empty() and not self._stop_event.is_set():
+            # 如果队列中还有未处理的日志，安排下一次处理
+            if not self._log_queue.empty():
+                # ⭐ 递归调度（通过 page.run_task）
                 self._schedule_batch_process()
 
     def _schedule_batch_process(self):
-        """安排批量处理（使用 page.run_task 确保在主线程执行）"""
-        # 检查是否正在关闭
+        """安排批量处理（确保页面就绪后再处理）"""
+        # 快速检查：如果已停止，直接返回
         if self._stop_event.is_set():
             return
 
-        # 如果正在处理中，跳过（快速检查，避免竞争）
-        if self._processing:
-            return
-
-        # 检查页面是否可用（增强的错误处理）
+        # 检查页面是否可用
         page_available = False
         try:
-            # 分步检查，避免在 hasattr 本身抛出 RuntimeError
-            if not (hasattr(self, 'view') and self.view is not None):
-                page_available = False
-            elif not hasattr(self.view, 'page'):
-                page_available = False
-            elif self.view.page is None:
-                page_available = False
-            elif getattr(self.view.page, 'closed', False):
-                page_available = False
-            else:
+            if (hasattr(self, 'view') and self.view is not None and
+                hasattr(self.view, 'page') and self.view.page is not None and
+                not getattr(self.view.page, 'closed', False)):
                 page_available = True
-        except (RuntimeError, AttributeError) as e:
-            # Column 控件未附加到页面，或其他属性访问错误
-            page_available = False
-        except Exception as e:
-            # 其他未知错误
-            print(f"[DEBUG] 页面可用性检查异常: {type(e).__name__}: {str(e)}")
+        except Exception:
             page_available = False
 
-        # 如果页面不可用，使用定时器重试
-        if not page_available:
-            # 检查是否正在关闭
-            if self._stop_event.is_set():
-                return
-
-            # 限制重试次数，避免无限循环
-            if self._schedule_retry_count < 200:  # 最多重试 200 次（4秒）
-                self._schedule_retry_count += 1
-                try:
-                    # 使用更短的重试间隔（20ms）提高响应速度
-                    threading.Timer(0.02, self._schedule_batch_process).start()
-                except Exception:
-                    # 如果定时器失败，不再重试
-                    pass
-            else:
-                # 重试次数过多，放弃重试
-                print(f"[DEBUG] 页面重试次数过多，放弃")
+        # 如果页面可用，执行批处理
+        if page_available:
+            try:
+                # 设置页面就绪标志
+                self._page_ready = True
                 self._schedule_retry_count = 0
-            return
-
-        # 页面可用，重置重试计数
-        if not self._page_ready:
-            self._page_ready = True
-            self._schedule_retry_count = 0
-            print(f"[DEBUG] 页面首次就绪，_page_ready 设为 True")
-
-        try:
-            # 再次检查是否正在关闭
-            if self._stop_event.is_set():
-                return
-
-            # 定义异步函数用于处理批处理
-            async def async_process_batch():
                 self._process_batch()
-
-            # 使用 page.run_task() 确保在主线程执行
-            self.view.page.run_task(async_process_batch)
-        except (AssertionError, RuntimeError) as e:
-            # 对于已知的运行时错误，不再重试
-            error_msg = str(e)
-            # 只打印关键错误，避免刷屏
-            if "destroyed" in error_msg.lower() or "closed" in error_msg.lower():
-                # 页面已销毁，静默处理
-                pass
-            elif "assertion" not in error_msg.lower():
-                print(f"[DEBUG] 日志调度失败: {error_msg}")
-        except Exception as e:
-            # 其他异常，只打印一次
-            print(f"[DEBUG] 日志调度异常: {type(e).__name__}: {str(e)}")
+            except Exception as e:
+                print(f"[DEBUG] 批处理异常: {type(e).__name__}: {str(e)}")
+                import traceback
+                traceback.print_exc()
+        else:
+            # 如果页面不可用，增加重试计数，但不执行处理
+            self._schedule_retry_count += 1
+            if self._schedule_retry_count % 10 == 0:  # 每10次打印一次日志
+                print(f"[DEBUG] 页面暂不可用，重试次数: {self._schedule_retry_count}")
 
     def _schedule_ui_update(self):
         """触发 UI 更新"""
@@ -720,7 +697,7 @@ class AsyncTerminal:
             self.add_log("[DEBUG] DEBUG 模式已禁用 - 将隐藏调试信息")
 
     def add_log(self, text: str):
-        """线程安全的日志添加方法（简化版 - 移除激进截断，保留DEBUG过滤）"""
+        """线程安全的日志添加方法（优化版 - 减少延迟）"""
         try:
             # 优先处理空值情况
             if not text:
@@ -760,34 +737,45 @@ class AsyncTerminal:
             # 简化的队列管理（无界队列，无激进截断）
             self._log_queue.put(processed_text)
 
-            # 智能调度处理（优化第一次响应）
+            # 智能调度处理（优化响应速度）
             queue_size = self._log_queue.qsize()
             current_time = time.time()
-            time_since_last_process = current_time - self._last_process_time
+            
+            # 检查是否需要立即处理 - 降低延迟
+            needs_immediate_processing = (
+                queue_size >= 3 or  # 队列中有一定数量的日志（降低阈值）
+                (current_time - self._last_process_time) >= 0.02  # 或者距离上次处理已经过去20ms
+            )
 
-            # 检查是否应该调度
-            should_schedule = False
-            schedule_reason = ""
+            if needs_immediate_processing:
+                # 取消之前的 Timer（如果有）
+                if self._update_timer is not None:
+                    try:
+                        self._update_timer.cancel()
+                    except Exception:
+                        pass
+                self._schedule_batch_process()
+            # 对于少量日志，安排延迟处理以避免频繁更新
+            else:
+                # 取消之前的 Timer（如果有）
+                if self._update_timer is not None:
+                    try:
+                        self._update_timer.cancel()
+                    except Exception:
+                        pass
 
-            if not self._page_ready:
-                # 页面未就绪时，立即调度以提高响应速度
-                should_schedule = True
-                schedule_reason = "页面未就绪"
-            elif queue_size > 0 and (queue_size >= 3 or time_since_last_process >= 0.05):
-                # 页面已就绪，使用正常的批量处理逻辑
-                should_schedule = True
-                schedule_reason = f"队列={queue_size}, 时间差={time_since_last_process:.3f}"
-            elif queue_size > 0:
-                # 对于少量日志，也立即调度（确保及时显示）
-                should_schedule = True
-                schedule_reason = "队列有日志"
-
-            if should_schedule:
-                # 立即调度
-                try:
-                    self._schedule_batch_process()
-                except Exception as ex:
-                    print(f"[DEBUG] 调度失败 ({schedule_reason}): {ex}")
+                # 使用 threading.Timer 安排延迟处理（更短延迟）
+                if (hasattr(self, 'view') and
+                    self.view.page is not None and
+                    not getattr(self.view.page, 'closed', False)):
+                    try:
+                        # 根据队列大小动态调整延迟时间
+                        delay = 0.01 if queue_size > 1 else 0.03  # 降低延迟时间
+                        self._update_timer = threading.Timer(delay, self._schedule_batch_process)
+                        self._update_timer.start()
+                    except:
+                        # 定时器设置失败，直接安排处理
+                        self._schedule_batch_process()
 
         except (TypeError, IndexError, AttributeError) as e:
             import traceback
@@ -809,18 +797,18 @@ class AsyncTerminal:
         time_since_last_process = current_time - self._last_process_time
 
         # ⚡ 自适应触发阈值：根据队列深度动态调整
-        if queue_size > 100:
+        if queue_size > 200:
             # 高负载：等待积累更多或超时
-            threshold = 50
-            timeout = 0.15  # 150ms
+            threshold = 100
+            timeout = 0.1  # 100ms
         elif queue_size > 50:
             # 中负载：中等阈值
-            threshold = 20
-            timeout = 0.1  # 100ms
+            threshold = 30
+            timeout = 0.05  # 50ms
         else:
             # 低负载：快速响应
             threshold = 5
-            timeout = 0.05  # 50ms
+            timeout = 0.02  # 20ms
 
         if queue_size > 0 and (queue_size >= threshold or time_since_last_process >= timeout):
             if not self._processing:

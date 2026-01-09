@@ -19,8 +19,11 @@ class UniUI():
         self.sysenv = SysEnv()
         self.stcfg = stcfg()
         self.platform = platform.system()
-        self.terminal = AsyncTerminal(page)  # 使用异步终端替换高性能终端
         self.config_manager = ConfigManager()
+        self.config = self.config_manager.config
+        # 从配置中读取日志开关，默认关闭
+        enable_logging = self.config_manager.get("log", False)
+        self.terminal = AsyncTerminal(page, enable_logging=enable_logging)
         self.config = self.config_manager.config
         self.ui_event = UiEvent(self.page, self.terminal, self)
         self.BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
