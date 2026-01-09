@@ -60,7 +60,6 @@ def parse_ansi_text(text):
 
     return spans
 
-
 class AsyncTerminal:
     # 性能优化常量
     MAX_QUEUE_SIZE = 10000  # 增加队列最大条目数（从1000提升到10000）
@@ -74,6 +73,9 @@ class AsyncTerminal:
     MAX_DISPLAY_LOGS = 150  # 终端最多显示150条（保持不变）
     HIGH_LOAD_THRESHOLD = 500  # 提高高负载阈值（从200提升到500）
     OVERLOAD_THRESHOLD = 2000  # 提高过载阈值（从500提升到2000）
+    
+    # 日志文件大小限制（100MB）
+    MAX_LOG_FILE_SIZE = 100 * 1024 * 1024
 
     def __init__(self, page, enable_logging=True, local_enabled=False):
         self.logs = ft.ListView(
@@ -159,12 +161,64 @@ class AsyncTerminal:
         # 添加_stop_event用于停止后台日志处理线程
         self._stop_event = threading.Event()
 
+        # 记录上次UI刷新时间，用于避免重复刷新
+        self._last_refresh_time = 0
+        self._refresh_cooldown = 0.05  # 50ms 刷新冷却时间
+        
+        # 后台检查线程相关
+        self._background_check_thread = None
+        self._background_check_stop_event = threading.Event()
+        self._start_background_check()
+
         # 启动后台日志处理循环
         self._start_log_processing_loop()
         
         # 启动日志文件写入线程
         if self.enable_logging:
             self._start_log_file_thread()
+
+    def _start_background_check(self):
+        """启动后台检查线程，确保即使没有新日志也会定期刷新UI"""
+        def background_check_worker():
+            while not self._background_check_stop_event.is_set():
+                try:
+                    # 检查是否需要强制刷新UI（在一段时间内没有新日志时）
+                    current_time = time.time()
+                    
+                    # 如果超过1秒没有更新UI，且队列为空，尝试刷新
+                    if (current_time - self._last_ui_update > 1.0 and 
+                        self._log_queue.empty() and 
+                        current_time - self._last_refresh_time > self._refresh_cooldown):
+                        
+                        # 尝试刷新UI
+                        with self._ui_processing_lock:
+                            if (self._page_ready and 
+                                hasattr(self, 'view') and 
+                                self.view is not None and
+                                hasattr(self.view, 'page') and 
+                                self.view.page is not None and
+                                not getattr(self.view.page, 'closed', False)):
+                                
+                                try:
+                                    self.logs.update()
+                                    self._last_ui_update = current_time
+                                    self._last_refresh_time = current_time
+                                except (AssertionError, RuntimeError):
+                                    pass
+                    
+                    time.sleep(0.1)  # 每100ms检查一次
+                except Exception as e:
+                    print(f"后台检查线程错误: {str(e)}")
+
+        # 启动后台检查线程
+        self._background_check_thread = threading.Thread(target=background_check_worker, daemon=True)
+        self._background_check_thread.start()
+
+    def _stop_background_check(self):
+        """停止后台检查线程"""
+        if self._background_check_thread and self._background_check_thread.is_alive():
+            self._background_check_stop_event.set()
+            self._background_check_thread.join(timeout=2.0)
 
     def _start_log_processing_loop(self):
         """启动后台日志处理循环（仅调度，不处理）"""
@@ -229,13 +283,21 @@ class AsyncTerminal:
         def process_monitor_worker():
             """进程监控工作线程"""
             # 记录已报告退出的进程，避免重复日志
-            reported_exited_pids = set()
+            reported_exited_pids = {}  # 修改为字典，存储PID和最后报告时间
 
             while not self._process_monitor_stop_event.is_set():
                 try:
                     if self.is_running and self.active_processes:
                         # 检查是否有进程已经退出
                         all_stopped = True
+                        current_time = time.time()
+                        
+                        # 清理超过1小时的已退出进程记录
+                        expired_pids = [pid for pid, report_time in reported_exited_pids.items() 
+                                       if current_time - report_time > 3600]
+                        for pid in expired_pids:
+                            del reported_exited_pids[pid]
+
                         for proc_info in self.active_processes:
                             process = proc_info.get('process')
                             pid = proc_info.get('pid')
@@ -250,12 +312,12 @@ class AsyncTerminal:
                             if is_running:
                                 all_stopped = False
                                 # 如果进程还在运行，从已退出集合中移除
-                                reported_exited_pids.discard(pid)
+                                reported_exited_pids.pop(pid, None)
                             else:
-                                # 进程已退出，只记录一次日志
+                                # 进程已退出，只记录一次日志（并在1小时内不再重复记录）
                                 if pid not in reported_exited_pids:
                                     self.add_log(f"[DEBUG] 进程 PID={pid} 已退出")
-                                    reported_exited_pids.add(pid)
+                                    reported_exited_pids[pid] = current_time  # 记录退出时间
 
                         # 如果所有进程都已停止，更新状态并清空记录
                         if all_stopped:
@@ -290,7 +352,7 @@ class AsyncTerminal:
 
             with self._log_file_lock:
                 if self._log_file_handle is None:
-                    self._log_file_handle = open(log_file_path, "a", encoding="utf-8", buffering=1)  # 行缓冲
+                    self._log_file_handle = open(log_file_path, "a", encoding="utf-8", buffering=8192)  # 8KB缓冲区
         except Exception as e:
             print(f"打开日志文件失败: {str(e)}")
 
@@ -311,6 +373,31 @@ class AsyncTerminal:
             self._close_log_file()
         else:
             self._open_log_file()
+
+    def _get_current_log_file_size(self):
+        """获取当前日志文件的大小"""
+        if self._log_file_handle:
+            try:
+                return self._log_file_handle.tell()
+            except:
+                # 如果无法获取当前位置，尝试获取文件大小
+                try:
+                    log_file_path = os.path.join(os.getcwd(), "logs", f"{self.launch_timestamp}.log")
+                    return os.path.getsize(log_file_path) if os.path.exists(log_file_path) else 0
+                except:
+                    return 0
+        return 0
+
+    def _rotate_log_file_if_needed(self):
+        """检查是否需要轮转日志文件"""
+        if self._get_current_log_file_size() >= self.MAX_LOG_FILE_SIZE:
+            # 关闭当前文件
+            self._close_log_file()
+            # 创建新时间戳
+            self.launch_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            # 打开新文件
+            self._open_log_file()
+            self.add_log(f"[INFO] 日志文件轮转到新文件: {self.launch_timestamp}.log")
 
     def _verify_process_running(self, pid):
         """使用 tasklist 验证进程是否仍在运行"""
@@ -420,6 +507,9 @@ class AsyncTerminal:
         
         # 设置停止事件（仅日志文件线程）
         self._log_file_stop_event.set()
+
+        # 停止后台检查线程
+        self._stop_background_check()
 
         # 首先停止所有输出线程
         for thread in self._output_threads:
@@ -598,7 +688,9 @@ class AsyncTerminal:
 
                 # ⭐ 优化：减少UI更新频率，只在必要时更新
                 current_time = time.time()
-                if current_time - self._last_ui_update > 0.05:  # 至少50ms才更新一次UI
+                
+                # 检查是否超过了刷新冷却时间
+                if current_time - self._last_refresh_time > self._refresh_cooldown:
                     # 修复：检查页面是否就绪（控件已添加到页面）
                     if self._page_ready:
                         try:
@@ -611,6 +703,7 @@ class AsyncTerminal:
                                 # 直接调用 update，因为已在主线程
                                 self.logs.update()
                                 self._last_ui_update = current_time
+                                self._last_refresh_time = current_time  # 记录刷新时间，避免重复刷新
                         except (AssertionError, RuntimeError) as e:
                             # 控件未就绪或页面已关闭，静默处理
                             # AssertionError: 控件 __uid 为 None
@@ -706,6 +799,9 @@ class AsyncTerminal:
 
             # 日志文件记录
             if self.enable_logging:
+                # 检查是否需要轮转日志文件
+                self._rotate_log_file_if_needed()
+                
                 timestamp = datetime.datetime.now()
                 self._log_file_queue.put((timestamp, clean_text))
 
@@ -847,13 +943,25 @@ class AsyncTerminal:
                 # 准备日志内容
                 log_lines = []
                 for timestamp, text in entries:
-                    formatted_timestamp = timestamp.strftime("%Y-%m-%d %H:%M:%S")
+                    formatted_timestamp = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]  # 包含毫秒
                     clean_text = re.sub(r'\x1b\[[0-9;]*m', '', text)
                     log_lines.append(f"[{formatted_timestamp}] {clean_text}\n")
 
                 # 批量写入并flush
-                self._log_file_handle.writelines(log_lines)
-                self._log_file_handle.flush()  # 确保写入磁盘
+                try:
+                    self._log_file_handle.writelines(log_lines)
+                    self._log_file_handle.flush()  # 确保写入磁盘
+                except OSError as e:
+                    print(f"写入日志文件时发生IO错误: {str(e)}")
+                    # 尝试重新打开文件
+                    try:
+                        self._log_file_handle.close()
+                        self._open_log_file()
+                        # 重试写入
+                        self._log_file_handle.writelines(log_lines)
+                        self._log_file_handle.flush()
+                    except Exception as retry_error:
+                        print(f"重试写入日志文件也失败: {str(retry_error)}")
 
         except Exception as e:
             print(f"写入日志文件失败: {str(e)}")
@@ -864,7 +972,7 @@ class AsyncTerminal:
             timestamp = datetime.datetime.now()
             try:
                 self._log_file_queue.put_nowait((timestamp, text))
-            except queue.Full:
+            except queue.Empty:
                 pass
 
     def _flush_log_buffer(self):

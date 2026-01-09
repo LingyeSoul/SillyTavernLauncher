@@ -1,4 +1,5 @@
 import flet as ft
+from flet import UrlLauncher
 from time import sleep
 from ui import UniUI
 from config import ConfigManager
@@ -52,14 +53,14 @@ async def main(page: ft.Page):
                 await page.window.close()
             page.run_task(async_close)
             
-        def open_git_download(e):
-            page.launch_url("https://git-scm.com/install/windows")
+        async def open_git_download(e):
+            await UrlLauncher().launch_url("https://git-scm.com/install/windows")
             
-        def open_nodejs_download(e):
-            page.launch_url("https://nodejs.org/zh-cn/download")
+        async def open_nodejs_download(e):
+            await UrlLauncher().launch_url("https://nodejs.org/zh-cn/download")
             
-        def open_launcher_download(e):
-            page.launch_url("https://sillytavern.lingyesoul.top/update.html")
+        async def open_launcher_download(e):
+            await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top/update.html")
 
         dialog = ft.AlertDialog(
             title=ft.Text("系统环境检查失败"),
