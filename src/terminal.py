@@ -144,8 +144,13 @@ class AsyncTerminal:
         self._last_ui_update = 0  # 记录上次UI更新时间
         self._is_shutting_down = False  # 关闭标志，防止更新已关闭的页面
         self._ui_update_fail_count = 0  # UI更新失败计数器
+        
+        # 添加_stop_event用于停止后台日志处理线程
+        self._stop_event = threading.Event()
 
-        # 不再使用连续日志处理循环线程，改为按需调度（v1.2.9 方式）
+        # 启动后台日志处理循环
+        self._start_log_processing_loop()
+        
         # 启动日志文件写入线程
         if self.enable_logging:
             self._start_log_file_thread()
@@ -188,6 +193,25 @@ class AsyncTerminal:
         # 启动日志文件写入线程
         self._log_file_thread = threading.Thread(target=log_file_worker, daemon=True)
         self._log_file_thread.start()
+
+    def _start_log_processing_loop(self):
+        """启动后台日志处理循环（仅调度，不处理）"""
+        def log_processing_worker():
+            while not self._stop_event.is_set():
+                try:
+                    # 只检查队列并调度，不直接处理
+                    if not self._log_queue.empty():
+                        self._schedule_batch_process()
+                    time.sleep(0.1)  # 100ms检查间隔
+                except Exception as e:
+                    print(f"后台日志处理错误: {str(e)}")
+
+        self._log_thread = threading.Thread(
+            target=log_processing_worker,
+            daemon=True,
+            name="LogProcessingWorker"  # 给线程命名方便调试
+        )
+        self._log_thread.start()
 
     def _start_process_monitor(self):
         """启动进程监控线程，定期检查进程状态"""
@@ -373,6 +397,9 @@ class AsyncTerminal:
         # 刷新日志缓冲区
         self._flush_log_buffer()
 
+        # 设置停止事件（停止后台日志处理线程）
+        self._stop_event.set()
+        
         # 设置停止事件（仅日志文件线程）
         self._log_file_stop_event.set()
 
