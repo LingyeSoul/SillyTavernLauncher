@@ -167,6 +167,10 @@ class AsyncTerminal:
         self._cleanup_thread = None
         self._threads_lock = threading.Lock()  # 保护线程列表
 
+        # ========== 新增：定时器跟踪（防止内存泄漏） ==========
+        self._active_timers = []  # 跟踪所有活动的定时器
+        self._timers_lock = threading.Lock()  # 保护定时器列表
+
         # ========== 新增：队列非空条件变量 ==========
         self._log_queue_not_empty = threading.Condition()  # 队列非空条件变量
 
@@ -603,6 +607,46 @@ class AsyncTerminal:
             except (RuntimeError, AttributeError):
                 pass  # 控件已从页面移除或页面无效，忽略更新
 
+    # ============ 定时器管理（防止内存泄漏） ============
+
+    def _create_timer(self, interval, function, args=None, kwargs=None):
+        """创建定时器并跟踪它，防止内存泄漏"""
+        import threading
+
+        timer = threading.Timer(
+            interval,
+            function,
+            args=args if args is not None else (),
+            kwargs=kwargs if kwargs is not None else {}
+        )
+        timer.daemon = True
+
+        # 跟踪定时器
+        with self._timers_lock:
+            self._active_timers.append(timer)
+
+        return timer
+
+    def _cleanup_timers(self):
+        """清理所有活动的定时器"""
+        with self._timers_lock:
+            if not self._active_timers:
+                return 0
+
+            count = len(self._active_timers)
+
+            # 取消并清理所有定时器
+            for timer in self._active_timers:
+                try:
+                    if timer.is_alive():
+                        timer.cancel()
+                except Exception:
+                    pass
+
+            self._active_timers.clear()
+
+        return count
+
     def stop_processes(self):
         """停止所有进程（多阶段终止策略）"""
         # ========== 新增：使用锁获取进程列表 ==========
@@ -613,6 +657,11 @@ class AsyncTerminal:
             self.active_processes = []  # 立即清空原列表
 
         self.add_log(f"正在终止 {len(processes_to_stop)} 个进程...")
+
+        # ========== 新增：清理所有定时器（防止内存泄漏） ==========
+        timer_count = self._cleanup_timers()
+        if timer_count > 0:
+            self.add_log(f"  清理了 {timer_count} 个定时器")
 
         # 刷新日志缓冲区
         self._flush_log_buffer()
@@ -1204,6 +1253,13 @@ class AsyncTerminal:
 
             self._output_threads = alive_threads
 
+        # 3.5. 清理所有定时器（防止内存泄漏）
+        timer_count = self._cleanup_timers()
+        if timer_count > 0:
+            stats['timers_cleaned'] = timer_count
+        else:
+            stats['timers_cleaned'] = 0
+
         # 4. 清理日志队列（如果队列过大）
         if hasattr(self, '_log_queue'):
             try:
@@ -1249,6 +1305,7 @@ class AsyncTerminal:
             f"任务={stats['tasks_cleaned']}, "
             f"进程={stats['processes_cleaned']}, "
             f"线程={stats['threads_cleaned']}, "
+            f"定时器={stats['timers_cleaned']}, "
             f"队列={stats['queues_cleared']}, "
             f"内存={stats['memory_freed']:.1f}MB, "
             f"UI控件={stats['ui_controls_cleaned']}"
@@ -1310,6 +1367,10 @@ class AsyncTerminal:
         注意：Python 不保证 __del__ 一定会被调用，所以不应依赖它进行关键清理
         """
         try:
+            # 清理所有定时器
+            if hasattr(self, '_active_timers'):
+                self._cleanup_timers()
+
             # 停止周期性清理
             if hasattr(self, '_cleanup_timer_started'):
                 self._cleanup_timer_started = False
@@ -1514,8 +1575,7 @@ class AsyncTerminal:
                 self._log_count = 0
                 # 在后台线程中执行清理，避免阻塞
                 try:
-                    cleanup_timer = threading.Timer(0.1, lambda: self.cleanup_all_resources(aggressive=False))
-                    cleanup_timer.daemon = True
+                    cleanup_timer = self._create_timer(0.1, lambda: self.cleanup_all_resources(aggressive=False))
                     cleanup_timer.start()
                 except:
                     pass
@@ -1534,8 +1594,7 @@ class AsyncTerminal:
             elif queue_size > 0:
                 try:
                     if self.is_page_valid():
-                        timer = threading.Timer(0.03, self._schedule_batch_process)
-                        timer.daemon = True
+                        timer = self._create_timer(0.03, self._schedule_batch_process)
                         timer.start()
                 except (RuntimeError, AttributeError):
                     # 页面无效，不处理
