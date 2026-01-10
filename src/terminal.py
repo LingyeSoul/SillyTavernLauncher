@@ -375,6 +375,13 @@ class AsyncTerminal:
             if not log_entries:
                 return
 
+            # ========== 新增：检查页面是否有效，避免在页面无效时添加控件 ==========
+            if not self.is_page_valid():
+                # 页面无效，丢弃这些日志（但已从队列中取出，避免积累）
+                if self._debug_mode:
+                    print(f"[DEBUG] 页面无效，丢弃了 {len(log_entries)} 条日志")
+                return
+
             # 创建日志控件
             new_controls = []
             for processed_text in log_entries:
@@ -396,6 +403,18 @@ class AsyncTerminal:
             # Flet 框架需要至少一个可见控件才能正确渲染页面主题
             if len(self.logs.controls) == 0:
                 self.logs.controls.append(ft.Text("", size=14))
+
+            # ========== 新增：在更新 UI 之前再次检查页面有效性 ==========
+            # 因为我们是异步执行，页面状态可能在等待期间发生变化
+            if not self.is_page_valid():
+                # 页面变为无效，清除刚才添加的控件
+                # 保留最后20条
+                if len(self.logs.controls) > 20:
+                    self.logs.controls = self.logs.controls[-20:]
+                # 确保至少有一个控件
+                if len(self.logs.controls) == 0:
+                    self.logs.controls.append(ft.Text("", size=14))
+                return
 
             self._last_process_time = current_time
 
