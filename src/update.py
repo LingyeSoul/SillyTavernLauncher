@@ -42,24 +42,14 @@ class VersionChecker:
                 ], width=400, height=120),
                 actions=[
                     ft.TextButton("前往下载", on_click=open_download_page),
-                    ft.TextButton("稍后提醒", on_click=lambda e: self._close_dialog(update_dialog)),
+                    ft.TextButton("稍后提醒", on_click=lambda e: self.page.pop_dialog()),
                 ],
                 actions_alignment=ft.MainAxisAlignment.END,
             )
-            # 使用 overlay 显示对话框（适配 Flet 0.80.1）
-            self.page.overlay.append(update_dialog)
-            update_dialog.open = True
-            self.page.update()
+            # 使用 Flet 的标准 API 显示对话框
+            self.page.show_dialog(update_dialog)
         else:
             self._showMsg("当前已是最新版本")
-
-    def _close_dialog(self, dialog):
-        """正确关闭对话框的辅助方法（适配 Flet 0.80.1）"""
-        dialog.open = False
-        self.page.update()
-        if dialog in self.page.overlay:
-            self.page.overlay.remove(dialog)
-            self.page.update()
     
     def run_check_sync(self):
         """

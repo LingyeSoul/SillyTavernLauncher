@@ -38,27 +38,23 @@ async def main(page: ft.Page):
     
     # 显示系统环境缺失对话框
     def show_system_env_missing_dialog(missing_items):
-        def close_dialog(e):
-            # 使用正确的 API 关闭对话框（适配 Flet 0.80.1）
-            dialog.open = False
-            page.update()
-            if dialog in page.overlay:
-                page.overlay.remove(dialog)
-                page.update()
+        async def close_app_async(_):
+            # 关闭对话框
+            page.pop_dialog()
             # 关闭整个应用程序
             page.window.visible = False
             page.window.prevent_close = False
-            page.update()
-            async def async_close():
-                await page.window.close()
-            page.run_task(async_close)
-            
+            await page.window.close()
+
+        def close_dialog(e):
+            page.run_task(close_app_async, e)
+
         async def open_git_download(e):
             await UrlLauncher().launch_url("https://git-scm.com/install/windows")
-            
+
         async def open_nodejs_download(e):
             await UrlLauncher().launch_url("https://nodejs.org/zh-cn/download")
-            
+
         async def open_launcher_download(e):
             await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top/update.html")
 
@@ -83,10 +79,8 @@ async def main(page: ft.Page):
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
-        # 使用 overlay 显示对话框（适配 Flet 0.80.1）
-        page.overlay.append(dialog)
-        dialog.open = True
-        page.update()
+        # 使用 Flet 的标准 API 显示对话框
+        page.show_dialog(dialog)
     # 检查系统环境
     def check_system_environment():
         config_manager = ConfigManager()

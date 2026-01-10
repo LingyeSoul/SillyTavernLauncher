@@ -89,48 +89,25 @@ class UiEvent:
                 ft.TextButton(
                     "复制错误信息",
                     icon=ft.Icons.COPY,
-                    on_click=lambda e: self._copy_error_to_clipboard(message, page, dialog)
+                    on_click=lambda e: self._copy_to_clipboard_wrapper(message, page)
                 ),
                 ft.Button(
                     "确定",
-                    on_click=lambda e: self._close_dialog(page, dialog)
+                    on_click=lambda e: page.pop_dialog()
                 ),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
         )
 
-        # 使用 overlay 显示对话框（适配 Flet 0.80.1）
-        page.overlay.append(dialog)
-        dialog.open = True
-        page.update()
+        # 使用 Flet 的标准 API 显示对话框
+        page.show_dialog(dialog)
 
-    def _close_dialog(self, page, dialog):
-        """正确关闭对话框的辅助方法（适配 Flet 0.80.1）"""
-        dialog.open = False
-        page.update()
-        if dialog in page.overlay:
-            page.overlay.remove(dialog)
-            page.update()
-
-    def _copy_error_to_clipboard(self, text, page, dialog):
-        """复制错误信息到剪贴板"""
-        try:
-            # 尝试多种方法复制到剪贴板
-            try:
-                import pyperclip
-                pyperclip.copy(text)
-            except ImportError:
-                # 使用 Windows 剪贴板
-                import win32clipboard
-                win32clipboard.OpenClipboard()
-                win32clipboard.EmptyClipboard()
-                win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
-                win32clipboard.CloseClipboard()
-            # 显示复制成功提示
+    def _copy_to_clipboard_wrapper(self, text, page):
+        """复制到剪贴板的包装函数（用于同步 event handler）"""
+        async def copy_async():
+            await ft.Clipboard().set(text)
             page.show_dialog(ft.SnackBar(ft.Text("已复制到剪贴板")))
-        except Exception as e:
-            # 如果复制失败，显示错误
-            page.show_dialog(ft.SnackBar(ft.Text(f"复制失败: {str(e)}")))
+        page.run_task(copy_async)
 
     def envCheck(self):
         if os.path.exists(os.path.join(os.getcwd(), "env\\")):
@@ -202,26 +179,46 @@ class UiEvent:
         self.exit_app(e)
 
     def switch_theme(self, e):
-        if self.page.theme_mode == "light":
-            e.control.icon = "SUNNY"
-            self.page.theme_mode = "dark"
-            self.config_manager.set("theme", "dark")
-        else:
-            e.control.icon = "MODE_NIGHT"
-            self.page.theme_mode = "light"
-            self.config_manager.set("theme", "light")
-
-        # 保存配置
-        self.config_manager.save_config()
         try:
-            async def async_update():
-                try:
-                    self.page.update()
-                except AssertionError:
-                    pass  # 控件树过深，忽略
-            self.page.run_task(async_update)
-        except Exception:
-            pass
+            # 验证事件和控制对象
+            if e is None or e.control is None:
+                print("[警告] switch_theme: 事件对象或控制对象为空")
+                return
+
+            # 获取正确的图标常量
+            from flet import Icons
+
+            if self.page.theme_mode == "light":
+                e.control.icon = Icons.SUNNY
+                self.page.theme_mode = "dark"
+                self.config_manager.set("theme", "dark")
+            else:
+                e.control.icon = Icons.MODE_NIGHT
+                self.page.theme_mode = "light"
+                self.config_manager.set("theme", "light")
+
+            # 保存配置
+            self.config_manager.save_config()
+
+            # 更新页面
+            try:
+                self.page.update()
+            except AssertionError:
+                # 控件树过深，尝试异步更新
+                async def async_update():
+                    try:
+                        self.page.update()
+                    except AssertionError:
+                        pass  # 忽略控件树过深错误
+                self.page.run_task(async_update)
+            except Exception as update_error:
+                print(f"[错误] 页面更新失败: {str(update_error)}")
+
+        except Exception as ex:
+            # 捕获并记录所有错误
+            import traceback
+            print(f"[错误] 切换主题失败: {str(ex)}")
+            print(f"堆栈跟踪:\n{traceback.format_exc()}")
 
 
     def install_sillytavern(self, e):
@@ -1321,19 +1318,28 @@ class UiEvent:
         self.config_manager.save_config()
         # 显示操作反馈
         self.showMsg(f"自动启动功能已{'开启' if e.control.value else '关闭'}")
-    
+
     async def execute_command(self, command: str, workdir: str = "SillyTavern"):
+        """
+        执行命令（简化版：职责完全分离）
+
+        职责：
+        1. 构建环境变量
+        2. 调用 terminal 的方法创建进程
+        3. 调用 terminal 的方法创建输出任务
+
+        进程生命周期和输出处理完全由 AsyncTerminal 统一管理
+        """
         import os
         import platform
-        import asyncio
-        import subprocess
+
         try:
-            # 根据操作系统设置环境变量
+            # 1. 构建环境变量
             if platform.system() == "Windows":
                 # 确保工作目录存在
                 if not os.path.exists(workdir):
                     os.makedirs(workdir)
-                
+
                 # 构建环境变量字典
                 env = os.environ.copy()
                 env['NODE_ENV'] = 'production'
@@ -1341,200 +1347,58 @@ class UiEvent:
                     node_path = self.env.get_node_path().replace('\\', '/')
                     git_path = self.env.get_git_path().replace('\\', '/')
                     env['PATH'] = f"{node_path};{git_path};{env.get('PATH', '')}"
-                
+
                 # 添加ANSI颜色支持
                 env['FORCE_COLOR'] = '1'
 
                 # 禁用Python和Node.js的输出缓冲，确保实时输出
                 env['PYTHONUNBUFFERED'] = '1'
                 env['NODE_OPTIONS'] = '--no-warnings'  # 禁用警告，减少输出干扰
+            else:
+                env = os.environ.copy()
 
-                self.terminal.add_log(f"{workdir} $ {command}")
+            # 2. 调用 terminal 的方法创建进程
+            process = await self.terminal.execute_process_async(
+                command=command,
+                workdir=workdir,
+                env=env
+            )
 
-                # 解析命令：提取可执行文件和参数
-                # 使用 shlex.split 来正确处理带引号的路径
-                import shlex
+            if not process:
+                return None
+
+            # 3. 调用 terminal 的方法创建输出任务（terminal 完全管理输出处理）
+            # 注意：如果 create_output_tasks 失败，需要清理已注册的进程以避免资源泄漏
+            try:
+                self.terminal.create_output_tasks(process)
+            except Exception as task_error:
+                # 清理已创建的进程
+                import traceback
+                error_details = traceback.format_exc()
+                self.terminal.add_log(f"[ERROR] 创建输出任务失败: {str(task_error)}\n{error_details}")
+
+                # 尝试终止并移除进程
                 try:
-                    # 在 Windows 上，shlex.split 可以正确处理带引号的路径
-                    args = shlex.split(command, posix=False)
-                    if not args:
-                        raise ValueError("命令解析为空")
+                    if process.returncode is None:
+                        process.terminate()
+                        import asyncio
+                        await asyncio.sleep(0.5)
+                        if process.returncode is None:
+                            process.kill()
+                except Exception:
+                    pass
 
-                    executable = args[0].strip('"').strip("'")  # 去除引号
-                    cmd_args = args[1:]
+                # 移除进程引用
+                self.terminal.remove_process(process.pid)
 
-                    self.terminal.add_log(f"[DEBUG] 可执行文件: {executable}")
-                    self.terminal.add_log(f"[DEBUG] 参数: {cmd_args}")
+                return None
 
-                    # 验证可执行文件是否存在（自动尝试添加扩展名）
-                    if not os.path.isfile(executable):
-                        # 在 Windows 上，如果路径没有扩展名，尝试添加常见扩展名
-                        import platform
-                        if platform.system() == 'Windows' and '.' not in os.path.basename(executable):
-                            extensions = ['.exe', '.cmd', '.bat', '.ps1']
-                            found = False
-                            for ext in extensions:
-                                if os.path.isfile(executable + ext):
-                                    executable = executable + ext
-                                    found = True
-                                    self.terminal.add_log(f"[DEBUG] 自动添加扩展名: {ext}")
-                                    break
-                            if not found:
-                                raise FileNotFoundError(f"找不到可执行文件: {executable}")
-                        else:
-                            raise FileNotFoundError(f"找不到可执行文件: {executable}")
-
-                    # 使用 create_subprocess_exec 直接执行，避免通过 cmd.exe
-                    process = await asyncio.create_subprocess_exec(
-                        executable,
-                        *cmd_args,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                        cwd=workdir,
-                        env=env,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-                except Exception as e:
-                    # 如果解析失败，回退到 create_subprocess_shell
-                    self.terminal.add_log(f"[DEBUG] 解析命令失败，使用 shell 方式: {str(e)}")
-                    import traceback
-                    self.terminal.add_log(f"[DEBUG] 详细错误: {traceback.format_exc()}")
-                    process = await asyncio.create_subprocess_shell(
-                        command,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                        cwd=workdir,
-                        env=env,
-                        creationflags=subprocess.CREATE_NO_WINDOW
-                    )
-                
-                self.terminal.active_processes.append({
-                    'process': process,
-                    'pid': process.pid,
-                    'command': command
-                })
-            
-            # 读取输出的异步方法
-            async def read_output_async(stream, is_stderr=False):
-                # 自适应批量配置
-                buffer_size = 4096 if not is_stderr else 2048
-                buffer = b""
-                delimiter = b'\n'
-                last_activity_time = asyncio.get_event_loop().time()
-                flush_interval = 0.1  # 100ms刷新间隔
-
-                # 自适应批量大小：根据输出速率动态调整
-                log_batch = []
-                batch_size = 5  # 默认5条一批
-
-                last_batch_flush = last_activity_time
-                last_rate_check = last_activity_time
-                lines_in_last_second = 0
-
-                while True:
-                    try:
-                        try:
-                            chunk = await asyncio.wait_for(stream.read(buffer_size), timeout=0.08)
-                        except asyncio.TimeoutError:
-                            chunk = None
-
-                        current_time = asyncio.get_event_loop().time()
-                        lines_in_last_second += 1  # 简化的计数
-
-                        if chunk:
-                            buffer += chunk
-                            last_activity_time = current_time
-
-                        # 每秒计算一次输出速率，自适应调整
-                        if current_time - last_rate_check >= 1.0:
-                            lines_per_second = lines_in_last_second
-
-                            # ⚡ 自适应批量大小
-                            if lines_per_second > 100:
-                                batch_size = 10  # 高输出：批量10条
-                            elif lines_per_second > 50:
-                                batch_size = 5  # 中输出：批量5条
-                            else:
-                                batch_size = 2  # 低输出：批量2条
-
-                            # 重置计数
-                            lines_in_last_second = 0
-                            last_rate_check = current_time
-
-                        # 处理完整行
-                        while delimiter in buffer:
-                            line, buffer = buffer.split(delimiter, 1)
-                            clean_line = line.decode('utf-8', errors='replace').rstrip('\r\n')
-                            if clean_line:
-                                log_batch.append(clean_line)
-
-                                if len(log_batch) >= batch_size:
-                                    for log_line in log_batch:
-                                        self.terminal.add_log(log_line)
-                                    log_batch.clear()
-                                    last_batch_flush = current_time
-
-                        # 处理无换行符的缓冲区
-                        time_since_activity = current_time - last_activity_time
-                        if buffer and time_since_activity > flush_interval:
-                            clean_line = buffer.decode('utf-8', errors='replace').rstrip('\r\n')
-                            if clean_line:
-                                log_batch.append(clean_line)
-                            buffer = b""
-                            last_activity_time = current_time
-
-                        # 定期刷新log_batch
-                        time_since_batch_flush = current_time - last_batch_flush
-                        if log_batch and time_since_batch_flush > flush_interval:
-                            for log_line in log_batch:
-                                self.terminal.add_log(log_line)
-                            log_batch.clear()
-                            last_batch_flush = current_time
-
-                        # 流结束处理
-                        if chunk is None and stream.at_eof():
-                            if buffer:
-                                clean_line = buffer.decode('utf-8', errors='replace').rstrip('\r\n')
-                                if clean_line:
-                                    log_batch.append(clean_line)
-                                buffer = b""
-
-                            if log_batch:
-                                for log_line in log_batch:
-                                    self.terminal.add_log(log_line)
-                                log_batch.clear()
-                            break
-
-                    except asyncio.CancelledError:
-                        if buffer:
-                            clean_line = buffer.decode('utf-8', errors='replace').rstrip('\r\n')
-                            if clean_line:
-                                log_batch.append(clean_line)
-
-                        if log_batch:
-                            for log_line in log_batch:
-                                self.terminal.add_log(log_line)
-                            log_batch.clear()
-                        break
-                    except Exception as ex:
-                        if hasattr(self.terminal, 'view') and self.terminal.view.page:
-                            self.terminal.add_log(f"输出处理错误: {type(ex).__name__}: {str(ex)}")
-                        break
-
-            # 创建并启动异步输出处理任务
-            stdout_task = asyncio.create_task(read_output_async(process.stdout, False))
-            stderr_task = asyncio.create_task(read_output_async(process.stderr, True))
-            
-            # 将任务添加到终端的任务列表中以便后续管理
-            if not hasattr(self.terminal, '_output_tasks'):
-                self.terminal._output_tasks = []
-            self.terminal._output_tasks.extend([stdout_task, stderr_task])
-            
             return process
+
         except Exception as e:
             import traceback
-            self.terminal.add_log(f"Error: {str(e)}")
-            self.terminal.add_log(f"错误详情: {traceback.format_exc()}")
+            error_msg = f"命令执行失败: {str(e)}\n{traceback.format_exc()}"
+            self.terminal.add_log(error_msg)
             return None
 
     def check_and_start_sillytavern(self, e):
@@ -1822,7 +1686,7 @@ class UiEvent:
                 ),
             ], tight=True),
             actions=[
-                ft.TextButton("暂不安装", on_click=lambda e: self._close_dialog(page, dialog)),
+                ft.TextButton("暂不安装", on_click=lambda e: page.pop_dialog()),
                 ft.Button(
                     "立即安装",
                     on_click=lambda e: self._do_install_npm(page, dialog)
@@ -1831,14 +1695,12 @@ class UiEvent:
             actions_alignment=ft.MainAxisAlignment.END,
         )
 
-        # 使用 overlay 显示对话框（适配 Flet 0.80.1）
-        page.overlay.append(dialog)
-        dialog.open = True
-        page.update()
+        # 使用 Flet 的标准 API 显示对话框
+        page.show_dialog(dialog)
 
     def _do_install_npm(self, page, dialog):
         """执行npm依赖安装"""
-        self._close_dialog(page, dialog)
+        page.pop_dialog()
         self.terminal.add_log("正在安装npm依赖...")
         self.install_npm_dependencies()
 
@@ -1856,11 +1718,19 @@ class UiEvent:
                 self.show_error_dialog("安装失败", "SillyTavern目录不存在")
                 return
 
+            # 检查 Node.js 路径
+            node_path = self.env.get_node_path()
+            if not node_path:
+                self.terminal.add_log("错误: 未找到 Node.js")
+                self.show_error_dialog("安装失败", "未找到 Node.js")
+                return
+
+            npm_cmd = f"\"{node_path}npm\" install --no-audit --no-fund --loglevel=error --no-progress --registry=https://registry.npmmirror.com"
             self.terminal.add_log("正在执行 npm install，这可能需要几分钟...")
 
             # 执行npm install - 注意：execute_command是异步的，需要在事件循环中运行
             async def run_install():
-                return await self.execute_command("npm install", workdir=st_dir)
+                return await self.execute_command(npm_cmd, workdir=st_dir)
 
             # 在新线程中运行异步任务
             def wait_for_install():
