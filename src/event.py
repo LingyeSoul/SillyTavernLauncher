@@ -18,10 +18,20 @@ class UiEvent:
         self.page = page
         self.terminal = terminal
         self.uni_ui = uni_ui
-        self.config_manager = ConfigManager()
-        self.config = self.config_manager.config
 
-        use_sys_env=self.config["use_sys_env"]
+        # ========== 初始化配置管理器 ==========
+        try:
+            self.config_manager = ConfigManager()
+            self.config = self.config_manager.config if self.config_manager and hasattr(self.config_manager, 'config') else {}
+            if not isinstance(self.config, dict):
+                print(f"[警告] config 不是字典类型: {type(self.config)}，使用空字典")
+                self.config = {}
+        except Exception as e:
+            print(f"[错误] ConfigManager初始化异常: {e}")
+            self.config_manager = None
+            self.config = {}
+
+        use_sys_env = self.config.get("use_sys_env", False) if self.config else False
         if use_sys_env:
             self.env=SysEnv()
             tmp=self.env.checkSysEnv()
@@ -38,9 +48,12 @@ class UiEvent:
     def safe_update(self):
         """安全地调用 page.update()，处理控件 uid 为 None 的异常"""
         try:
+            if self.page is None:
+                return
             async def async_update():
                 try:
-                    self.page.update()
+                    if self.page:
+                        self.page.update()
                 except AssertionError as e:
                     # 控件 __uid 为 None，说明控件未初始化或已被移除
                     import traceback
@@ -66,26 +79,42 @@ class UiEvent:
             icon: 按钮图标
             delay: 延迟时间（秒），0表示立即恢复
         """
+        # 防御性检查：确保必要对象存在
+        if self is None or self.page is None:
+            return
+
         def restore():
             import time
-            if delay > 0:
-                time.sleep(delay)
-            if e and hasattr(e, 'control'):
-                try:
-                    e.control.disabled = False
-                    e.control.text = text
-                    e.control.icon = icon
-                    self.safe_update()
-                except:
-                    pass
+            try:
+                if delay > 0:
+                    time.sleep(delay)
+                if e and hasattr(e, 'control') and e.control:
+                    try:
+                        e.control.disabled = False
+                        e.control.text = text
+                        e.control.icon = icon
+                        self.safe_update()
+                    except Exception as ex:
+                        import traceback
+                        print(f"[ERROR] 恢复按钮状态失败: {ex}")
+                        traceback.print_exc()
+            except Exception as ex:
+                import traceback
+                print(f"[ERROR] restore 函数执行失败: {ex}")
+                traceback.print_exc()
 
-        if delay > 0:
-            # 有延迟时，在后台线程中恢复
-            import threading
-            threading.Thread(target=restore, daemon=True).start()
-        else:
-            # 无延迟时，立即恢复
-            restore()
+        try:
+            if delay > 0:
+                # 有延迟时，在后台线程中恢复
+                import threading
+                threading.Thread(target=restore, daemon=True).start()
+            else:
+                # 无延迟时，立即恢复
+                restore()
+        except Exception as ex:
+            import traceback
+            print(f"[ERROR] _restore_button 执行失败: {ex}")
+            traceback.print_exc()
 
     def run_async_task(self, coroutine):
         """运行异步任务"""
