@@ -80,7 +80,7 @@ class AsyncTerminal:
     def __init__(self, page, enable_logging=True, local_enabled=False):
         self.logs = ft.ListView(
             expand=True,
-            build_controls_on_demand=True,
+            #build_controls_on_demand=True,
             spacing=5,
             auto_scroll=True,
             padding=10
@@ -382,14 +382,14 @@ class AsyncTerminal:
             self._last_process_time = current_time
 
             # 批量更新UI
-            if hasattr(self, 'view') and self.view.page is not None:
-                try:
-                    self.logs.update()
-                except AssertionError:
-                    pass
-                except RuntimeError as e:
-                    if "Event loop is closed" not in str(e):
-                        raise
+            try:
+                if hasattr(self, 'view') and self.view is not None:
+                    page = self.view.page  # 可能抛出 RuntimeError
+                    if page is not None:
+                        self.logs.update()
+            except (AssertionError, RuntimeError, AttributeError):
+                # 控件树问题或控件已从页面移除，忽略
+                pass
 
         except Exception as e:
             import traceback
@@ -402,23 +402,34 @@ class AsyncTerminal:
 
     def _schedule_batch_process(self):
         """安排批量处理"""
-        if hasattr(self, 'view') and self.view.page is not None:
-            try:
-                async def async_process_batch():
-                    self._process_batch()
+        # 检查 view 是否存在且仍在页面上
+        try:
+            if hasattr(self, 'view') and self.view is not None:
+                page = self.view.page  # 可能抛出 RuntimeError
+                if page is not None:
+                    try:
+                        async def async_process_batch():
+                            self._process_batch()
 
-                self.view.page.run_task(async_process_batch)
-            except (AssertionError, RuntimeError, Exception) as e:
-                if "Event loop is closed" in str(e):
-                    try:
-                        self._process_batch()
-                    except Exception as fallback_error:
-                        print(f"日志处理失败: {str(fallback_error)}")
-                else:
-                    try:
-                        self._process_batch()
-                    except Exception as fallback_error:
-                        print(f"日志处理失败: {str(fallback_error)}")
+                        page.run_task(async_process_batch)
+                        return
+                    except (AssertionError, RuntimeError) as e:
+                        if "Event loop is closed" in str(e):
+                            # 事件循环已关闭，直接处理
+                            try:
+                                self._process_batch()
+                            except Exception:
+                                pass
+                            return
+        except (RuntimeError, AttributeError):
+            # 控件已从页面移除或 page 属性访问失败
+            pass
+
+        # 如果异步调度失败，尝试同步处理
+        try:
+            self._process_batch()
+        except Exception:
+            pass
 
     # ============ 进程管理 ============
 
@@ -473,11 +484,13 @@ class AsyncTerminal:
                 self.add_log(f"[DEBUG] 清理了 {old_count - 100} 个日志控件")
 
             # 强制更新UI
-            if hasattr(self, 'view') and self.view.page is not None:
-                try:
-                    self.logs.update()
-                except:
-                    pass
+            try:
+                if hasattr(self, 'view') and self.view is not None:
+                    page = self.view.page  # 可能抛出 RuntimeError
+                    if page is not None:
+                        self.logs.update()
+            except (RuntimeError, AttributeError):
+                pass  # 控件已从页面移除，忽略更新
 
     def stop_processes(self):
         """停止所有进程（多阶段终止策略）"""
@@ -844,8 +857,13 @@ class AsyncTerminal:
 
         except Exception as ex:
             # 记录错误但不中断
-            if hasattr(terminal, 'view') and terminal.view.page:
-                terminal.add_log(f"输出处理错误: {type(ex).__name__}: {str(ex)}")
+            try:
+                if hasattr(terminal, 'view') and terminal.view is not None:
+                    page = terminal.view.page  # 可能抛出 RuntimeError
+                    if page is not None:
+                        terminal.add_log(f"输出处理错误: {type(ex).__name__}: {str(ex)}")
+            except (RuntimeError, AttributeError):
+                pass  # 控件已从页面移除，忽略
 
         finally:
             # 确保流被关闭
@@ -1136,7 +1154,8 @@ class AsyncTerminal:
         """停止周期性清理定时器"""
         if hasattr(self, '_cleanup_timer_started'):
             self._cleanup_timer_started = False
-            self.add_log("[CLEANUP] 周期性清理定时器已停止")
+            # 不在关闭时输出日志，避免 "can't create new thread at interpreter shutdown" 错误
+            # self.add_log("[CLEANUP] 周期性清理定时器已停止")
 
     def __del__(self):
         """
@@ -1178,6 +1197,31 @@ class AsyncTerminal:
             self.add_log("[DEBUG] DEBUG 模式已启用 - 将显示所有调试信息")
         else:
             self.add_log("[DEBUG] DEBUG 模式已禁用 - 将隐藏调试信息")
+
+    def is_page_valid(self):
+        """检查页面引用是否仍然有效"""
+        if self.page is None:
+            return False
+        if hasattr(self.page, 'window') and self.page.window is None:
+            return False
+        return True
+
+    def safe_update_page(self):
+        """安全地更新页面"""
+        if not self.is_page_valid():
+            return False
+
+        try:
+            self.page.update()
+            return True
+        except RuntimeError as e:
+            if "Event loop is closed" in str(e) or "window is closed" in str(e):
+                self.page = None
+                return False
+        except AssertionError:
+            # Flet 控件树问题
+            return False
+        return False
 
     def add_log(self, text: str):
         """线程安全的日志添加方法"""
@@ -1262,12 +1306,16 @@ class AsyncTerminal:
             if queue_size > 0 and (queue_size >= 3 or (current_time - self._last_process_time) >= 0.05):
                 self._schedule_batch_process()
             elif queue_size > 0:
-                if hasattr(self, 'view') and self.view.page is not None:
-                    try:
-                        timer = threading.Timer(0.03, self._schedule_batch_process)
-                        timer.start()
-                    except:
+                try:
+                    if hasattr(self, 'view') and self.view is not None:
+                        page = self.view.page  # 可能抛出 RuntimeError
+                        if page is not None:
+                            timer = threading.Timer(0.03, self._schedule_batch_process)
+                            timer.start()
+                    else:
                         self._schedule_batch_process()
+                except (RuntimeError, AttributeError):
+                    self._schedule_batch_process()
 
         except (TypeError, IndexError, AttributeError) as e:
             import traceback

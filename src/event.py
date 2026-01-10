@@ -132,9 +132,10 @@ class UiEvent:
             try:
                 async def async_update():
                     try:
-                        self.page.update()
-                    except AssertionError:
-                        pass  # 控件树过深，忽略
+                        if self.page:  # 检查 page 是否为 None
+                            self.page.update()
+                    except (AssertionError, AttributeError):
+                        pass  # 控件树过深或 page 已清理，忽略
                 self.page.run_task(async_update)
             except Exception:
                 pass
@@ -147,18 +148,31 @@ class UiEvent:
             try:
                 async def async_update():
                     try:
-                        self.page.update()
-                    except AssertionError:
-                        pass  # 控件树过深，忽略
+                        if self.page:  # 检查 page 是否为 None
+                            self.page.update()
+                    except (AssertionError, AttributeError):
+                        pass  # 控件树过深或 page 已清理，忽略
                 self.page.run_task(async_update)
             except Exception:
                 pass
             try:
                 async def async_close():
-                    await self.page.window.close()
+                    if self.page:  # 检查 page 是否为 None
+                        await self.page.window.close()
                 self.page.run_task(async_close)
             except Exception:
                 pass
+
+        # 清理自身资源（延迟到异步操作之后）
+        import asyncio
+        async def delayed_cleanup():
+            await asyncio.sleep(0.5)  # 等待异步操作完成
+            self.cleanup()
+        try:
+            self.page.run_task(delayed_cleanup)
+        except:
+            # 如果 page 已经不可用，直接清理
+            self.cleanup()
 
 
     def exit_app_with_tray(self, e):
@@ -177,6 +191,35 @@ class UiEvent:
         if self.config_manager.get("tray", True) and self.tray is not None:
             self.tray.tray.stop()
         self.exit_app(e)
+
+    def cleanup(self):
+        """清理所有资源引用，打破循环引用"""
+        try:
+            # 1. 断开与 UniUI 的引用（打破循环引用）
+            self.uni_ui = None
+
+            # 2. 清理 page 引用
+            self.page = None
+
+            # 3. 清理 terminal 引用
+            self.terminal = None
+
+            # 4. 清理其他引用
+            self.env = None
+            self.stCfg = None
+            self.config_manager = None
+            self.tray = None
+
+            print("[UiEvent] 资源已清理")
+        except Exception as e:
+            print(f"[UiEvent] 清理时出错: {e}")
+
+    def __del__(self):
+        """析构函数 - 确保资源释放"""
+        try:
+            self.cleanup()
+        except Exception:
+            pass
 
     def switch_theme(self, e):
         try:

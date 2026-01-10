@@ -579,4 +579,94 @@ class UniUI():
                 padding=20,
                 border_radius=10,
             )
-        ], scroll=ft.ScrollMode.AUTO, expand=True, spacing=15)    
+        ], scroll=ft.ScrollMode.AUTO, expand=True, spacing=15)
+
+    def is_page_valid(self):
+        """检查页面引用是否仍然有效"""
+        if self.page is None:
+            return False
+        # 检查页面是否已被销毁
+        if hasattr(self.page, 'window') and self.page.window is None:
+            return False
+        return True
+
+    def safe_update_page(self):
+        """安全地更新页面"""
+        if not self.is_page_valid():
+            print("[UniUI] 尝试更新已销毁的页面")
+            return False
+
+        try:
+            self.page.update()
+            return True
+        except RuntimeError as e:
+            if "Event loop is closed" in str(e) or "window is closed" in str(e):
+                print(f"[UniUI] 页面已关闭: {e}")
+                self.page = None
+                return False
+            # 其他 RuntimeError 重新抛出
+            raise
+
+    def cleanup(self):
+        """清理所有资源，防止内存泄漏"""
+        try:
+            print("[UniUI] 开始清理资源...")
+
+            # 1. 清理 ui_event（必须先清理，打破循环引用）
+            if hasattr(self, 'ui_event') and self.ui_event is not None:
+                self.ui_event.cleanup()
+                self.ui_event = None
+
+            # 2. 清理 terminal（添加异常处理，避免解释器关闭时的线程错误）
+            if hasattr(self, 'terminal') and self.terminal is not None:
+                try:
+                    self.terminal.cleanup_all_resources(aggressive=True)
+                    self.terminal.stop_periodic_cleanup()
+                except RuntimeError as e:
+                    if "can't create new thread" not in str(e):
+                        raise
+                self.terminal = None
+
+            # 3. 清理 sync_ui
+            if hasattr(self, 'sync_ui') and self.sync_ui is not None:
+                try:
+                    self.sync_ui.destroy()
+                except Exception:
+                    pass
+                self.sync_ui = None
+
+            # 4. 清理 page 引用
+            if hasattr(self, 'page') and self.page is not None:
+                self.page = None
+
+            # 5. 清理视图引用
+            self._views_loaded = False
+            if hasattr(self, '_terminal_view'):
+                self._terminal_view = None
+            if hasattr(self, 'version_view'):
+                self.version_view = None
+            if hasattr(self, 'sync_view'):
+                self.sync_view = None
+            if hasattr(self, 'settings_view'):
+                self.settings_view = None
+            if hasattr(self, 'about_view'):
+                self.about_view = None
+
+            # 6. 清理控件引用
+            if hasattr(self, '_terminal_button_row'):
+                self._terminal_button_row = None
+
+            print("[UniUI] 资源清理完成")
+        except RuntimeError as e:
+            # 解释器关闭时的线程创建错误是正常的，静默处理
+            if "can't create new thread" not in str(e):
+                print(f"[UniUI] 清理时出错: {e}")
+        except Exception as e:
+            print(f"[UniUI] 清理时出错: {e}")
+
+    def __del__(self):
+        """析构函数 - 确保资源释放"""
+        try:
+            self.cleanup()
+        except Exception:
+            pass    

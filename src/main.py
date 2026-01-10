@@ -107,6 +107,30 @@ async def main(page: ft.Page):
     uniUI=UniUI(page,version,version_checker)
     uniUI.setMainView(page)
 
+    # 添加窗口关闭时的清理
+    def on_window_close(_):
+        """窗口关闭时的清理处理"""
+        try:
+            # 清理所有资源
+            if hasattr(uniUI, 'cleanup'):
+                uniUI.cleanup()
+        except Exception as ex:
+            print(f"清理资源时出错: {ex}")
+
+    # 保存原始的窗口事件处理
+    original_window_event = page.window.on_event
+
+    def combined_window_event(e):
+        """组合的窗口事件处理"""
+        if e.data == "close":
+            on_window_close(e)
+        # 调用原始的事件处理（由 UniUI 设置）
+        if original_window_event:
+            original_window_event(e)
+
+    # 设置组合的窗口事件处理（在 setMainView 之后设置，会覆盖原来的）
+    page.window.on_event = combined_window_event
+
     # 检测启动器版本号，如果是测试版则启用 DEBUG 模式
     def is_prerelease_version(version_str):
         """检测版本号是否为测试版"""
