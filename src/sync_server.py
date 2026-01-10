@@ -138,6 +138,7 @@ class SyncServer:
         self.data_path = data_path or self._find_data_path()
         self.running = False
         self.server_thread = None
+        self.httpd = None  # Werkzeug HTTP 服务器引用，用于优雅关闭
 
         # UI callback for log messages
         self._ui_log_callback = None
@@ -490,14 +491,14 @@ class SyncServer:
 
             # Start Flask server with custom request handler for better access logging
             from werkzeug.serving import make_server
-            httpd = make_server(self.host, self.port, self.app, request_handler=CustomRequestHandler)
-            httpd.serve_forever()
+            self.httpd = make_server(self.host, self.port, self.app, request_handler=CustomRequestHandler)
+            self.httpd.serve_forever()
 
         if block:
             self.running = True
             run_server()
         else:
-            self.server_thread = threading.Thread(target=run_server, daemon=True)
+            self.server_thread = threading.Thread(target=run_server, daemon=False)
             self.server_thread.start()
             self.running = True
             self._log(f"数据同步服务已启动在后台: http://{self.host}:{self.port}", 'success')
@@ -512,6 +513,16 @@ class SyncServer:
         """Stop the sync server"""
         if self.running:
             self.running = False
+
+            # 优雅关闭 HTTP 服务器
+            if hasattr(self, 'httpd') and self.httpd:
+                self.httpd.shutdown()
+
+                # 等待服务器线程结束
+                if hasattr(self, 'server_thread') and self.server_thread:
+                    if self.server_thread.is_alive():
+                        self.server_thread.join(timeout=5.0)
+
             self._log("数据同步服务已停止", 'info')
 
 
