@@ -44,22 +44,82 @@ class DataSyncUI:
         self._controls = {}
         self._init_error = None
 
-        # 读取配置文件中的日志设置
-        self.enable_logging = True  # 默认启用日志
-        try:
-            if self.config_manager:
-                self.enable_logging = self.config_manager.get("log", True)
-        except:
-            pass
-
         # 首次启动对话框相关属性
         self._first_server_dialog = None
         self._dialog_countdown_timer = None
         self._dialog_countdown = 60  # 60秒倒计时
         self._dialog_countdown_active = False
 
-        # ⭐ 使用 AsyncTerminal 替代自定义日志系统
-        self.terminal = None  # 将在 build_ui 时延迟初始化
+        # 内部日志缓冲区（在UI创建前存储日志）
+        self._log_buffer = []  # 保留属性定义以避免潜在的引用错误，但不再使用
+        self._sync_log_view = None
+
+    def _add_log(self, message: str):
+        """
+        添加日志到同步UI（内部方法）
+
+        参考 terminal.py 的刷新机制：
+        1. 使用 page.run_task() 调度异步更新
+        2. 只调用 self._sync_log_view.update()
+        3. auto_scroll=True 自动处理滚动
+        """
+        # 同时输出到控制台（便于调试）
+        print(f"[同步UI] {message}")
+
+        if self._sync_log_view is None:
+            # UI还未创建，直接返回
+            return
+
+        if self.page is None:
+            # page对象不可用，无法更新UI
+            print(f"[同步UI] 警告：page对象不可用，无法更新UI")
+            return
+
+        # UI已创建，直接添加到视图
+        try:
+            from terminal import parse_ansi_text
+            spans = parse_ansi_text(message)
+            log_text = ft.Text(spans=spans, size=14, selectable=True)
+
+            # 保留最新50条
+            if len(self._sync_log_view.controls) >= 50:
+                self._sync_log_view.controls.pop(0)
+
+            self._sync_log_view.controls.append(log_text)
+
+            # ========== 关键修复：参考 terminal.py 的刷新机制 ==========
+            # 使用 page.run_task() 调度异步更新，只更新 ListView 控件
+            try:
+                async def update_ui():
+                    """异步更新UI"""
+                    try:
+                        self._sync_log_view.update()
+                    except AssertionError:
+                        pass  # 忽略控件树过深错误
+                    except RuntimeError as e:
+                        if "Event loop is closed" not in str(e):
+                            raise
+
+                self.page.run_task(update_ui)
+
+            except (AssertionError, RuntimeError) as e:
+                # 如果 run_task 失败，回退到同步更新
+                try:
+                    self._sync_log_view.update()
+                except Exception as sync_error:
+                    print(f"[同步UI] 同步更新失败: {sync_error}")
+            except Exception as update_error:
+                print(f"[同步UI] 调度更新失败: {update_error}")
+
+        except Exception as e:
+            # 记录详细错误信息
+            import traceback
+            print(f"[同步UI] 添加日志失败: {e}")
+            print(f"[同步UI] 错误堆栈:\n{traceback.format_exc()}")
+
+    def _flush_log_buffer(self):
+        """由于移除了缓存机制，此方法不再需要，保留为空实现以维持兼容性"""
+        pass
 
     def _ensure_manager(self):
         """Ensure sync manager is initialized (lazy loading)"""
@@ -68,9 +128,8 @@ class DataSyncUI:
                 raise ImportError("同步模块不可用，请检查依赖安装")
             try:
                 self.sync_manager = DataSyncManager(self.data_dir, self.config_manager)
-                # Set UI log callback to use terminal
-                if self.terminal:
-                    self.sync_manager.set_ui_log_callback(self.terminal.add_log)
+                # 立即设置日志回调，以防在UI创建前就开始服务器操作
+                self.sync_manager.set_ui_log_callback(self._add_log)
             except Exception as e:
                 raise Exception(f"同步管理器初始化失败: {e}")
 
@@ -87,28 +146,89 @@ class DataSyncUI:
             if self.sync_manager is None:
                 self._ensure_manager()
 
-            # Status controls
+            # Status controls (always create these first)
             self._controls['status_text'] = ft.Text("数据同步", size=24, weight=ft.FontWeight.BOLD)
             self._controls['current_status'] = ft.Text("状态: 就绪", size=14)
             self._controls['server_url_text'] = ft.Text("服务器地址: 未启动", size=12, selectable=True)
 
-            # Create all other control groups
-            self._create_server_controls()
-            self._create_client_controls()
-            self._create_progress_controls()
-            self._create_server_list()
-            self._create_log_area()
+            # Create all other control groups (with individual error handling)
+            try:
+                self._create_server_controls()
+            except Exception as e:
+                print(f"[同步UI] 创建服务器控件失败: {e}")
+                # 创建默认的服务器开关
+                self._controls['server_switch'] = ft.Switch(
+                    label="启动同步服务",
+                    value=False,
+                    disabled=True
+                )
+                self._controls['port_input'] = ft.TextField(
+                    label="服务端口",
+                    value="9999",
+                    width=100,
+                    disabled=True
+                )
+                self._controls['host_input'] = ft.TextField(
+                    label="监听地址",
+                    value="192.168.1.100",
+                    width=200,
+                    disabled=True
+                )
+
+            try:
+                self._create_client_controls()
+            except Exception as e:
+                print(f"[同步UI] 创建客户端控件失败: {e}")
+
+            try:
+                self._create_progress_controls()
+            except Exception as e:
+                print(f"[同步UI] 创建进度控件失败: {e}")
+
+            try:
+                self._create_server_list()
+            except Exception as e:
+                print(f"[同步UI] 创建服务器列表失败: {e}")
+
+            try:
+                self._create_log_area()
+            except Exception as e:
+                print(f"[同步UI] 创建日志区域失败: {e}")
 
         except ImportError:
             # Fallback controls when dependencies are missing
             self._controls['status_text'] = ft.Text("数据同步", size=24, weight=ft.FontWeight.BOLD)
             self._controls['current_status'] = ft.Text("状态: 缺少依赖", size=14, color=ft.Colors.RED_500)
             self._controls['server_url_text'] = ft.Text("服务器地址: 不可用", size=12, selectable=True)
-        except Exception:
+        except Exception as e:
             # Fallback controls for other errors
+            print(f"[同步UI] 初始化失败: {e}")
+            import traceback
+            traceback.print_exc()
+
             self._controls['status_text'] = ft.Text("数据同步", size=24, weight=ft.FontWeight.BOLD)
             self._controls['current_status'] = ft.Text("状态: 初始化失败", size=14, color=ft.Colors.RED_500)
             self._controls['server_url_text'] = ft.Text("服务器地址: 不可用", size=12, selectable=True)
+
+            # 创建禁用的默认控件，防止布局错误
+            if 'server_switch' not in self._controls:
+                self._controls['server_switch'] = ft.Switch(
+                    label="启动同步服务",
+                    value=False,
+                    disabled=True
+                )
+            if 'port_input' not in self._controls:
+                self._controls['port_input'] = ft.TextField(
+                    label="服务端口",
+                    value="9999",
+                    disabled=True
+                )
+            if 'host_input' not in self._controls:
+                self._controls['host_input'] = ft.TextField(
+                    label="监听地址",
+                    value="192.168.1.100",
+                    disabled=True
+                )
 
     def create_ui(self, page: ft.Page) -> ft.Column:
         """Create the UI layout (fast direct creation)"""
@@ -197,29 +317,32 @@ class DataSyncUI:
         )
 
     def _create_log_area(self):
-        """Create enhanced log area control using AsyncTerminal with fixed height and scroll"""
-        # 导入并创建 AsyncTerminal 实例
-        from terminal import AsyncTerminal
-
-        # 创建 terminal 实例（复用启动器的日志系统）
-        self.terminal = AsyncTerminal(
-            page=self.page,
-            enable_logging=self.enable_logging,
-            local_enabled=False  # 不需要显示局域网IP
-        )
-
-        # 设置回调到同步管理器
-        if self.sync_manager:
-            self.sync_manager.set_ui_log_callback(self.terminal.add_log)
-
-        # 创建固定高度的可滚动容器包装 terminal.logs
-        log_container = ft.Container(
-            content=self.terminal.logs,
-            height=250,  # 固定高度
+        """创建精简的日志显示区域（不写入文件，只显示）"""
+        # 创建独立的日志列表视图
+        # 使用 auto_scroll=True 自动滚动到底部
+        self._sync_log_view = ft.ListView(
+            expand=False,
+            spacing=2,
+            auto_scroll=True,  # 自动滚动到底部
             padding=5,
+            height=240
         )
 
-        # 将容器作为日志区域（而不是直接使用 terminal.logs）
+        # 设置日志回调（使用内部方法）
+        if self.sync_manager:
+            self.sync_manager.set_ui_log_callback(self._add_log)
+
+        # 刷新缓存的日志到UI
+        self._flush_log_buffer()
+
+        # 创建容器
+        log_container = ft.Container(
+            content=self._sync_log_view,
+            height=250,
+            padding=5,
+            border_radius=5,
+        )
+
         self._controls['log_area'] = log_container
 
     def _create_full_layout(self) -> ft.Column:
@@ -465,9 +588,7 @@ class DataSyncUI:
                     raise
 
         except Exception as e:
-            if self.terminal:
-
-                self.terminal.add_log(f"更新UI时出错: {e}")
+            self._add_log(f"更新UI时出错: {e}")
 
     def _on_server_toggle(self, e):
         """Handle server switch toggle"""
@@ -498,32 +619,22 @@ class DataSyncUI:
                         success = self.sync_manager.start_sync_server(port, host)
 
                         if success:
-                            if self.terminal:
-
-                                self.terminal.add_log(f"同步服务已启动: {self.sync_manager.get_server_url()}")
+                            self._add_log(f"同步服务已启动: {self.sync_manager.get_server_url()}")
                         else:
-                            if self.terminal:
-
-                                self.terminal.add_log("启动同步服务失败")
+                            self._add_log("启动同步服务失败")
                             if self.page:
                                 self.page.show_dialog(ft.SnackBar(content=ft.Text("启动同步服务失败"), bgcolor=ft.Colors.RED_500))
                 else:
                     success = self.sync_manager.stop_sync_server()
                     if success:
-                        if self.terminal:
-
-                            self.terminal.add_log("同步服务已停止")
+                        self._add_log("同步服务已停止")
                     else:
-                        if self.terminal:
-
-                            self.terminal.add_log("停止同步服务失败")
+                        self._add_log("停止同步服务失败")
 
                 self._update_ui()
 
             except Exception as ex:
-                if self.terminal:
-
-                    self.terminal.add_log(f"切换服务器状态时出错: {ex}")
+                self._add_log(f"切换服务器状态时出错: {ex}")
 
         # Run in background thread to avoid blocking UI
         threading.Thread(target=toggle_server, daemon=True).start()
@@ -667,10 +778,9 @@ class DataSyncUI:
             if dont_show_state["clicked"]:
                 self._mark_first_server_dialog_shown()
 
-            # 关闭对话框
-            if self.page and self._first_server_dialog:
-                self._first_server_dialog.open = False
-                self.page.update()
+            # 关闭对话框（使用 Flet 标准 API）
+            if self.page:
+                self.page.pop_dialog()
 
             # 关闭对话框后启动服务器
             if port is not None and host is not None:
@@ -678,13 +788,9 @@ class DataSyncUI:
                 def start_server_after_dialog():
                     success = self.sync_manager.start_sync_server(port, host)
                     if success:
-                        if self.terminal:
-
-                            self.terminal.add_log(f"同步服务已启动: {self.sync_manager.get_server_url()}")
+                        self._add_log(f"同步服务已启动: {self.sync_manager.get_server_url()}")
                     else:
-                        if self.terminal:
-
-                            self.terminal.add_log("启动同步服务失败")
+                        self._add_log("启动同步服务失败")
                         if self.page:
                             self.page.show_dialog(ft.SnackBar(content=ft.Text("启动同步服务失败"), bgcolor=ft.Colors.RED_500))
                     self._update_ui()
@@ -720,26 +826,20 @@ class DataSyncUI:
         close_button.on_click = on_close
 
         try:
-            # 使用 overlay 显示对话框（适配 Flet 0.80.1）
-            self.page.overlay.append(self._first_server_dialog)
-            self._first_server_dialog.open = True
-            self.page.update()
+            # 使用 Flet 的标准 API 显示对话框
+            self.page.show_dialog(self._first_server_dialog)
 
             # 启动倒计时
             start_countdown()
         except Exception as ex:
-            if self.terminal:
-
-                self.terminal.add_log(f"显示对话框时出错: {ex}")
+            self._add_log(f"显示对话框时出错: {ex}")
 
     def _scan_servers(self, e):
         """Scan for servers on network"""
         def scan():
             try:
                 self._ensure_manager()
-                if self.terminal:
-
-                    self.terminal.add_log("开始扫描局域网服务器...")
+                self._add_log("开始扫描局域网服务器...")
                 servers = self.sync_manager.detect_network_servers()
 
                 server_list = self._controls.get('server_list')
@@ -773,24 +873,17 @@ class DataSyncUI:
                             )
                             server_list.controls.append(server_card)
 
-                        if self.terminal:
-
-
-                            self.terminal.add_log(f"发现 {len(servers)} 个服务器")
+                        self._add_log(f"发现 {len(servers)} 个服务器")
                     else:
                         no_server_text = ft.Text("未发现服务器", italic=True, color=ft.Colors.GREY_600)
                         server_list.controls.append(no_server_text)
-                        if self.terminal:
-
-                            self.terminal.add_log("未发现服务器")
+                        self._add_log("未发现服务器")
 
                 if self.page:
                     self.page.update()
 
             except Exception as ex:
-                if self.terminal:
-
-                    self.terminal.add_log(f"扫描服务器时出错: {ex}")
+                self._add_log(f"扫描服务器时出错: {ex}")
 
         # Run in background thread
         threading.Thread(target=scan, daemon=True).start()
@@ -802,9 +895,7 @@ class DataSyncUI:
             server_url_input.value = server_url
             if self.page:
                 self.page.update()
-        if self.terminal:
-
-            self.terminal.add_log(f"已选择服务器: {server_url}")
+        self._add_log(f"已选择服务器: {server_url}")
 
     def _start_sync(self, e):
         """Start data synchronization"""
@@ -819,43 +910,30 @@ class DataSyncUI:
                 if server_url_input:
                     server_url = server_url_input.value.strip()
                     if not server_url:
-                        if self.terminal:
-
-                            self.terminal.add_log("请输入服务器地址")
+                        self._add_log("请输入服务器地址")
                         return
 
                     method = method_dropdown.value if method_dropdown else "auto"
                     backup = backup_switch.value if backup_switch else True
 
-                    if self.terminal:
-
-
-                        self.terminal.add_log(f"开始同步: {server_url}")
-                    if self.terminal:
-
-                        self.terminal.add_log(f"同步方法: {method}, 备份数据: {'是' if backup else '否'}")
+                    self._add_log(f"开始同步: {server_url}")
+                    self._add_log(f"同步方法: {method}, 备份数据: {'是' if backup else '否'}")
 
                     success = self.sync_manager.sync_from_server(server_url, method, backup)
 
                     if success:
-                        if self.terminal:
-
-                            self.terminal.add_log("数据同步完成!")
+                        self._add_log("数据同步完成!")
                         if self.page:
                             self.page.show_dialog(ft.SnackBar(content=ft.Text("数据同步完成!"), bgcolor=ft.Colors.GREEN_500))
                     else:
-                        if self.terminal:
-
-                            self.terminal.add_log("数据同步失败!")
+                        self._add_log("数据同步失败!")
                         if self.page:
                             self.page.show_dialog(ft.SnackBar(content=ft.Text("数据同步失败!"), bgcolor=ft.Colors.RED_500))
 
                     self._update_ui()
 
             except Exception as ex:
-                if self.terminal:
-
-                    self.terminal.add_log(f"同步过程中出错: {ex}")
+                self._add_log(f"同步过程中出错: {ex}")
                 if self.page:
                     self.page.show_dialog(ft.SnackBar(content=ft.Text(f"同步失败: {ex}"), bgcolor=ft.Colors.RED_500))
 
@@ -872,13 +950,6 @@ class DataSyncUI:
 
         # Stop dialog countdown
         self._dialog_countdown_active = False
-
-        # Clean up terminal (AsyncTerminal 会自动管理清理)
-        if self.terminal:
-            try:
-                self.terminal._is_shutting_down = True
-            except Exception:
-                pass
 
         # Stop sync server if running
         if self.sync_manager:
@@ -961,18 +1032,15 @@ def show_sync_dialog(page: ft.Page, data_dir: str, config_manager=None) -> None:
                 "关闭",
                 on_click=lambda e: (
                     sync_ui.destroy(),
-                    setattr(page.dialog, 'open', False),
-                    page.update()
+                    page.pop_dialog()
                 )
             )
         ],
         actions_alignment=ft.MainAxisAlignment.END
     )
 
-    # Show dialog
-    page.dialog = dialog
-    dialog.open = True
-    page.update()
+    # 使用 Flet 的标准 API 显示对话框
+    page.show_dialog(dialog)
 
 
 def show_sync_status(page: ft.Page, data_dir: str, config_manager=None) -> ft.Text:

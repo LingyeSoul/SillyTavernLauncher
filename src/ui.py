@@ -489,6 +489,7 @@ class UniUI():
                 from sync_ui import DataSyncUI
                 import os
                 data_dir = os.path.join(os.getcwd(), "SillyTavern", "data", "default-user")
+                # 不传入 terminal，使用独立的简单日志组件
                 self.sync_ui = DataSyncUI(data_dir, self.config_manager)
                 self.sync_view = self.sync_ui.create_ui(page)
             except Exception as e:
