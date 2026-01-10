@@ -114,6 +114,23 @@ async def main(page: ft.Page):
             # 清理所有资源
             if hasattr(uniUI, 'cleanup'):
                 uniUI.cleanup()
+
+            # 额外清理：确保终端进程已停止
+            if hasattr(uniUI, 'terminal') and uniUI.terminal:
+                try:
+                    uniUI.terminal.stop_processes()
+                except Exception:
+                    pass
+
+            # 额外清理：确保数据同步服务器已停止
+            if hasattr(uniUI, 'ui_event') and uniUI.ui_event:
+                if hasattr(uniUI.ui_event, 'data_sync_manager') and uniUI.ui_event.data_sync_manager:
+                    try:
+                        uniUI.ui_event.data_sync_manager.stop_sync_server()
+                    except Exception:
+                        pass
+
+            print("[INFO] 资源清理完成，程序即将退出")
         except Exception as ex:
             print(f"清理资源时出错: {ex}")
 

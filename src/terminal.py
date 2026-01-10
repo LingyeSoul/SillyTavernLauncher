@@ -161,6 +161,15 @@ class AsyncTerminal:
         self._last_refresh_time = 0
         self._refresh_cooldown = 0.05
 
+        # ========== 新增：线程引用管理 ==========
+        self._log_thread = None
+        self._log_file_thread = None
+        self._cleanup_thread = None
+        self._threads_lock = threading.Lock()  # 保护线程列表
+
+        # ========== 新增：队列非空条件变量 ==========
+        self._log_queue_not_empty = threading.Condition()  # 队列非空条件变量
+
         # 启动日志处理循环
         self._start_log_processing_loop()
 
@@ -182,7 +191,7 @@ class AsyncTerminal:
                 except Exception as e:
                     print(f"日志处理循环错误: {str(e)}")
 
-        # 在单独的线程中运行日志处理循环
+        # 在单独的线程中运行日志处理循环（保持为 daemon，避免阻塞程序退出）
         self._log_thread = threading.Thread(target=log_processing_worker, daemon=True)
         self._log_thread.start()
 
@@ -223,7 +232,7 @@ class AsyncTerminal:
             # 关闭文件句柄
             self._close_log_file()
 
-        # 启动日志文件写入线程
+        # 启动日志文件写入线程（保持为 daemon，避免阻塞程序退出）
         self._log_file_thread = threading.Thread(target=log_file_worker, daemon=True)
         self._log_file_thread.start()
 
@@ -379,17 +388,44 @@ class AsyncTerminal:
             if len(self.logs.controls) > self._max_log_entries:
                 self.logs.controls = self.logs.controls[-self._max_log_entries//2:]
 
+            # ========== 关键修复：确保至少保留一个控件，避免 Flet 页面变灰 ==========
+            # Flet 框架需要至少一个可见控件才能正确渲染页面主题
+            if len(self.logs.controls) == 0:
+                self.logs.controls.append(ft.Text("", size=14))
+
             self._last_process_time = current_time
 
-            # 批量更新UI
+            # 批量更新UI（添加完善的错误处理）
             try:
                 if hasattr(self, 'view') and self.view is not None:
                     page = self.view.page  # 可能抛出 RuntimeError
                     if page is not None:
                         self.logs.update()
-            except (AssertionError, RuntimeError, AttributeError):
-                # 控件树问题或控件已从页面移除，忽略
-                pass
+            except (AssertionError, RuntimeError, AttributeError) as e:
+                # 控件树问题或控件已从页面移除，忽略但记录
+                if self._debug_mode:
+                    import traceback
+                    print(f"[DEBUG] UI更新失败（预期错误）: {str(e)}")
+            except Exception as e:
+                # 捕获所有其他异常（这些可能导致灰屏）
+                import traceback
+                print(f"[ERROR] UI更新时发生未预期错误（可能导致灰屏）: {str(e)}")
+                print(f"错误详情: {traceback.format_exc()}")
+                # 尝试恢复：确保至少有一个控件
+                try:
+                    if hasattr(self, 'logs') and self.logs:
+                        if len(self.logs.controls) == 0:
+                            self.logs.controls.append(ft.Text("界面渲染错误，请刷新页面", size=14, color=ft.Colors.RED))
+                            # 尝试强制更新
+                            if hasattr(self, 'view') and self.view is not None:
+                                try:
+                                    page = self.view.page
+                                    if page is not None:
+                                        self.logs.update()
+                                except:
+                                    pass
+                except:
+                    pass
 
         except Exception as e:
             import traceback
@@ -401,35 +437,107 @@ class AsyncTerminal:
                 self._schedule_batch_process()
 
     def _schedule_batch_process(self):
-        """安排批量处理"""
-        # 检查 view 是否存在且仍在页面上
-        try:
-            if hasattr(self, 'view') and self.view is not None:
-                page = self.view.page  # 可能抛出 RuntimeError
-                if page is not None:
+        """安排批量处理 - 改进版，减少阻塞，确保队列能被处理"""
+        # 快速检查页面是否可用
+        if not self.is_page_valid():
+            # 页面暂时不可用，保留最近10条日志，其余丢弃以避免积累
+            try:
+                preserved = []
+                discard_count = 0
+                while not self._log_queue.empty():
                     try:
-                        async def async_process_batch():
-                            self._process_batch()
+                        entry = self._log_queue.get_nowait()
+                        if len(preserved) < 10:
+                            preserved.append(entry)
+                        else:
+                            discard_count += 1
+                    except:
+                        break
 
-                        page.run_task(async_process_batch)
-                        return
-                    except (AssertionError, RuntimeError) as e:
-                        if "Event loop is closed" in str(e):
-                            # 事件循环已关闭，直接处理
-                            try:
-                                self._process_batch()
-                            except Exception:
-                                pass
-                            return
-        except (RuntimeError, AttributeError):
-            # 控件已从页面移除或 page 属性访问失败
-            pass
+                # 将保留的日志放回队列
+                for entry in preserved:
+                    try:
+                        self._log_queue.put_nowait(entry)
+                    except:
+                        pass
 
-        # 如果异步调度失败，尝试同步处理
+                if discard_count > 0:
+                    print(f"[INFO] 页面不可用，丢弃了 {discard_count} 条日志")
+            except:
+                pass
+            return
+
         try:
-            self._process_batch()
-        except Exception:
-            pass
+            page = self.view.page
+            if page is None:
+                return
+
+            try:
+                async def async_process_batch():
+                    # 在异步任务中处理批量更新
+                    try:
+                        self._process_batch()
+                    except Exception as e:
+                        # 捕获并记录所有异常，避免导致灰屏
+                        import traceback
+                        error_msg = f"[ERROR] 批量处理失败: {str(e)}"
+                        print(error_msg)
+                        print(f"错误详情: {traceback.format_exc()}")
+
+                page.run_task(async_process_batch)
+                return
+            except RuntimeError as e:
+                error_msg = str(e)
+                # 只在事件循环真正关闭时跳过
+                if "Event loop is closed" in error_msg:
+                    # 事件循环已关闭，保留最近10条日志
+                    try:
+                        preserved = []
+                        discard_count = 0
+                        while not self._log_queue.empty():
+                            try:
+                                entry = self._log_queue.get_nowait()
+                                if len(preserved) < 10:
+                                    preserved.append(entry)
+                                else:
+                                    discard_count += 1
+                            except:
+                                break
+
+                        # 将保留的日志放回队列
+                        for entry in preserved:
+                            try:
+                                self._log_queue.put_nowait(entry)
+                            except:
+                                pass
+
+                        if discard_count > 0:
+                            print(f"[INFO] 事件循环已关闭，丢弃了 {discard_count} 条日志")
+                    except:
+                        pass
+                    return
+                # 其他 RuntimeError 仍然记录但继续尝试
+                print(f"[WARN] 调度批量处理遇到 RuntimeError: {error_msg}")
+                return
+            except Exception as e:
+                # 记录其他异常
+                import traceback
+                print(f"[ERROR] 调度批量处理时发生未预期错误: {str(e)}")
+                print(f"错误详情: {traceback.format_exc()}")
+                return
+        except (RuntimeError, AttributeError) as e:
+            # 控件已从页面移除或 page 属性访问失败
+            import traceback
+            print(f"[ERROR] 访问页面属性失败: {str(e)}")
+            print(f"错误详情: {traceback.format_exc()}")
+            return
+        except Exception as e:
+            # 捕获所有其他异常
+            import traceback
+            print(f"[ERROR] _schedule_batch_process 发生未预期错误: {str(e)}")
+            print(f"错误详情: {traceback.format_exc()}")
+
+        return
 
     # ============ 进程管理 ============
 
@@ -483,14 +591,17 @@ class AsyncTerminal:
             if self._debug_mode:
                 self.add_log(f"[DEBUG] 清理了 {old_count - 100} 个日志控件")
 
-            # 强制更新UI
+            # ========== 关键修复：确保至少保留一个控件，避免 Flet 页面变灰 ==========
+            # Flet 框架需要至少一个可见控件才能正确渲染页面主题
+            if len(self.logs.controls) == 0:
+                self.logs.controls.append(ft.Text("", size=14))
+
+            # 强制更新UI（仅在页面有效时）
             try:
-                if hasattr(self, 'view') and self.view is not None:
-                    page = self.view.page  # 可能抛出 RuntimeError
-                    if page is not None:
-                        self.logs.update()
+                if self.is_page_valid():
+                    self.logs.update()
             except (RuntimeError, AttributeError):
-                pass  # 控件已从页面移除，忽略更新
+                pass  # 控件已从页面移除或页面无效，忽略更新
 
     def stop_processes(self):
         """停止所有进程（多阶段终止策略）"""
@@ -509,6 +620,18 @@ class AsyncTerminal:
         # 设置停止事件
         self._stop_event.set()
         self._log_file_stop_event.set()
+
+        # ========== 等待日志处理线程退出（短超时，避免阻塞UI） ==========
+        if hasattr(self, '_log_thread') and self._log_thread:
+            if self._log_thread.is_alive():
+                self._log_thread.join(timeout=0.1)
+            self._log_thread = None
+
+        # ========== 等待日志文件写入线程退出（短超时，避免阻塞UI） ==========
+        if hasattr(self, '_log_file_thread') and self._log_file_thread:
+            if self._log_file_thread.is_alive():
+                self._log_file_thread.join(timeout=0.1)
+            self._log_file_thread = None
 
         # 停止所有输出线程
         for thread in self._output_threads:
@@ -814,13 +937,10 @@ class AsyncTerminal:
         """
         import asyncio
 
-        # 使用局部引用
-        terminal = self
-
         # 记录流类型（用于调试）
         stream_type = "STDERR" if is_stderr else "STDOUT"
-        if terminal._debug_mode:
-            terminal.add_log(f"[DEBUG] 开始读取 {stream_type} 流")
+        if self._debug_mode:
+            self.add_log(f"[DEBUG] 开始读取 {stream_type} 流")
 
         try:
             # 使用 readline() 逐行读取，自动处理缓冲
@@ -839,10 +959,10 @@ class AsyncTerminal:
                     try:
                         decoded_line = line.decode('utf-8', errors='replace').rstrip('\r\n')
                         if decoded_line:  # 只输出非空行
-                            terminal.add_log(decoded_line)
+                            self.add_log(decoded_line)
                     except Exception as decode_error:
-                        if terminal._debug_mode:
-                            terminal.add_log(f"[DEBUG] 解码错误: {decode_error}")
+                        if self._debug_mode:
+                            self.add_log(f"[DEBUG] 解码错误: {decode_error}")
 
                 except asyncio.TimeoutError:
                     # 超时不是错误，继续等待
@@ -852,16 +972,16 @@ class AsyncTerminal:
 
         except asyncio.CancelledError:
             # 任务被取消，正常退出
-            if terminal._debug_mode:
-                terminal.add_log(f"[DEBUG] 输出读取任务被取消")
+            if self._debug_mode:
+                self.add_log(f"[DEBUG] 输出读取任务被取消")
 
         except Exception as ex:
             # 记录错误但不中断
             try:
-                if hasattr(terminal, 'view') and terminal.view is not None:
-                    page = terminal.view.page  # 可能抛出 RuntimeError
+                if hasattr(self, 'view') and self.view is not None:
+                    page = self.view.page  # 可能抛出 RuntimeError
                     if page is not None:
-                        terminal.add_log(f"输出处理错误: {type(ex).__name__}: {str(ex)}")
+                        self.add_log(f"输出处理错误: {type(ex).__name__}: {str(ex)}")
             except (RuntimeError, AttributeError):
                 pass  # 控件已从页面移除，忽略
 
@@ -941,10 +1061,19 @@ class AsyncTerminal:
                     if term_ref._debug_mode:
                         term_ref.add_log(f"[DEBUG] 进程已结束 (PID={proc_ref.pid}, returncode={proc_ref.returncode})")
 
-                    # 移除进程引用
-                    removed = term_ref.remove_process(proc_ref.pid)
-                    if term_ref._debug_mode and removed:
-                        term_ref.add_log(f"[DEBUG] 已移除进程 PID={proc_ref.pid}")
+                    # 移除进程引用（添加重试机制）
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        removed = term_ref.remove_process(proc_ref.pid)
+                        if removed:
+                            if term_ref._debug_mode:
+                                term_ref.add_log(f"[DEBUG] 已移除进程 PID={proc_ref.pid}")
+                            break
+                        elif attempt < max_retries - 1:
+                            time.sleep(0.1)
+                        else:
+                            if term_ref._debug_mode:
+                                term_ref.add_log(f"[WARNING] 未能移除进程 PID={proc_ref.pid}")
                 elif term_ref._debug_mode and proc_ref:
                     term_ref.add_log(f"[DEBUG] 进程仍在运行 (PID={proc_ref.pid})")
 
@@ -1099,7 +1228,19 @@ class AsyncTerminal:
         except Exception:
             pass
 
-        # 6. 启动周期性清理定时器（如果尚未启动）
+        # 6. 清理 UI 控件（激进模式）
+        stats['ui_controls_cleaned'] = 0
+        if aggressive:
+            try:
+                before_count = len(self.logs.controls) if hasattr(self, 'logs') and self.logs else 0
+                self.cleanup_ui_controls()
+                after_count = len(self.logs.controls) if hasattr(self, 'logs') and self.logs else 0
+                # 计算实际清理数量（使用 max 避免负数）
+                stats['ui_controls_cleaned'] = max(0, before_count - after_count)
+            except Exception:
+                pass
+
+        # 7. 启动周期性清理定时器（如果尚未启动）
         if not hasattr(self, '_cleanup_timer_started'):
             self._start_periodic_cleanup()
 
@@ -1109,7 +1250,8 @@ class AsyncTerminal:
             f"进程={stats['processes_cleaned']}, "
             f"线程={stats['threads_cleaned']}, "
             f"队列={stats['queues_cleared']}, "
-            f"内存={stats['memory_freed']:.1f}MB"
+            f"内存={stats['memory_freed']:.1f}MB, "
+            f"UI控件={stats['ui_controls_cleaned']}"
         )
 
         return stats
@@ -1129,7 +1271,7 @@ class AsyncTerminal:
         import threading
         import time
 
-        if hasattr(self, '_cleanup_timer') and self._cleanup_timer:
+        if hasattr(self, '_cleanup_thread') and self._cleanup_thread and self._cleanup_thread.is_alive():
             return  # 已经启动
 
         self._cleanup_timer_started = True
@@ -1145,17 +1287,21 @@ class AsyncTerminal:
                 except Exception as e:
                     self.add_log(f"[ERROR] 周期性清理失败: {str(e)}")
 
-        # 启动后台清理线程
-        cleanup_thread = threading.Thread(target=periodic_cleanup, daemon=True)
-        cleanup_thread.start()
+        # 启动后台清理线程（保持为 daemon，避免阻塞程序退出）
+        self._cleanup_thread = threading.Thread(target=periodic_cleanup, daemon=True)
+        self._cleanup_thread.start()
         self.add_log("[CLEANUP] 周期性清理定时器已启动 (间隔: 60秒)")
 
     def stop_periodic_cleanup(self):
         """停止周期性清理定时器"""
         if hasattr(self, '_cleanup_timer_started'):
             self._cleanup_timer_started = False
-            # 不在关闭时输出日志，避免 "can't create new thread at interpreter shutdown" 错误
-            # self.add_log("[CLEANUP] 周期性清理定时器已停止")
+
+        # 等待清理线程结束（短超时，避免阻塞UI）
+        if hasattr(self, '_cleanup_thread') and self._cleanup_thread:
+            if self._cleanup_thread.is_alive():
+                self._cleanup_thread.join(timeout=0.1)
+            self._cleanup_thread = None
 
     def __del__(self):
         """
@@ -1168,12 +1314,38 @@ class AsyncTerminal:
             if hasattr(self, '_cleanup_timer_started'):
                 self._cleanup_timer_started = False
 
-            # 执行最后一次激进清理
-            if hasattr(self, 'cleanup_all_resources'):
-                self.cleanup_all_resources(aggressive=True)
+            # 停止日志处理线程
+            if hasattr(self, '_log_thread') and self._log_thread:
+                if self._log_thread.is_alive():
+                    self._stop_event.set()
+
+            # 停止日志文件写入线程
+            if hasattr(self, '_log_file_thread') and self._log_file_thread:
+                if self._log_file_thread.is_alive():
+                    self._log_file_stop_event.set()
+
+            # 关闭文件句柄
+            if hasattr(self, '_log_file_handle') and self._log_file_handle:
+                try:
+                    self._log_file_handle.close()
+                except:
+                    pass
         except Exception:
             # 析构函数中不应该抛出异常
             pass
+
+    def __enter__(self):
+        """支持上下文管理器协议"""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """退出上下文时自动清理资源"""
+        try:
+            self.stop_processes()
+            self.cleanup_all_resources(aggressive=True)
+        except Exception as e:
+            print(f"清理资源时出错: {e}")
+        return False  # 不抑制异常
 
     def get_resource_stats(self):
         """获取资源统计信息"""
@@ -1200,9 +1372,12 @@ class AsyncTerminal:
 
     def is_page_valid(self):
         """检查页面引用是否仍然有效"""
-        if self.page is None:
+        # 放宽检查：只检查 view 和 page 是否存在，不检查 window
+        # 因为在某些情况下（页面切换、初始化）window 可能暂时为 None
+        # 实际的 UI 更新会在 _process_batch 中进行异常处理
+        if not hasattr(self, 'view') or self.view is None:
             return False
-        if hasattr(self.page, 'window') and self.page.window is None:
+        if self.view.page is None:
             return False
         return True
 
@@ -1222,6 +1397,31 @@ class AsyncTerminal:
             # Flet 控件树问题
             return False
         return False
+
+    def cleanup_ui_controls(self):
+        """清理 UI 控件和事件回调"""
+        try:
+            if hasattr(self, 'logs') and self.logs:
+                # 保留最后50条，减少内存占用
+                if len(self.logs.controls) > 50:
+                    self.logs.controls = self.logs.controls[-50:]
+
+                # ========== 关键修复：确保至少保留一个控件，避免 Flet 页面变灰 ==========
+                # Flet 框架需要至少一个可见控件才能正确渲染页面主题
+                if len(self.logs.controls) == 0:
+                    self.logs.controls.append(ft.Text("", size=14))
+
+                # 清理事件回调（如果 Flet 支持）
+                # Flet 目前不支持显式移除回调，但控件被销毁时会自动清理
+
+            # 注意：不要清除 self.view 引用，因为停止进程后可能还需要显示日志
+            # view 引用会在页面真正关闭时由 Flet 框架自动清除
+
+            # 使用 print 而非 add_log，避免在清理时添加新的 UI 控件
+            if self._debug_mode:
+                print("[DEBUG] UI 控件已清理")
+        except Exception as e:
+            print(f"清理 UI 控件时出错: {e}")
 
     def add_log(self, text: str):
         """线程安全的日志添加方法"""
@@ -1263,25 +1463,45 @@ class AsyncTerminal:
             # ========== 队列积累保护：如果队列过大，触发紧急清理 ==========
             queue_size = self._log_queue.qsize()
 
-            # 如果队列超过500条，立即清理队列
+            # 如果队列超过500条，保留最新100条（而非简单清空）
             if queue_size > 500:
-                self.add_log(f"[WARNING] 队列积累过多 ({queue_size} 条)，触发紧急清理")
-                # 清空队列
+                # 避免递归调用，直接处理
+                preserved_entries = []
+                discard_count = 0
                 while not self._log_queue.empty():
                     try:
-                        self._log_queue.get_nowait()
+                        entry = self._log_queue.get_nowait()
+                        if len(preserved_entries) < 100:
+                            preserved_entries.append(entry)
+                        else:
+                            discard_count += 1
                     except:
                         break
-                queue_size = 0
 
-            # 添加到队列
+                # 将保留的条目放回队列
+                for entry in preserved_entries:
+                    try:
+                        self._log_queue.put_nowait(entry)
+                    except:
+                        pass
+
+                queue_size = len(preserved_entries)
+                if discard_count > 0 and self._debug_mode:
+                    # 使用 print 避免递归调用 add_log
+                    print(f"[WARNING] 队列积累过多，已丢弃 {discard_count} 条旧日志")
+
+            # 添加到队列（带条件变量通知）
             try:
                 self._log_queue.put_nowait(processed_text)
+                with self._log_queue_not_empty:
+                    self._log_queue_not_empty.notify()  # 通知消费者
             except:
-                # 队列已满，放弃最旧的日志
+                # 队列已满，移除最旧的日志
                 try:
                     self._log_queue.get_nowait()
                     self._log_queue.put_nowait(processed_text)
+                    with self._log_queue_not_empty:
+                        self._log_queue_not_empty.notify()
                 except:
                     pass
 
@@ -1304,18 +1524,22 @@ class AsyncTerminal:
             current_time = time.time()
 
             if queue_size > 0 and (queue_size >= 3 or (current_time - self._last_process_time) >= 0.05):
-                self._schedule_batch_process()
-            elif queue_size > 0:
+                # 只在页面有效时才调度处理
                 try:
-                    if hasattr(self, 'view') and self.view is not None:
-                        page = self.view.page  # 可能抛出 RuntimeError
-                        if page is not None:
-                            timer = threading.Timer(0.03, self._schedule_batch_process)
-                            timer.start()
-                    else:
+                    if self.is_page_valid():
                         self._schedule_batch_process()
                 except (RuntimeError, AttributeError):
-                    self._schedule_batch_process()
+                    # 页面无效，不处理
+                    pass
+            elif queue_size > 0:
+                try:
+                    if self.is_page_valid():
+                        timer = threading.Timer(0.03, self._schedule_batch_process)
+                        timer.daemon = True
+                        timer.start()
+                except (RuntimeError, AttributeError):
+                    # 页面无效，不处理
+                    pass
 
         except (TypeError, IndexError, AttributeError) as e:
             import traceback

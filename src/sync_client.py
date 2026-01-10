@@ -31,6 +31,16 @@ class SyncClient:
         self.data_path = data_path or self._find_data_path()
         self.timeout = timeout
         self.session = requests.Session()
+        self._is_closed = False
+
+        # 配置连接池
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=10,
+            max_retries=3
+        )
+        self.session.mount('http://', adapter)
+        self.session.mount('https://', adapter)
 
         # Ensure data directory exists
         os.makedirs(self.data_path, exist_ok=True)
@@ -58,15 +68,41 @@ class SyncClient:
         print(f"未找到数据目录，使用默认路径: {default_path}")
         return default_path
 
+    def close(self):
+        """关闭 session 并释放资源"""
+        if not self._is_closed:
+            self.session.close()
+            self._is_closed = True
+
+    def __enter__(self):
+        """支持上下文管理器协议"""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """退出上下文时自动关闭"""
+        self.close()
+        return False
+
+    def __del__(self):
+        """析构函数确保资源释放"""
+        try:
+            self.close()
+        except:
+            pass
+
     def _request(self, endpoint, method='GET', params=None, stream=False):
         """Make HTTP request to server"""
         url = f"{self.server_url}/{endpoint}"
         try:
             response = self.session.request(
-                method, url, params=params, timeout=self.timeout, stream=stream
+                method, url, params=params,
+                timeout=(self.timeout, self.timeout * 2),  # (连接超时, 读取超时)
+                stream=stream
             )
             response.raise_for_status()
             return response
+        except requests.exceptions.Timeout:
+            raise Exception(f"请求超时 {endpoint}: 超过 {self.timeout} 秒")
         except requests.exceptions.RequestException as e:
             raise Exception(f"请求失败 {endpoint}: {str(e)}")
 
@@ -152,6 +188,7 @@ class SyncClient:
                 print("备份失败，取消同步")
                 return False
 
+        temp_zip_path = None
         try:
             # Download ZIP file
             print("正在下载 ZIP 文件...")
@@ -159,17 +196,14 @@ class SyncClient:
 
             # Create temporary zip file
             with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as temp_file:
+                temp_zip_path = temp_file.name
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         temp_file.write(chunk)
-                temp_zip_path = temp_file.name
 
             # Extract ZIP file
             print("正在解压 ZIP 文件...")
             self._extract_zip_with_progress(temp_zip_path, self.data_path)
-
-            # Clean up temp file
-            os.unlink(temp_zip_path)
 
             print("ZIP 全量同步完成")
             return True
@@ -180,6 +214,13 @@ class SyncClient:
                 print("尝试恢复备份...")
                 self._restore_backup()
             return False
+        finally:
+            # 确保临时文件被删除
+            if temp_zip_path and os.path.exists(temp_zip_path):
+                try:
+                    os.unlink(temp_zip_path)
+                except Exception as cleanup_error:
+                    print(f"清理临时文件失败: {cleanup_error}")
 
     def sync_incremental(self):
         """

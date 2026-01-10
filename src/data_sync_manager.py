@@ -262,15 +262,19 @@ class DataSyncManager:
             # Set log callback to pass through messages to UI
             self.sync_server.set_ui_log_callback(self._log)
 
-            # Start server in background thread
-            def run_server():
-                self.sync_server.app.run(
-                    host=self.server_host,
-                    port=self.server_port,
-                    debug=False
-                )
+            # 使用可关闭的 Flask 服务器
+            from werkzeug.serving import make_server
 
-            self.sync_thread = threading.Thread(target=run_server, daemon=True)
+            def run_server():
+                self.sync_server.httpd = make_server(
+                    self.server_host,
+                    self.server_port,
+                    self.sync_server.app,
+                    threaded=True
+                )
+                self.sync_server.httpd.serve_forever()
+
+            self.sync_thread = threading.Thread(target=run_server, daemon=False)
             self.sync_thread.start()
 
             self.is_server_running = True
@@ -304,15 +308,25 @@ class DataSyncManager:
             self.server_enabled = False
             self.sync_status = "idle"
 
-            # Note: Flask server in background thread is hard to stop gracefully
-            # For now, we mark it as stopped
-            if self.sync_server:
+            # 优雅关闭 Flask 服务器
+            if self.sync_server and hasattr(self.sync_server, 'httpd'):
                 self.sync_server.running = False
+                self.sync_server.httpd.shutdown()
+
+                # 等待服务器线程结束
+                if self.sync_thread and self.sync_thread.is_alive():
+                    self.sync_thread.join(timeout=5.0)
+
+                self._log("数据同步服务已停止", 'info')
+            else:
+                # 回退到原有方法
+                if self.sync_server:
+                    self.sync_server.running = False
+                self._log("数据同步服务已停止", 'info')
 
             # Save configuration
             self._save_config()
 
-            self._log("数据同步服务已停止", 'info')
             return True
 
         except Exception as e:
