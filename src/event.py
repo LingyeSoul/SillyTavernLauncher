@@ -56,6 +56,37 @@ class UiEvent:
             # run_task 本身失败，忽略
             pass
 
+    def _restore_button(self, e, text="启动", icon=ft.Icons.PLAY_ARROW, delay=0):
+        """
+        恢复按钮状态的辅助方法
+
+        Args:
+            e: 事件对象
+            text: 按钮文本
+            icon: 按钮图标
+            delay: 延迟时间（秒），0表示立即恢复
+        """
+        def restore():
+            import time
+            if delay > 0:
+                time.sleep(delay)
+            if e and hasattr(e, 'control'):
+                try:
+                    e.control.disabled = False
+                    e.control.text = text
+                    e.control.icon = icon
+                    self.safe_update()
+                except:
+                    pass
+
+        if delay > 0:
+            # 有延迟时，在后台线程中恢复
+            import threading
+            threading.Thread(target=restore, daemon=True).start()
+        else:
+            # 无延迟时，立即恢复
+            restore()
+
     def run_async_task(self, coroutine):
         """运行异步任务"""
         def run_in_thread():
@@ -441,13 +472,24 @@ class UiEvent:
         return True
 
     def start_sillytavern(self, e):
-        """启动SillyTavern"""
+        """启动SillyTavern（改进版：添加即时反馈）"""
         try:
+            # ========== 立即反馈：禁用按钮并显示加载状态 ==========
+            if e and hasattr(e, 'control'):
+                try:
+                    e.control.disabled = True
+                    e.control.text = "启动中..."
+                    e.control.icon = ft.Icons.LOADING
+                    self.safe_update()
+                except:
+                    pass
+
             # 立即输出提示信息
             self.terminal.add_log("正在启动SillyTavern...")
 
             # 验证路径是否适合NPM运行
             if not self.validate_path_for_npm():
+                self._restore_button(e, "启动", ft.Icons.PLAY_ARROW)
                 return
 
             # 检查是否开启了自动代理设置
@@ -487,11 +529,14 @@ class UiEvent:
 
             if self.terminal.is_running:
                 self.terminal.add_log("SillyTavern已经在运行中")
+                self._restore_button(e, "启动", ft.Icons.PLAY_ARROW)
                 return
 
             if self.env.checkST():
                 if self.env.check_nodemodules():
                     self.terminal.is_running = True
+                    self.terminal.add_log("✓ SillyTavern启动成功")
+
                     async def on_process_exit():
                         self.terminal.is_running = False
                         self.terminal.add_log("SillyTavern进程已退出")
@@ -518,10 +563,15 @@ class UiEvent:
                                 on_process_exit()
 
                     self.run_async_task(start_st())
+
+                    # 延迟恢复按钮状态
+                    self._restore_button(e, "启动", ft.Icons.PLAY_ARROW, delay=0.5)
                 else:
                     self.terminal.add_log("依赖未安装，请先安装依赖")
+                    self._restore_button(e, "启动", ft.Icons.PLAY_ARROW)
             else:
                 self.terminal.add_log("SillyTavern未安装，请先安装SillyTavern")
+                self._restore_button(e, "启动", ft.Icons.PLAY_ARROW)
         except Exception as ex:
             error_msg = f"启动SillyTavern时出错: {str(ex)}"
             self.terminal.add_log(error_msg)
@@ -529,24 +579,57 @@ class UiEvent:
             import traceback
             traceback.print_exc()
 
+            # 出错时恢复按钮状态
+            self._restore_button(e, "启动", ft.Icons.PLAY_ARROW)
+
     def stop_sillytavern(self, e):
-        """停止SillyTavern"""
+        """停止SillyTavern（改进版：添加即时反馈和进度提示）"""
         try:
+            # ========== 立即反馈：禁用按钮并显示加载状态 ==========
+            if e and hasattr(e, 'control'):
+                try:
+                    e.control.disabled = True
+                    e.control.text = "停止中..."
+                    e.control.icon = ft.Icons.LOADING
+                    self.safe_update()
+                except:
+                    pass
+
+            # ========== 即时提示：正在检查进程 ==========
+            self.terminal.add_log("正在检查进程状态...")
+
             # 检查是否有活跃的进程
             if not self.terminal.active_processes:
                 self.terminal.add_log("当前没有运行中的进程")
+                self._restore_button(e, "停止", ft.Icons.CANCEL)
                 return
 
+            # 获取进程数量
+            process_count = len(self.terminal.active_processes)
+            self.terminal.add_log(f"检测到 {process_count} 个运行中的进程")
             self.terminal.add_log("正在停止SillyTavern进程...")
+
+            # ========== 详细进度：显示停止进度 ==========
             result = self.terminal.stop_processes()
+
+            # ========== 恢复按钮状态 ==========
             if result:
-                self.terminal.add_log("所有进程已停止")
+                self.terminal.add_log("✓ 所有进程已停止")
+            else:
+                self.terminal.add_log("停止进程完成")
+
+            # 延迟恢复按钮，让用户看到"停止中..."的状态
+            self._restore_button(e, "停止", ft.Icons.CANCEL, delay=0.5)
+
         except Exception as ex:
             error_msg = f"停止进程时出错: {str(ex)}"
             self.terminal.add_log(error_msg)
             print(error_msg)
             import traceback
             traceback.print_exc()
+
+            # 出错时恢复按钮状态
+            self._restore_button(e, "停止", ft.Icons.CANCEL)
 
     def restart_sillytavern(self, e):
         """重启SillyTavern服务"""
@@ -614,10 +697,21 @@ class UiEvent:
 
     
     def update_sillytavern(self, e):
-        """更新SillyTavern"""
+        """更新SillyTavern（改进版：添加即时反馈）"""
         try:
+            # ========== 立即反馈：禁用按钮并显示加载状态 ==========
+            if e and hasattr(e, 'control'):
+                try:
+                    e.control.disabled = True
+                    e.control.text = "更新中..."
+                    e.control.icon = ft.Icons.LOADING
+                    self.safe_update()
+                except:
+                    pass
+
             # 验证路径是否适合NPM运行
             if not self.validate_path_for_npm():
+                self._restore_button(e, "更新", ft.Icons.UPDATE)
                 return
 
             git_path = self.env.get_git_path()
@@ -801,16 +895,23 @@ class UiEvent:
                             on_git_complete(process)
 
                     self.run_async_task(git_pull())
+                    # 延迟恢复按钮，更新是异步的
+                    self._restore_button(e, "更新", ft.Icons.UPDATE, delay=1.0)
                 else:
                     self.terminal.add_log("未找到Git路径，请手动更新SillyTavern")
+                    self._restore_button(e, "更新", ft.Icons.UPDATE)
             else:
                 self.terminal.add_log("SillyTavern未安装")
+                self._restore_button(e, "更新", ft.Icons.UPDATE)
         except Exception as ex:
             error_msg = f"更新SillyTavern时出错: {str(ex)}"
             self.terminal.add_log(error_msg)
             print(error_msg)
             import traceback
             traceback.print_exc()
+
+            # 出错时恢复按钮状态
+            self._restore_button(e, "更新", ft.Icons.UPDATE)
 
     def update_sillytavern_with_callback(self, e):
         """
