@@ -224,6 +224,14 @@ class UniUI():
                             on_click=self.ui_event.update_sillytavern,
                             height=50,
                         ),
+                        ft.Button(
+                            "清空",
+                            icon=ft.Icons.CLEAR,
+                            tooltip="清空终端日志",
+                            style=self.BSytle,
+                            on_click=self.ui_event.clear_terminal,
+                            height=50,
+                        ),
                     ],
                     alignment=ft.MainAxisAlignment.CENTER,
                     expand=True
