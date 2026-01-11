@@ -80,7 +80,7 @@ class AsyncTerminal:
     def __init__(self, page, enable_logging=True, local_enabled=False):
         self.logs = ft.ListView(
             expand=True,
-            #build_controls_on_demand=True,
+            build_controls_on_demand=True,
             spacing=5,
             auto_scroll=True,
             padding=10
@@ -1482,20 +1482,10 @@ class AsyncTerminal:
         """清理 UI 控件和事件回调"""
         try:
             if hasattr(self, 'logs') and self.logs:
-                # 保留最后50条，减少内存占用
+                # 使用 del 显式删除控件，保留最后50条，减少内存占用
                 if len(self.logs.controls) > 50:
-                    self.logs.controls = self.logs.controls[-50:]
-
-                # ========== 关键修复：确保至少保留一个控件，避免 Flet 页面变灰 ==========
-                # Flet 框架需要至少一个可见控件才能正确渲染页面主题
-                if len(self.logs.controls) == 0:
-                    self.logs.controls.append(ft.Text("", size=14))
-
-                # 清理事件回调（如果 Flet 支持）
-                # Flet 目前不支持显式移除回调，但控件被销毁时会自动清理
-
-            # 注意：不要清除 self.view 引用，因为停止进程后可能还需要显示日志
-            # view 引用会在页面真正关闭时由 Flet 框架自动清除
+                    # 删除除了最后50条之外的所有控件
+                    del self.logs.controls[:-50]
 
             # 使用 print 而非 add_log，避免在清理时添加新的 UI 控件
             if self._debug_mode:
