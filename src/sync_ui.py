@@ -299,7 +299,6 @@ class DataSyncUI:
             "开始同步",
             on_click=self._start_sync,
             icon=ft.Icons.SYNC,
-            disabled=True
         )
 
     def _create_progress_controls(self):
@@ -488,13 +487,9 @@ class DataSyncUI:
                 if sync_info['is_server_running']:
                     self._controls['server_url_text'].value = f"服务器地址: {sync_info['server_url']}"
                     self._controls['server_switch'].value = True
-                    if 'sync_button' in self._controls:
-                        self._controls['sync_button'].disabled = True  # Can't sync while server is running
                 else:
                     self._controls['server_url_text'].value = "服务器地址: 未启动"
                     self._controls['server_switch'].value = False
-                    if 'sync_button' in self._controls:
-                        self._controls['sync_button'].disabled = False
 
             # Update progress (if controls are initialized)
             if 'progress_bar' in self._controls and 'sync_progress' in self._controls:
@@ -547,14 +542,10 @@ class DataSyncUI:
             if 'server_url_text' in self._controls and 'server_switch' in self._controls:
                 if sync_info['is_server_running']:
                     self._controls['server_url_text'].value = f"服务器地址: {sync_info['server_url']}"
-                    self._controls['server_switch'].value = True
-                    if 'sync_button' in self._controls:
-                        self._controls['sync_button'].disabled = True  # Can't sync while server is running
+                    self._controls['server_switch'].value = True  
                 else:
                     self._controls['server_url_text'].value = "服务器地址: 未启动"
                     self._controls['server_switch'].value = False
-                    if 'sync_button' in self._controls:
-                        self._controls['sync_button'].disabled = False
 
             # Update data info (if control is initialized)
             if 'data_info_text' in self._controls:

@@ -37,10 +37,11 @@ class Tray:
             else:
                 raise
     def exit_app(self,icon,query):
-        # 确保在退出前停止所有运行的进程
-        if self.ui_event.terminal.is_running:
+        # 确保在退出前停止所有运行的进程（添加 None 检查）
+        if self.ui_event and self.ui_event.terminal and self.ui_event.terminal.is_running:
             self.ui_event.terminal.stop_processes()
-        self.ui_event.exit_app_with_tray(None)
+        if self.ui_event:
+            self.ui_event.exit_app_with_tray(None)
 
     def restart_st(self, icon, query):
         self.ui_event.restart_sillytavern(None)

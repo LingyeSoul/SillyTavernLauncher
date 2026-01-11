@@ -63,7 +63,7 @@ def parse_ansi_text(text):
 class AsyncTerminal:
     # 性能优化常量
     MAX_QUEUE_SIZE = 10000  # 增加队列最大条目数
-    MAX_LOG_ENTRIES = 1500  # 增加UI控件数量限制
+    MAX_LOG_ENTRIES = 150  # 增加UI控件数量限制
     LOG_MAX_LENGTH = 1000  # 单条日志长度限制
     LOG_MAX_LENGTH_DETAILED = 5000  # 详细日志（如traceback）的长度限制
     BATCH_SIZE_THRESHOLD = 30  # 批量处理阈值
@@ -205,8 +205,10 @@ class AsyncTerminal:
         """启动日志文件写入线程"""
         def log_file_worker():
             """日志文件写入工作线程"""
-            # 预先打开文件句柄
-            self._open_log_file()
+            # 预先打开文件句柄（添加错误处理）
+            file_opened = self._open_log_file()
+            if not file_opened:
+                print("[警告] 无法打开日志文件，日志文件写入将继续尝试")
 
             while not self._log_file_stop_event.is_set():
                 try:
@@ -228,7 +230,9 @@ class AsyncTerminal:
                         continue
 
                     if entries:
-                        self._write_log_entries_to_file(entries)
+                        # 只在文件句柄可用时写入
+                        if self._log_file_handle is not None:
+                            self._write_log_entries_to_file(entries)
 
                 except Exception as e:
                     print(f"日志文件写入线程错误: {str(e)}")
@@ -243,9 +247,14 @@ class AsyncTerminal:
     # ============ 日志文件操作 ============
 
     def _open_log_file(self):
-        """打开日志文件句柄"""
+        """
+        打开日志文件句柄
+
+        Returns:
+            bool: 成功返回True，失败返回False
+        """
         if not self.enable_logging:
-            return
+            return True
 
         try:
             logs_dir = os.path.join(os.getcwd(), "logs")
@@ -255,8 +264,12 @@ class AsyncTerminal:
             with self._log_file_lock:
                 if self._log_file_handle is None:
                     self._log_file_handle = open(log_file_path, "a", encoding="utf-8", buffering=8192)
+            return True
         except Exception as e:
             print(f"打开日志文件失败: {str(e)}")
+            with self._log_file_lock:
+                self._log_file_handle = None
+            return False
 
     def _close_log_file(self):
         """关闭日志文件句柄"""
@@ -294,8 +307,10 @@ class AsyncTerminal:
         if self._get_current_log_file_size() >= self.MAX_LOG_FILE_SIZE:
             self._close_log_file()
             self.launch_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            self._open_log_file()
-            self.add_log(f"[INFO] 日志文件轮转到新文件: {self.launch_timestamp}.log")
+            if self._open_log_file():
+                self.add_log(f"[INFO] 日志文件轮转到新文件: {self.launch_timestamp}.log")
+            else:
+                self.add_log("[WARNING] 日志文件轮转失败，无法打开新的日志文件")
 
     def _verify_process_running(self, pid):
         """使用 tasklist 验证进程是否仍在运行"""
@@ -495,26 +510,30 @@ class AsyncTerminal:
             if page is None:
                 return
 
-            try:
-                async def async_process_batch():
-                    # 在异步任务中处理批量更新
-                    try:
-                        self._process_batch()
-                    except Exception as e:
-                        # 捕获并记录所有异常，避免导致灰屏
-                        import traceback
-                        error_msg = f"[ERROR] 批量处理失败: {str(e)}"
-                        print(error_msg)
-                        print(f"错误详情: {traceback.format_exc()}")
+            # 定义异步处理函数
+            async def async_process_batch():
+                # 在异步任务中处理批量更新
+                try:
+                    self._process_batch()
+                except Exception as e:
+                    # 捕获并记录所有异常，避免导致灰屏
+                    import traceback
+                    error_msg = f"[ERROR] 批量处理失败: {str(e)}"
+                    print(error_msg)
+                    print(f"错误详情: {traceback.format_exc()}")
 
+            # 尝试异步调度，失败则使用同步处理
+            try:
                 page.run_task(async_process_batch)
-                return
             except RuntimeError as e:
                 error_msg = str(e)
                 # 只在事件循环真正关闭时跳过
                 if "Event loop is closed" in error_msg:
-                    # 事件循环已关闭，保留最近10条日志
+                    # 事件循环已关闭，直接同步处理（如果可能）
                     try:
+                        self._process_batch()
+                    except:
+                        # 同步处理也失败，保留最近10条日志
                         preserved = []
                         discard_count = 0
                         while not self._log_queue.empty():
@@ -536,18 +555,26 @@ class AsyncTerminal:
 
                         if discard_count > 0:
                             print(f"[INFO] 事件循环已关闭，丢弃了 {discard_count} 条日志")
-                    except:
-                        pass
                     return
-                # 其他 RuntimeError 仍然记录但继续尝试
-                print(f"[WARN] 调度批量处理遇到 RuntimeError: {error_msg}")
+                # 其他 RuntimeError 仍然记录但继续尝试同步处理
+                print(f"[WARN] 调度批量处理遇到 RuntimeError: {error_msg}，尝试同步处理")
+                try:
+                    self._process_batch()
+                except Exception as sync_error:
+                    print(f"[ERROR] 同步处理也失败: {sync_error}")
                 return
             except Exception as e:
-                # 记录其他异常
+                # 记录其他异常并尝试同步处理
                 import traceback
-                print(f"[ERROR] 调度批量处理时发生未预期错误: {str(e)}")
+                print(f"[ERROR] 调度批量处理时发生未预期错误: {str(e)}，尝试同步处理")
                 print(f"错误详情: {traceback.format_exc()}")
+                try:
+                    self._process_batch()
+                except Exception as sync_error:
+                    print(f"[ERROR] 同步处理也失败: {sync_error}")
                 return
+
+            return
         except (RuntimeError, AttributeError) as e:
             # 控件已从页面移除或 page 属性访问失败
             import traceback
@@ -667,8 +694,27 @@ class AsyncTerminal:
         return count
 
     def stop_processes(self):
-        """停止所有进程（多阶段终止策略）"""
-        # ========== 新增：使用锁获取进程列表 ==========
+        """
+        停止所有进程（异步入口方法）
+
+        注意：此方法返回协程对象，需要在异步上下文中调用。
+        如果在 UI 上下文中调用，请使用 page.run_task() 调用此方法。
+
+        Returns:
+            asyncio.Task 或 coroutine: 可以被 await 的协程对象
+        """
+        return self._stop_processes_impl_async()
+
+    async def _stop_processes_impl_async(self):
+        """
+        停止所有进程的异步实现（多阶段终止策略）
+
+        使用 asyncio.sleep() 替代 time.sleep()，避免阻塞事件循环。
+        此方法是非阻塞的，可以在 UI 线程的异步上下文中安全运行。
+        """
+        import asyncio
+        import signal
+        # ========== 使用锁获取进程列表 ==========
         with self._active_processes_lock:
             if not self.active_processes:
                 return False
@@ -677,13 +723,16 @@ class AsyncTerminal:
 
         self.add_log(f"正在终止 {len(processes_to_stop)} 个进程...")
 
-        # ========== 新增：清理所有定时器（防止内存泄漏） ==========
+        # ========== 清理所有定时器（防止内存泄漏） ==========
         timer_count = self._cleanup_timers()
         if timer_count > 0:
             self.add_log(f"  清理了 {timer_count} 个定时器")
 
-        # 刷新日志缓冲区
-        self._flush_log_buffer()
+        # 刷新日志缓冲区（添加异常处理）
+        try:
+            self._flush_log_buffer()
+        except Exception as e:
+            self.add_log(f"[WARNING] 刷新日志缓冲区失败: {e}")
 
         # 设置停止事件
         self._stop_event.set()
@@ -749,7 +798,7 @@ class AsyncTerminal:
 
                 # 等待优雅退出（最多2秒）
                 for _ in range(20):
-                    time.sleep(0.1)
+                    await asyncio.sleep(0.1)
                     if hasattr(process, 'poll') and process.poll() is not None:
                         break
                     elif hasattr(process, 'returncode') and process.returncode is not None:
@@ -774,7 +823,7 @@ class AsyncTerminal:
 
                     # 等待强制终止生效（最多1秒）
                     for _ in range(10):
-                        time.sleep(0.1)
+                        await asyncio.sleep(0.1)
                         if hasattr(process, 'poll') and process.poll() is not None:
                             break
                         elif hasattr(process, 'returncode') and process.returncode is not None:
@@ -785,39 +834,22 @@ class AsyncTerminal:
                 if error_msg:
                     self.add_log(f"终止进程 {proc_info['pid']} 时出错: {error_msg}")
 
-        # 保存需要验证的进程列表
-        processes_to_verify = self.active_processes[:]
-        self.active_processes = []
-
-        self.add_log("所有进程已终止")
-
-        # 阶段 3: 使用 taskkill 清理残留进程
-        self.add_log("检查并清理残留进程...")
-        killed_count = 0
-
-        for proc_info in processes_to_verify:
-            pid = proc_info['pid']
-            if self._verify_process_running(pid):
-                self.add_log(f"  发现残留进程 PID={pid}，正在清理...")
-                if self._kill_process_by_pid(pid, use_tree=False):
-                    self.add_log(f"  ✓ 成功清理 PID={pid}")
-                    killed_count += 1
-                else:
-                    self.add_log(f"  ⚠ 清理失败 PID={pid}")
-
-        if killed_count > 0:
-            self.add_log(f"✓ 成功清理 {killed_count} 个残留进程")
-        else:
-            self.add_log("✓ 所有进程已成功终止")
+        self.add_log("✓ 所有进程已终止")
 
         # ========== 新增：执行全面资源清理 ==========
         try:
             cleanup_stats = self.cleanup_all_resources(aggressive=True)
-            self.add_log(
-                f"[清理] 任务={cleanup_stats['tasks_cleaned']}, "
-                f"额外进程={cleanup_stats['processes_cleaned']}, "
-                f"线程={cleanup_stats['threads_cleaned']}"
-            )
+            # 只在 DEBUG 模式下显示详细清理统计
+            if self._debug_mode:
+                self.add_log(
+                    f"[DEBUG] [清理] 任务={cleanup_stats['tasks_cleaned']}, "
+                    f"额外进程={cleanup_stats['processes_cleaned']}, "
+                    f"线程={cleanup_stats['threads_cleaned']}, "
+                    f"定时器={cleanup_stats['timers_cleaned']}, "
+                    f"队列={cleanup_stats['queues_cleared']}, "
+                    f"UI控件={cleanup_stats['ui_controls_cleaned']}, "
+                    f"内存释放={cleanup_stats['memory_freed']}KB"
+                )
         except Exception as e:
             self.add_log(f"[WARNING] 资源清理时出错: {str(e)}")
 
@@ -1489,12 +1521,87 @@ class AsyncTerminal:
                 if len(self.logs.controls) > 50:
                     # 删除除了最后50条之外的所有控件
                     del self.logs.controls[:-50]
-
+                    self.logs.update()
             # 使用 print 而非 add_log，避免在清理时添加新的 UI 控件
             if self._debug_mode:
                 print("[DEBUG] UI 控件已清理")
         except Exception as e:
             print(f"清理 UI 控件时出错: {e}")
+
+    def clear_terminal(self):
+        """
+        清空终端内容
+
+        功能说明：
+        - 强制停止批处理
+        - 清空日志控件
+        - 清空队列中的所有待处理日志
+        - 重置所有批处理状态
+        - 使用 SnackBar 显示清空结果
+        """
+        import time
+
+        # 1. 强制停止批处理
+        if hasattr(self, '_processing'):
+            self._processing = False
+            if self._debug_mode:
+                print("[DEBUG] 设置 _processing = False")
+
+        # 2. 等待一小段时间确保没有正在运行的任务
+        time.sleep(0.1)
+
+        # 3. 清空日志控件
+        control_count = len(self.logs.controls)
+        self.logs.controls.clear()
+
+        # 4. 清空队列中的所有待处理日志
+        queue_size = self._log_queue.qsize()
+        cleared_count = 0
+        while not self._log_queue.empty():
+            try:
+                self._log_queue.get_nowait()
+                cleared_count += 1
+            except:
+                break
+        if cleared_count > 0 and self._debug_mode:
+            print(f"[DEBUG] 清空了队列中的 {cleared_count}/{queue_size} 条日志")
+
+        # 5. 重置所有批处理状态
+        if hasattr(self, '_last_process_time'):
+            self._last_process_time = time.time()
+
+        if hasattr(self, '_schedule_retry_count'):
+            self._schedule_retry_count = 0
+
+        # 6. 更新UI
+        try:
+            self.logs.update()
+        except Exception as ex:
+            self.add_log(f"UI更新失败: {ex}")
+
+        # 7. 重置 _processing 为 False，确保下次可以正常处理
+        self._processing = False
+
+        # 8. 使用 SnackBar 显示清空结果
+        try:
+            if self.view and self.view.page:
+                from flet import SnackBar, Text
+                total_cleared = control_count + cleared_count
+
+                # 根据 DEBUG 模式决定显示详细程度
+                if self._debug_mode:
+                    message = f"✓ 已清空 {total_cleared} 条日志（界面: {control_count}, 队列: {cleared_count}）"
+                else:
+                    message = f"✓ 已清空 {total_cleared} 条日志"
+
+                snack_bar = SnackBar(
+                    Text(message),
+                    duration=3000,
+                )
+                self.view.page.show_dialog(snack_bar)
+        except Exception as ex:
+            # 如果 SnackBar 显示失败，fallback 到普通日志
+            self.add_log(f"✓ 终端已清空（界面: {control_count}, 队列: {cleared_count}）")
 
     def add_log(self, text: str):
         """线程安全的日志添加方法"""
@@ -1654,9 +1761,12 @@ class AsyncTerminal:
                     print(f"写入日志文件时发生IO错误: {str(e)}")
                     try:
                         self._log_file_handle.close()
-                        self._open_log_file()
-                        self._log_file_handle.writelines(log_lines)
-                        self._log_file_handle.flush()
+                        # 检查重新打开是否成功
+                        if self._open_log_file() and self._log_file_handle is not None:
+                            self._log_file_handle.writelines(log_lines)
+                            self._log_file_handle.flush()
+                        else:
+                            print("无法重新打开日志文件，跳过本次写入")
                     except Exception as retry_error:
                         print(f"重试写入日志文件也失败: {str(retry_error)}")
 

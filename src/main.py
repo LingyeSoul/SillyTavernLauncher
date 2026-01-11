@@ -113,6 +113,15 @@ async def main(page: ft.Page):
     def on_window_close(_):
         """窗口关闭时的清理处理"""
         try:
+            # 额外清理：停止托盘
+            if hasattr(uniUI, 'ui_event') and uniUI.ui_event:
+                if hasattr(uniUI.ui_event, 'tray') and uniUI.ui_event.tray:
+                    try:
+                        uniUI.ui_event.tray.tray.stop()
+                        print("[INFO] 托盘已停止")
+                    except Exception as ex:
+                        print(f"停止托盘时出错: {ex}")
+
             # 清理所有资源
             if hasattr(uniUI, 'cleanup'):
                 uniUI.cleanup()

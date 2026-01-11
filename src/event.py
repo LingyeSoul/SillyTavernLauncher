@@ -175,34 +175,55 @@ class UiEvent:
         else:
             return True
         
-    def exit_app(self, e):
-        # 销毁同步UI以清理定时器
+    def _exit_app_impl(self, stop_tray=False):
+        """
+        退出应用程序的内部实现
+
+        Args:
+            stop_tray: 是否停止托盘（True: 正常退出时停止托盘，False: 托盘已在外部停止）
+
+        改进说明：
+        - 提取公共逻辑，减少代码重复
+        - 正确处理 terminal.stop_processes() 的异步特性
+        - 添加 None 检查提高健壮性
+        - 根据参数决定是否停止托盘
+        """
+        import asyncio
+
+        # ========== 公共清理：销毁同步UI ==========
         if self.uni_ui and hasattr(self.uni_ui, 'sync_ui'):
             try:
                 self.uni_ui.sync_ui.destroy()
             except Exception as ex:
                 print(f"销毁同步UI时出错: {ex}")
 
-        # 检查是否启用了托盘功能
-        if self.config_manager.get("tray", True):
-            # 启用托盘时，停止所有运行的进程并隐藏窗口
-            if self.terminal.is_running:
-                self.terminal.stop_processes()
-            self.page.window.visible = False
+        # ========== 公共清理：停止所有运行的进程 ==========
+        # stop_processes() 现在返回协程对象，需要通过 run_task 调用
+        if self.terminal and self.terminal.is_running:
             try:
-                async def async_update():
+                # 在异步上下文中停止进程，避免阻塞UI
+                async def stop_and_cleanup():
                     try:
-                        if self.page:  # 检查 page 是否为 None
-                            self.page.update()
-                    except (AssertionError, AttributeError):
-                        pass  # 控件树过深或 page 已清理，忽略
-                self.page.run_task(async_update)
-            except Exception:
-                pass
-        else:
-            # 未启用托盘时，正常退出程序
-            if self.terminal.is_running:
-                self.terminal.stop_processes()
+                        await self.terminal.stop_processes()
+                    except Exception as ex:
+                        print(f"停止进程时出错: {ex}")
+                self.page.run_task(stop_and_cleanup)
+            except Exception as ex:
+                print(f"调用 stop_processes 失败: {ex}")
+
+        # 检查是否启用了托盘功能
+        use_tray = self.config_manager.get("tray", True) if self.config_manager else True
+
+        if use_tray:
+            # 启用托盘时：停止托盘（如果需要）并隐藏窗口
+            if stop_tray and self.tray is not None:
+                try:
+                    self.tray.tray.stop()
+                    print("[INFO] 托盘已停止")
+                except Exception as ex:
+                    print(f"停止托盘时出错: {ex}")
+
+            # 隐藏窗口并设置允许关闭
             self.page.window.visible = False
             self.page.window.prevent_close = False
             try:
@@ -211,7 +232,30 @@ class UiEvent:
                         if self.page:  # 检查 page 是否为 None
                             self.page.update()
                     except (AssertionError, AttributeError):
-                        pass  # 控件树过深或 page 已清理，忽略
+                        pass
+                self.page.run_task(async_update)
+            except Exception:
+                pass
+
+            # 关闭窗口（真正退出程序）
+            try:
+                async def async_close():
+                    if self.page:  # 检查 page 是否为 None
+                        await self.page.window.close()
+                self.page.run_task(async_close)
+            except Exception:
+                pass
+        else:
+            # 未启用托盘时，正常退出程序
+            self.page.window.visible = False
+            self.page.window.prevent_close = False
+            try:
+                async def async_update():
+                    try:
+                        if self.page:  # 检查 page 是否为 None
+                            self.page.update()
+                    except (AssertionError, AttributeError):
+                        pass
                 self.page.run_task(async_update)
             except Exception:
                 pass
@@ -223,8 +267,7 @@ class UiEvent:
             except Exception:
                 pass
 
-        # 清理自身资源（延迟到异步操作之后）
-        import asyncio
+        # ========== 清理自身资源（延迟到异步操作之后） ==========
         async def delayed_cleanup():
             await asyncio.sleep(0.5)  # 等待异步操作完成
             self.cleanup()
@@ -234,23 +277,37 @@ class UiEvent:
             # 如果 page 已经不可用，直接清理
             self.cleanup()
 
+    def exit_app(self, e):
+        """
+        退出应用程序（正常退出）
+
+        改进说明：
+        - 提取公共逻辑，减少代码重复
+        - 正确处理 terminal.stop_processes() 的异步特性
+        - 添加 None 检查提高健壮性
+        - 如果启用托盘，会停止托盘
+        """
+        self._exit_app_impl(stop_tray=True)
 
     def exit_app_with_tray(self, e):
-        # 销毁同步UI以清理定时器
-        if self.uni_ui and hasattr(self.uni_ui, 'sync_ui'):
+        """
+        通过托盘退出应用程序
+
+        改进说明：
+        - 添加 None 检查提高健壮性
+        - 正确处理 terminal.stop_processes() 的异步特性
+        - 先停止托盘，再执行退出逻辑（避免重复停止）
+        """
+        # 先停止托盘（通过托盘退出时需要停止托盘本身）
+        if self.tray is not None:
             try:
-                self.uni_ui.sync_ui.destroy()
+                self.tray.tray.stop()
+                print("[INFO] 托盘已停止")
             except Exception as ex:
-                print(f"销毁同步UI时出错: {ex}")
+                print(f"停止托盘时出错: {ex}")
 
-        # 停止所有运行的进程
-        if self.terminal.is_running:
-            self.terminal.stop_processes()
-
-        # 如果启用了托盘功能，则先停止托盘
-        if self.config_manager.get("tray", True) and self.tray is not None:
-            self.tray.tray.stop()
-        self.exit_app(e)
+        # 然后执行退出逻辑（stop_tray=False 避免重复停止托盘）
+        self._exit_app_impl(stop_tray=False)
 
     def cleanup(self):
         """清理所有资源引用，打破循环引用"""
@@ -570,6 +627,11 @@ class UiEvent:
                         self.terminal.is_running = False
                         self.terminal.add_log("SillyTavern进程已退出")
 
+                    # 同步版本（用于fallback）
+                    def on_process_exit_sync():
+                        self.terminal.is_running = False
+                        self.terminal.add_log("SillyTavern进程已退出")
+
                     # 启动进程并设置退出回调
                     custom_args = self.config_manager.get("custom_args", "")
                     base_command = f"\"{self.env.get_node_path()}node.exe\" server.js"
@@ -588,8 +650,8 @@ class UiEvent:
                             try:
                                 self.page.run_task(on_process_exit)
                             except AttributeError:
-                                # Fallback for older versions of flet
-                                on_process_exit()
+                                # Fallback for older versions of flet: 使用同步版本
+                                on_process_exit_sync()
 
                     self.run_async_task(start_st())
 
@@ -612,7 +674,13 @@ class UiEvent:
             self._restore_button(e, "启动", ft.Icons.PLAY_ARROW)
 
     def stop_sillytavern(self, e):
-        """停止SillyTavern（改进版：添加即时反馈和进度提示）"""
+        """
+        停止SillyTavern（改进版：添加即时反馈和进度提示）
+
+        改进说明：
+        - 正确处理 terminal.stop_processes() 的异步特性
+        - 避免阻塞 UI 线程
+        """
         try:
             # ========== 立即反馈：禁用按钮并显示加载状态 ==========
             if e and hasattr(e, 'control'):
@@ -638,17 +706,19 @@ class UiEvent:
             self.terminal.add_log(f"检测到 {process_count} 个运行中的进程")
             self.terminal.add_log("正在停止SillyTavern进程...")
 
-            # ========== 详细进度：显示停止进度 ==========
-            result = self.terminal.stop_processes()
+            # ========== 详细进度：异步停止进程 ==========
+            # stop_processes() 现在返回 Future，需要通过 run_task 调用
+            async def stop_and_restore():
+                try:
+                    await self.terminal.stop_processes()
+                    self.terminal.add_log("✓ 所有进程已停止")
+                except Exception as ex:
+                    self.terminal.add_log(f"停止进程时出错: {str(ex)}")
+                finally:
+                    # 延迟恢复按钮，让用户看到"停止中..."的状态
+                    self._restore_button(e, "停止", ft.Icons.CANCEL, delay=0.5)
 
-            # ========== 恢复按钮状态 ==========
-            if result:
-                self.terminal.add_log("✓ 所有进程已停止")
-            else:
-                self.terminal.add_log("停止进程完成")
-
-            # 延迟恢复按钮，让用户看到"停止中..."的状态
-            self._restore_button(e, "停止", ft.Icons.CANCEL, delay=0.5)
+            self.page.run_task(stop_and_restore)
 
         except Exception as ex:
             error_msg = f"停止进程时出错: {str(ex)}"
@@ -661,70 +731,98 @@ class UiEvent:
             self._restore_button(e, "停止", ft.Icons.CANCEL)
 
     def restart_sillytavern(self, e):
-        """重启SillyTavern服务"""
-        self.terminal.add_log("正在重启SillyTavern...")
-        # 先停止服务
-        self.terminal.stop_processes()
-        self.terminal.add_log("旧进程已停止")
-        
-        # 检查路径是否包含中文或空格
-        current_path = os.getcwd()
-        
-        # 检查是否包含中文字符（使用Python内置方法）
-        has_chinese = any('\u4e00' <= char <= '\u9fff' for char in current_path)
-        if has_chinese:
-            self.terminal.add_log("错误：路径包含中文字符，请将程序移动到不包含中文字符的路径下运行")
-            return
-            
-        # 检查是否包含空格
-        if ' ' in current_path:
-            self.terminal.add_log("错误：路径包含空格，请将程序移动到不包含空格的路径下运行")
-            return
-            
-        if self.env.checkST():
-            if self.env.check_nodemodules():
-                self.terminal.is_running = True
-                async def on_process_exit():
-                    self.terminal.is_running = False
-                    self.terminal.add_log("SillyTavern进程已退出")
-                
-                # 启动进程并设置退出回调
-                custom_args = self.config_manager.get("custom_args", "")
-                base_command = f"\"{self.env.get_node_path()}node\" server.js"
-                if custom_args:
-                    command = f"{base_command} {custom_args}"
-                else:
-                    command = base_command
-                    
-                process = self.execute_command(command, "SillyTavern")
-                if process:
-                    def wait_for_exit():
-                        # 创建一个新的事件循环并运行直到完成
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        try:
-                            # 如果process是一个协程对象，我们需要运行它直到完成以获取进程对象
-                            if asyncio.iscoroutine(process):
-                                process_obj = loop.run_until_complete(process)
-                            else:
-                                process_obj = process
-                            
-                            # 等待进程完成
-                            loop.run_until_complete(process_obj.wait())
-                        finally:
-                            loop.close()
-                        on_process_exit()
-                    
-                    threading.Thread(target=wait_for_exit, daemon=True).start()
-                    self.terminal.add_log("SillyTavern已重启")
-                else:
-                    self.terminal.add_log("重启失败")
-            else:
-                self.terminal.add_log("依赖项未安装")
-        else:
-            self.terminal.add_log("SillyTavern未安装")
+        """
+        重启SillyTavern服务
 
-    
+        改进说明：
+        - 正确处理 terminal.stop_processes() 的异步特性
+        - 等待停止完成后再启动
+        """
+        self.terminal.add_log("正在重启SillyTavern...")
+
+        # ========== 异步停止服务 ==========
+        async def stop_and_start():
+            try:
+                await self.terminal.stop_processes()
+                self.terminal.add_log("旧进程已停止")
+
+                # 检查路径是否包含中文或空格
+                current_path = os.getcwd()
+
+                # 检查是否包含中文字符（使用Python内置方法）
+                has_chinese = any('\u4e00' <= char <= '\u9fff' for char in current_path)
+                if has_chinese:
+                    self.terminal.add_log("错误：路径包含中文字符，请将程序移动到不包含中文字符的路径下运行")
+                    return
+
+                # 检查是否包含空格
+                if ' ' in current_path:
+                    self.terminal.add_log("错误：路径包含空格，请将程序移动到不包含空格的路径下运行")
+                    return
+
+                if self.env.checkST():
+                    if self.env.check_nodemodules():
+                        self.terminal.is_running = True
+
+                        # 同步版本（在线程中使用）
+                        def on_process_exit_sync():
+                            self.terminal.is_running = False
+                            self.terminal.add_log("SillyTavern进程已退出")
+
+                        # 启动进程并设置退出回调
+                        custom_args = self.config_manager.get("custom_args", "")
+                        base_command = f"\"{self.env.get_node_path()}node\" server.js"
+                        if custom_args:
+                            command = f"{base_command} {custom_args}"
+                        else:
+                            command = base_command
+
+                        process = self.execute_command(command, "SillyTavern")
+                        if process:
+                            def wait_for_exit():
+                                # 创建一个新的事件循环并运行直到完成
+                                loop = asyncio.new_event_loop()
+                                asyncio.set_event_loop(loop)
+                                try:
+                                    # 如果process是一个协程对象，我们需要运行它直到完成以获取进程对象
+                                    if asyncio.iscoroutine(process):
+                                        process_obj = loop.run_until_complete(process)
+                                    else:
+                                        process_obj = process
+
+                                    # 等待进程完成
+                                    loop.run_until_complete(process_obj.wait())
+                                finally:
+                                    loop.close()
+                                # 使用同步版本
+                                on_process_exit_sync()
+
+                            threading.Thread(target=wait_for_exit, daemon=True).start()
+                            self.terminal.add_log("SillyTavern已重启")
+                        else:
+                            self.terminal.add_log("重启失败")
+                    else:
+                        self.terminal.add_log("依赖项未安装")
+                else:
+                    self.terminal.add_log("SillyTavern未安装")
+            except Exception as ex:
+                self.terminal.add_log(f"重启失败: {str(ex)}")
+                import traceback
+                traceback.print_exc()
+
+        self.page.run_task(stop_and_start)
+
+    def clear_terminal(self, e):
+        """
+        清空终端内容（UI事件处理层）
+
+        职责说明：
+        - 这是UI事件处理层，负责将按钮点击事件转发到 terminal 层
+        - 实际的清空逻辑在 terminal.clear_terminal() 中实现
+        """
+        self.terminal.clear_terminal()
+
+
     def update_sillytavern(self, e):
         """更新SillyTavern（改进版：添加即时反馈）"""
         try:
