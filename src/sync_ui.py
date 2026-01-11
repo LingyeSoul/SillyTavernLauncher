@@ -902,12 +902,30 @@ class DataSyncUI:
                     server_url = server_url_input.value.strip()
                     if not server_url:
                         self._add_log("请输入服务器地址")
+                        if self.page:
+                            self.page.show_dialog(ft.SnackBar(content=ft.Text("请输入服务器地址"), bgcolor=ft.Colors.RED_500))
                         return
 
                     method = method_dropdown.value if method_dropdown else "auto"
                     backup = backup_switch.value if backup_switch else True
 
-                    self._add_log(f"开始同步: {server_url}")
+                    # 在开始同步前先检查服务器是否可用
+                    self._add_log(f"检查服务器可用性: {server_url}")
+                    try:
+                        from sync_client import SyncClient
+                        client = SyncClient(server_url, self.data_dir, timeout=3)
+                        if not client.check_server_health():
+                            self._add_log("服务器不可用或无响应")
+                            if self.page:
+                                self.page.show_dialog(ft.SnackBar(content=ft.Text("服务器不可用或无响应，请检查服务器地址"), bgcolor=ft.Colors.RED_500))
+                            return
+                        self._add_log("服务器可用，开始同步")
+                    except Exception as health_err:
+                        self._add_log(f"服务器健康检查失败: {health_err}")
+                        if self.page:
+                            self.page.show_dialog(ft.SnackBar(content=ft.Text(f"无法连接到服务器: {health_err}"), bgcolor=ft.Colors.RED_500))
+                        return
+
                     self._add_log(f"同步方法: {method}, 备份数据: {'是' if backup else '否'}")
 
                     success = self.sync_manager.sync_from_server(server_url, method, backup)

@@ -13,6 +13,7 @@ from welcome_dialog import show_welcome_dialog
 ft.context.disable_auto_update() #修复页面卡卡的感觉
 
 async def main(page: ft.Page):
+    await page.window.center()
     page.title = "SillyTavernLauncher"
     page.theme = ft.Theme(color_scheme_seed=ft.Colors.BLUE,font_family="Microsoft YaHei")
     page.dark_theme=ft.Theme(color_scheme_seed=ft.Colors.BLUE,font_family="Microsoft YaHei")
