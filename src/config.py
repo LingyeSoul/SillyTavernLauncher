@@ -46,6 +46,9 @@ class ConfigManager:
                 "stcheckupdate": False,
                 "tray": False,
                 "autostart": False,
+                "auto_proxy": False,
+                "custom_args": "",
+                "use_optimize_args": False,
                 "sync": {
                     "first_shown": False,
                     "enabled": False,

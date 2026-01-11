@@ -84,8 +84,8 @@ class UniUI():
                     ),
                     ft.Text("懒人包请勿修改，修改后重启生效 | 开启后修改系统环境的Git配置文件", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
-                    ft.Text("酒馆网络设置", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Text("调整酒馆网络设置，重启酒馆生效", size=14, color=ft.Colors.GREY_600),
+                    ft.Text("酒馆设置", size=18, weight=ft.FontWeight.BOLD),
+                    ft.Text("调整酒馆设置，重启酒馆生效", size=14, color=ft.Colors.GREY_600),
                     ft.Switch(
                         label="启用局域网访问",
                         value=self.stcfg.listen,
@@ -122,6 +122,12 @@ class UniUI():
                         )
                     ]),
                     ft.Text("自定义启动参数将添加到启动命令末尾", size=14, color=ft.Colors.BLUE_400),
+                    ft.Switch(
+                        label="使用优化参数",
+                        value=self.config_manager.get("use_optimize_args", False),
+                        on_change=self.ui_event.optimize_args_changed,
+                    ),
+                    ft.Text("开启后将在启动命令中添加 --max-old-space-size=4096 参数（在自定义启动参数前）", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
                     ft.Text("启动器功能设置", size=18, weight=ft.FontWeight.BOLD),
                     ft.Switch(

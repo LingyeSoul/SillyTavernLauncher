@@ -634,7 +634,10 @@ class UiEvent:
 
                     # 启动进程并设置退出回调
                     custom_args = self.config_manager.get("custom_args", "")
+                    use_optimize_args = self.config_manager.get("use_optimize_args", False)
                     base_command = f"\"{self.env.get_node_path()}node.exe\" server.js"
+                    if use_optimize_args:
+                        base_command += " --max-old-space-size=4096"
                     if custom_args:
                         command = f"{base_command} {custom_args}"
                     else:
@@ -771,7 +774,10 @@ class UiEvent:
 
                         # 启动进程并设置退出回调
                         custom_args = self.config_manager.get("custom_args", "")
+                        use_optimize_args = self.config_manager.get("use_optimize_args", False)
                         base_command = f"\"{self.env.get_node_path()}node\" server.js"
+                        if use_optimize_args:
+                            base_command += " --max-old-space-size=4096"
                         if custom_args:
                             command = f"{base_command} {custom_args}"
                         else:
@@ -1552,6 +1558,14 @@ class UiEvent:
         self.config_manager.set("custom_args", value)
         self.config_manager.save_config()
         self.showMsg('自定义启动参数已保存')
+
+    def optimize_args_changed(self, e):
+        """处理优化参数开关变化事件"""
+        use_optimize = e.control.value
+        self.config_manager.set("use_optimize_args", use_optimize)
+        # 保存配置
+        self.config_manager.save_config()
+        self.showMsg('优化参数设置已保存')
 
     def tray_changed(self, e):
         """处理托盘开关变化"""
