@@ -1191,7 +1191,8 @@ class AsyncTerminal:
             'memory_freed': 0
         }
 
-        self.add_log("[CLEANUP] 开始全面资源清理...")
+        if self._debug_mode:
+            self.add_log("[CLEANUP] 开始全面资源清理...")
 
         # 1. 清理已完成的任务
         with self._output_tasks_lock:
@@ -1319,16 +1320,17 @@ class AsyncTerminal:
         if not hasattr(self, '_cleanup_timer_started'):
             self._start_periodic_cleanup()
 
-        self.add_log(
-            f"[CLEANUP] 清理完成: "
-            f"任务={stats['tasks_cleaned']}, "
-            f"进程={stats['processes_cleaned']}, "
-            f"线程={stats['threads_cleaned']}, "
-            f"定时器={stats['timers_cleaned']}, "
-            f"队列={stats['queues_cleared']}, "
-            f"内存={stats['memory_freed']:.1f}MB, "
-            f"UI控件={stats['ui_controls_cleaned']}"
-        )
+        if self._debug_mode:
+            self.add_log(
+                f"[CLEANUP] 清理完成: "
+                f"任务={stats['tasks_cleaned']}, "
+                f"进程={stats['processes_cleaned']}, "
+                f"线程={stats['threads_cleaned']}, "
+                f"定时器={stats['timers_cleaned']}, "
+                f"队列={stats['queues_cleared']}, "
+                f"内存={stats['memory_freed']:.1f}MB, "
+                f"UI控件={stats['ui_controls_cleaned']}"
+            )
 
         return stats
 
@@ -1366,7 +1368,8 @@ class AsyncTerminal:
         # 启动后台清理线程（保持为 daemon，避免阻塞程序退出）
         self._cleanup_thread = threading.Thread(target=periodic_cleanup, daemon=True)
         self._cleanup_thread.start()
-        self.add_log("[CLEANUP] 周期性清理定时器已启动 (间隔: 60秒)")
+        if self._debug_mode:
+            self.add_log("[CLEANUP] 周期性清理定时器已启动 (间隔: 60秒)")
 
     def stop_periodic_cleanup(self):
         """停止周期性清理定时器"""
