@@ -369,13 +369,16 @@ class UniUI():
         # 设置窗口事件
         def window_event(e):
             if e.data == "close":
-                # 检查是否启用了托盘功能
-                if self.config_manager.get("tray", True):
-                    # 启用托盘时，只隐藏窗口
+                # 检查是否启用了托盘功能且托盘还在运行
+                use_tray = self.config_manager.get("tray", True)
+                tray_exists = hasattr(self.ui_event, 'tray') and self.ui_event.tray is not None
+
+                if use_tray and tray_exists:
+                    # 启用托盘且托盘存在时，只隐藏窗口
                     page.window.visible = False
                     page.update()
                 else:
-                    # 未启用托盘时，正常退出程序
+                    # 未启用托盘或托盘已被停止时，正常退出程序
                     self.ui_event.exit_app(e)
         page.window.prevent_close = True
         page.window.on_event = window_event
@@ -519,17 +522,27 @@ class UniUI():
 
             # 延迟创建版本切换视图
             try:
-                from st_version_ui import create_version_switch_view
-                self.version_view = create_version_switch_view(page, self.terminal, self.ui_event)
+                # 检查页面是否仍然有效
+                if not self.is_page_valid():
+                    print(f"版本切换视图初始化跳过: 页面已销毁")
+                    self.version_view = self._create_simple_version_view()
+                else:
+                    from st_version_ui import create_version_switch_view
+                    self.version_view = create_version_switch_view(page, self.terminal, self.ui_event)
             except Exception as e:
-                print(f"版本切换视图初始化失败: {e}")
-                # 创建简化版本
-                self.version_view = ft.Column([
-                    ft.Text("版本管理", size=24, weight=ft.FontWeight.BOLD),
-                    ft.Divider(),
-                    ft.Text("版本切换功能初始化失败", color=ft.Colors.RED),
-                    ft.Text(f"错误: {str(e)}", size=12, color=ft.Colors.GREY_600)
-                ], spacing=15)
+                error_msg = str(e)
+                # 如果是页面已销毁的错误，静默处理
+                if "destroyed" in error_msg.lower() or "session" in error_msg.lower():
+                    print(f"版本切换视图初始化跳过: {error_msg}")
+                    self.version_view = self._create_simple_version_view()
+                else:
+                    print(f"版本切换视图初始化失败: {e}")
+                    self.version_view = ft.Column([
+                        ft.Text("版本管理", size=24, weight=ft.FontWeight.BOLD),
+                        ft.Divider(),
+                        ft.Text("版本切换功能初始化失败", color=ft.Colors.RED),
+                        ft.Text(f"错误: {str(e)}", size=12, color=ft.Colors.GREY_600)
+                    ], spacing=15)
 
             # 标记加载完成
             self._views_loaded = True
@@ -593,6 +606,14 @@ class UniUI():
                 padding=20,
                 border_radius=10,
             )
+        ], scroll=ft.ScrollMode.AUTO, expand=True, spacing=15)
+
+    def _create_simple_version_view(self):
+        """Create a simplified version view when page is destroyed"""
+        return ft.Column([
+            ft.Text("版本管理", size=24, weight=ft.FontWeight.BOLD),
+            ft.Divider(),
+            ft.Text("版本管理功能", size=14, color=ft.Colors.GREY_600),
         ], scroll=ft.ScrollMode.AUTO, expand=True, spacing=15)
 
     def is_page_valid(self):

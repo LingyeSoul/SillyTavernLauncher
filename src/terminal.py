@@ -705,6 +705,72 @@ class AsyncTerminal:
         """
         return self._stop_processes_impl_async()
 
+    def stop_processes_sync(self):
+        """
+        同步停止所有进程（强制终止，用于程序退出时）
+
+        此方法会强制终止所有进程，不等待优雅退出。
+        主要用于程序退出时快速清理资源。
+        """
+        import signal
+
+        # 使用锁获取进程列表
+        with self._active_processes_lock:
+            if not self.active_processes:
+                return False
+            processes_to_stop = self.active_processes[:]  # 创建副本
+            self.active_processes = []  # 立即清空原列表
+
+        self.add_log(f"强制终止 {len(processes_to_stop)} 个进程...")
+
+        # 清理所有定时器
+        timer_count = self._cleanup_timers()
+        if timer_count > 0:
+            self.add_log(f"  清理了 {timer_count} 个定时器")
+
+        # 设置停止事件
+        self._stop_event.set()
+        self._log_file_stop_event.set()
+
+        # 强制终止所有进程
+        for proc_info in processes_to_stop:
+            try:
+                pid = proc_info['pid']
+                process = proc_info.get('process')
+                command = proc_info.get('command', '')
+
+                self.add_log(f"终止进程 PID={pid}: {command[:50]}")
+
+                # 直接强制终止（SIGKILL）
+                try:
+                    if hasattr(process, 'kill'):
+                        process.kill()
+                    elif hasattr(process, 'send_signal'):
+                        process.send_signal(signal.SIGKILL)
+                except Exception:
+                    pass
+
+            except Exception as ex:
+                error_msg = str(ex).strip()
+                if error_msg:
+                    self.add_log(f"终止进程 {proc_info['pid']} 时出错: {error_msg}")
+
+        self.add_log("✓ 所有进程已终止")
+
+        # 清理所有资源
+        try:
+            self.cleanup_all_resources(aggressive=True)
+        except Exception as e:
+            self.add_log(f"[WARNING] 资源清理时出错: {str(e)}")
+
+        # 停止周期性清理定时器
+        self.stop_periodic_cleanup()
+
+        self.is_running = False
+        self._stop_event.clear()
+
+        return True
+
     async def _stop_processes_impl_async(self):
         """
         停止所有进程的异步实现（多阶段终止策略）

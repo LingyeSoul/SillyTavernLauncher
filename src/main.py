@@ -13,7 +13,6 @@ from welcome_dialog import show_welcome_dialog
 ft.context.disable_auto_update() #修复页面卡卡的感觉
 
 async def main(page: ft.Page):
-    await page.window.center()
     page.title = "SillyTavernLauncher"
     page.theme = ft.Theme(color_scheme_seed=ft.Colors.BLUE,font_family="Microsoft YaHei")
     page.dark_theme=ft.Theme(color_scheme_seed=ft.Colors.BLUE,font_family="Microsoft YaHei")
@@ -118,18 +117,15 @@ async def main(page: ft.Page):
                 if hasattr(uniUI.ui_event, 'tray') and uniUI.ui_event.tray:
                     try:
                         uniUI.ui_event.tray.tray.stop()
+                        uniUI.ui_event.tray = None  # 将 tray 设置为 None
                         print("[INFO] 托盘已停止")
                     except Exception as ex:
                         print(f"停止托盘时出错: {ex}")
 
-            # 清理所有资源
-            if hasattr(uniUI, 'cleanup'):
-                uniUI.cleanup()
-
-            # 额外清理：确保终端进程已停止
+            # 额外清理：确保终端进程已停止（使用同步方法强制终止）
             if hasattr(uniUI, 'terminal') and uniUI.terminal:
                 try:
-                    uniUI.terminal.stop_processes()
+                    uniUI.terminal.stop_processes_sync()
                 except Exception:
                     pass
 
@@ -140,6 +136,10 @@ async def main(page: ft.Page):
                         uniUI.ui_event.data_sync_manager.stop_sync_server()
                     except Exception:
                         pass
+
+            # 清理所有资源
+            if hasattr(uniUI, 'cleanup'):
+                uniUI.cleanup()
 
             print("[INFO] 资源清理完成，程序即将退出")
         except Exception as ex:
@@ -237,5 +237,9 @@ async def main(page: ft.Page):
     asyncio.create_task(check_first_launch())
     page.window.visible = True
     page.update()
+    await page.window.center()
+    
+    
+    
 
 ft.run(main, view=ft.AppView.FLET_APP_HIDDEN)
