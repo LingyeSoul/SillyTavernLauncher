@@ -143,6 +143,7 @@ async def main(page: ft.Page):
                 uniUI.cleanup()
 
             print("[INFO] 资源清理完成，程序即将退出")
+
         except Exception as ex:
             print(f"清理资源时出错: {ex}")
 

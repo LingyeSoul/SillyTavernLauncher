@@ -412,12 +412,7 @@ class AsyncTerminal:
 
             # 限制日志数量
             if len(self.logs.controls) > self._max_log_entries:
-                self.logs.controls = self.logs.controls[-self._max_log_entries//2:]
-
-            # ========== 关键修复：确保至少保留一个控件，避免 Flet 页面变灰 ==========
-            # Flet 框架需要至少一个可见控件才能正确渲染页面主题
-            if len(self.logs.controls) == 0:
-                self.logs.controls.append(ft.Text("", size=14))
+                del self.logs.controls[:-self._max_log_entries//2]
 
             # ========== 新增：在更新 UI 之前再次检查页面有效性 ==========
             # 因为我们是异步执行，页面状态可能在等待期间发生变化
@@ -425,7 +420,7 @@ class AsyncTerminal:
                 # 页面变为无效，清除刚才添加的控件
                 # 保留最后20条
                 if len(self.logs.controls) > 20:
-                    self.logs.controls = self.logs.controls[-20:]
+                    del self.logs.controls[:-20]
                 # 确保至少有一个控件
                 if len(self.logs.controls) == 0:
                     self.logs.controls.append(ft.Text("", size=14))
@@ -637,14 +632,10 @@ class AsyncTerminal:
         # 3. 激进地清理日志控件（保留更少的历史）
         if len(self.logs.controls) > 100:  # 只保留100条
             old_count = len(self.logs.controls)
-            self.logs.controls = self.logs.controls[-100:]
+            del self.logs.controls[:-100]
             if self._debug_mode:
                 self.add_log(f"[DEBUG] 清理了 {old_count - 100} 个日志控件")
 
-            # ========== 关键修复：确保至少保留一个控件，避免 Flet 页面变灰 ==========
-            # Flet 框架需要至少一个可见控件才能正确渲染页面主题
-            if len(self.logs.controls) == 0:
-                self.logs.controls.append(ft.Text("", size=14))
 
             # 强制更新UI（仅在页面有效时）
             try:
@@ -1100,6 +1091,7 @@ class AsyncTerminal:
         - 移除复杂的缓冲区管理和自适应逻辑
         - 确保流在结束时被正确关闭
         - 减少内存泄漏风险
+        - 处理超长行导致的 ValueError: Separator is found, but chunk is longer than limit
         """
         import asyncio
 
@@ -1135,6 +1127,25 @@ class AsyncTerminal:
                     if stream.at_eof():
                         break
                     continue
+
+                except ValueError as line_error:
+                    # 处理超长行错误: "Separator is found, but chunk is longer than limit"
+                    # 当输出行超过 StreamReader 的默认限制（64KB）时触发
+                    if "chunk is longer than limit" in str(line_error):
+                        # 使用 read() 读取固定大小的块来处理超长行
+                        try:
+                            chunk = await asyncio.wait_for(stream.read(8192), timeout=0.1)
+                            if chunk:
+                                decoded_chunk = chunk.decode('utf-8', errors='replace')
+                                self.add_log(decoded_chunk.rstrip('\r\n'))
+                            elif stream.at_eof():
+                                break
+                        except asyncio.TimeoutError:
+                            if stream.at_eof():
+                                break
+                    else:
+                        # 其他 ValueError，向上抛出
+                        raise
 
         except asyncio.CancelledError:
             # 任务被取消，正常退出
@@ -1458,7 +1469,8 @@ class AsyncTerminal:
                 try:
                     time.sleep(60)  # 60秒间隔
                     if hasattr(self, '_cleanup_timer_started') and self._cleanup_timer_started:
-                        self.add_log("[PERIODIC] 执行周期性清理...")
+                        if self._debug_mode:
+                            self.add_log("[PERIODIC] 执行周期性清理...")
                         self.cleanup_all_resources(aggressive=False)
                 except Exception as e:
                     self.add_log(f"[ERROR] 周期性清理失败: {str(e)}")
@@ -1838,15 +1850,6 @@ class AsyncTerminal:
 
         except Exception as e:
             print(f"写入日志文件失败: {str(e)}")
-
-    def _write_log_to_file(self, text: str):
-        """将日志写入文件（已废弃，保留向后兼容性）"""
-        if self.enable_logging:
-            timestamp = datetime.datetime.now()
-            try:
-                self._log_file_queue.put_nowait((timestamp, text))
-            except queue.Full:
-                pass
 
     def _flush_log_buffer(self):
         """刷新日志缓冲区"""

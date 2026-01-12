@@ -18,3 +18,4 @@ nuitka-crash-report.xml
 backup
 /venv
 /test
+/.claude
