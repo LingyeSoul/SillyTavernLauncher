@@ -6,6 +6,29 @@ from st_version_manager import STVersionManager
 from git_utils import get_current_commit
 
 
+def parse_version(version_str):
+    """
+    解析版本号为可比较的元组
+
+    Args:
+        version_str (str): 版本字符串，如 "1.12.2" 或 "v1.12.2"
+
+    Returns:
+        tuple: 版本号元组，如 (1, 12, 2)
+    """
+    # 移除可能的前缀 'v'
+    if version_str.startswith('v'):
+        version_str = version_str[1:]
+
+    # 按点分割并转换为整数
+    try:
+        parts = version_str.split('.')
+        return tuple(int(p) for p in parts)
+    except (ValueError, AttributeError):
+        # 如果解析失败，返回一个默认值使得该版本排在最后
+        return (0,)
+
+
 def create_version_card(version_str, version_data, is_current=False, on_click=None):
     """
     创建单个版本卡片
@@ -197,7 +220,7 @@ def create_version_switch_view(page, terminal, ui_event):
             versions = result['versions']
             version_items = sorted(
                 versions.items(),
-                key=lambda x: x[0],
+                key=lambda x: parse_version(x[0]),
                 reverse=True
             )
 
