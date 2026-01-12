@@ -1,1 +1,1 @@
-VERSION = 'v1.3.1'
+VERSION = 'v1.3.2测试版'

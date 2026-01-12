@@ -11,6 +11,7 @@ import asyncio
 from packaging import version
 import urllib.request
 from git_utils import switch_git_remote_to_gitee
+import re
 
 
 class UiEvent:
@@ -69,53 +70,6 @@ class UiEvent:
             # run_task 本身失败，忽略
             pass
 
-    def _restore_button(self, e, text="启动", icon=ft.Icons.PLAY_ARROW, delay=0):
-        """
-        恢复按钮状态的辅助方法
-
-        Args:
-            e: 事件对象
-            text: 按钮文本
-            icon: 按钮图标
-            delay: 延迟时间（秒），0表示立即恢复
-        """
-        # 防御性检查：确保必要对象存在
-        if self is None or self.page is None:
-            return
-
-        def restore():
-            import time
-            try:
-                if delay > 0:
-                    time.sleep(delay)
-                if e and hasattr(e, 'control') and e.control:
-                    try:
-                        e.control.disabled = False
-                        e.control.text = text
-                        e.control.icon = icon
-                        self.safe_update()
-                    except Exception as ex:
-                        import traceback
-                        print(f"[ERROR] 恢复按钮状态失败: {ex}")
-                        traceback.print_exc()
-            except Exception as ex:
-                import traceback
-                print(f"[ERROR] restore 函数执行失败: {ex}")
-                traceback.print_exc()
-
-        try:
-            if delay > 0:
-                # 有延迟时，在后台线程中恢复
-                import threading
-                threading.Thread(target=restore, daemon=True).start()
-            else:
-                # 无延迟时，立即恢复
-                restore()
-        except Exception as ex:
-            import traceback
-            print(f"[ERROR] _restore_button 执行失败: {ex}")
-            traceback.print_exc()
-
     def run_async_task(self, coroutine):
         """运行异步任务"""
         def run_in_thread():
@@ -168,6 +122,63 @@ class UiEvent:
             await ft.Clipboard().set(text)
             page.show_dialog(ft.SnackBar(ft.Text("已复制到剪贴板")))
         page.run_task(copy_async)
+
+    def validate_custom_args(self, args: str) -> tuple[bool, str]:
+        """
+        验证自定义启动参数是否安全，防止命令注入攻击
+
+        安全规则：
+        1. 只允许安全的参数格式：--flag, --key=value, -k, -k value
+        2. 不允许 shell 元字符：|, &, ;, $, `, (, ), <, >, \n, \r
+        3. 不允许未闭合的引号
+        4. 参数值只允许字母、数字、下划线、短横线、点、斜杠、冒号、等号和空格
+
+        Args:
+            args: 用户输入的自定义参数字符串
+
+        Returns:
+            tuple[bool, str]: (是否有效, 错误信息)
+        """
+        if not args or not args.strip():
+            return True, ""
+
+        # 检查危险的 shell 元字符（命令注入特征）
+        dangerous_chars = ['|', '&', ';', '$', '`', '(', ')', '<', '>', '\n', '\r']
+        for char in dangerous_chars:
+            if char in args:
+                return False, f"参数包含危险字符: '{char}'。请勿使用 shell 命令语法。"
+
+        # 检查引号是否配对
+        single_quotes = args.count("'")
+        double_quotes = args.count('"')
+        if single_quotes % 2 != 0 or double_quotes % 2 != 0:
+            return False, "参数包含未闭合的引号"
+
+        # 使用正则表达式验证参数格式
+        # 允许的格式：
+        # - --flag
+        # - --key=value
+        # - -k
+        # - -k value
+        # - --key "value with spaces"
+        # 路径允许: /, \, :, .（如 --path=C:/path or --port=8080）
+
+        # 分割参数并逐个验证
+        try:
+            # 使用 shlex 安全分割参数（保留引号内的空格）
+            import shlex
+            parts = shlex.split(args, posix=False)
+        except ValueError as e:
+            return False, f"参数格式错误: {str(e)}"
+
+        for part in parts:
+            # 允许的字符：字母、数字、下划线、短横线、点、斜杠、冒号、等号、冒号
+            # 也允许中文等 Unicode 字符
+            # 使用更宽松的正则表达式，同时排除危险模式
+            if not re.match(r'^[\w\-=/:\\.,@%+]+$', part):
+                return False, f"参数包含非法字符: '{part}'"
+
+        return True, ""
 
     def envCheck(self):
         if os.path.exists(os.path.join(os.getcwd(), "env\\")):
@@ -558,24 +569,13 @@ class UiEvent:
         return True
 
     def start_sillytavern(self, e):
-        """启动SillyTavern（改进版：添加即时反馈）"""
+        """启动SillyTavern"""
         try:
-            # ========== 立即反馈：禁用按钮并显示加载状态 ==========
-            if e and hasattr(e, 'control'):
-                try:
-                    e.control.disabled = True
-                    e.control.text = "启动中..."
-                    e.control.icon = ft.Icons.LOADING
-                    self.safe_update()
-                except:
-                    pass
-
             # 立即输出提示信息
             self.terminal.add_log("正在启动SillyTavern...")
 
             # 验证路径是否适合NPM运行
             if not self.validate_path_for_npm():
-                self._restore_button(e, "启动", ft.Icons.PLAY_ARROW)
                 return
 
             # 检查是否开启了自动代理设置
@@ -615,7 +615,6 @@ class UiEvent:
 
             if self.terminal.is_running:
                 self.terminal.add_log("SillyTavern已经在运行中")
-                self._restore_button(e, "启动", ft.Icons.PLAY_ARROW)
                 return
 
             if self.env.checkST():
@@ -634,6 +633,14 @@ class UiEvent:
 
                     # 启动进程并设置退出回调
                     custom_args = self.config_manager.get("custom_args", "")
+
+                    # 验证自定义参数的安全性（防御性编程）
+                    if custom_args:
+                        is_valid, error_msg = self.validate_custom_args(custom_args)
+                        if not is_valid:
+                            self.terminal.add_log(f"警告：自定义启动参数不安全，已忽略: {error_msg}")
+                            custom_args = ""
+
                     use_optimize_args = self.config_manager.get("use_optimize_args", False)
                     base_command = f"\"{self.env.get_node_path()}node.exe\" server.js"
                     if use_optimize_args:
@@ -657,15 +664,10 @@ class UiEvent:
                                 on_process_exit_sync()
 
                     self.run_async_task(start_st())
-
-                    # 延迟恢复按钮状态
-                    self._restore_button(e, "启动", ft.Icons.PLAY_ARROW, delay=0.5)
                 else:
                     self.terminal.add_log("依赖未安装，请先安装依赖")
-                    self._restore_button(e, "启动", ft.Icons.PLAY_ARROW)
             else:
                 self.terminal.add_log("SillyTavern未安装，请先安装SillyTavern")
-                self._restore_button(e, "启动", ft.Icons.PLAY_ARROW)
         except Exception as ex:
             error_msg = f"启动SillyTavern时出错: {str(ex)}"
             self.terminal.add_log(error_msg)
@@ -673,35 +675,16 @@ class UiEvent:
             import traceback
             traceback.print_exc()
 
-            # 出错时恢复按钮状态
-            self._restore_button(e, "启动", ft.Icons.PLAY_ARROW)
-
     def stop_sillytavern(self, e):
         """
-        停止SillyTavern（改进版：添加即时反馈和进度提示）
-
-        改进说明：
-        - 正确处理 terminal.stop_processes() 的异步特性
-        - 避免阻塞 UI 线程
+        停止SillyTavern
         """
         try:
-            # ========== 立即反馈：禁用按钮并显示加载状态 ==========
-            if e and hasattr(e, 'control'):
-                try:
-                    e.control.disabled = True
-                    e.control.text = "停止中..."
-                    e.control.icon = ft.Icons.LOADING
-                    self.safe_update()
-                except:
-                    pass
-
-            # ========== 即时提示：正在检查进程 ==========
             self.terminal.add_log("正在检查进程状态...")
 
             # 检查是否有活跃的进程
             if not self.terminal.active_processes:
                 self.terminal.add_log("当前没有运行中的进程")
-                self._restore_button(e, "停止", ft.Icons.CANCEL)
                 return
 
             # 获取进程数量
@@ -709,17 +692,13 @@ class UiEvent:
             self.terminal.add_log(f"检测到 {process_count} 个运行中的进程")
             self.terminal.add_log("正在停止SillyTavern进程...")
 
-            # ========== 详细进度：异步停止进程 ==========
-            # stop_processes() 现在返回 Future，需要通过 run_task 调用
+            # ========== 异步停止进程 ==========
             async def stop_and_restore():
                 try:
                     await self.terminal.stop_processes()
                     self.terminal.add_log("✓ 所有进程已停止")
                 except Exception as ex:
                     self.terminal.add_log(f"停止进程时出错: {str(ex)}")
-                finally:
-                    # 延迟恢复按钮，让用户看到"停止中..."的状态
-                    self._restore_button(e, "停止", ft.Icons.CANCEL, delay=0.5)
 
             self.page.run_task(stop_and_restore)
 
@@ -729,9 +708,6 @@ class UiEvent:
             print(error_msg)
             import traceback
             traceback.print_exc()
-
-            # 出错时恢复按钮状态
-            self._restore_button(e, "停止", ft.Icons.CANCEL)
 
     def restart_sillytavern(self, e):
         """
@@ -774,6 +750,14 @@ class UiEvent:
 
                         # 启动进程并设置退出回调
                         custom_args = self.config_manager.get("custom_args", "")
+
+                        # 验证自定义参数的安全性（防御性编程）
+                        if custom_args:
+                            is_valid, error_msg = self.validate_custom_args(custom_args)
+                            if not is_valid:
+                                self.terminal.add_log(f"警告：自定义启动参数不安全，已忽略: {error_msg}")
+                                custom_args = ""
+
                         use_optimize_args = self.config_manager.get("use_optimize_args", False)
                         base_command = f"\"{self.env.get_node_path()}node\" server.js"
                         if use_optimize_args:
@@ -830,21 +814,10 @@ class UiEvent:
 
 
     def update_sillytavern(self, e):
-        """更新SillyTavern（改进版：添加即时反馈）"""
+        """更新SillyTavern"""
         try:
-            # ========== 立即反馈：禁用按钮并显示加载状态 ==========
-            if e and hasattr(e, 'control'):
-                try:
-                    e.control.disabled = True
-                    e.control.text = "更新中..."
-                    e.control.icon = ft.Icons.LOADING
-                    self.safe_update()
-                except:
-                    pass
-
             # 验证路径是否适合NPM运行
             if not self.validate_path_for_npm():
-                self._restore_button(e, "更新", ft.Icons.UPDATE)
                 return
 
             git_path = self.env.get_git_path()
@@ -1028,23 +1001,16 @@ class UiEvent:
                             on_git_complete(process)
 
                     self.run_async_task(git_pull())
-                    # 延迟恢复按钮，更新是异步的
-                    self._restore_button(e, "更新", ft.Icons.UPDATE, delay=1.0)
                 else:
                     self.terminal.add_log("未找到Git路径，请手动更新SillyTavern")
-                    self._restore_button(e, "更新", ft.Icons.UPDATE)
             else:
                 self.terminal.add_log("SillyTavern未安装")
-                self._restore_button(e, "更新", ft.Icons.UPDATE)
         except Exception as ex:
             error_msg = f"更新SillyTavern时出错: {str(ex)}"
             self.terminal.add_log(error_msg)
             print(error_msg)
             import traceback
             traceback.print_exc()
-
-            # 出错时恢复按钮状态
-            self._restore_button(e, "更新", ft.Icons.UPDATE)
 
     def update_sillytavern_with_callback(self, e):
         """
@@ -1547,14 +1513,30 @@ class UiEvent:
         self.showMsg('日志设置已保存')
 
     def custom_args_changed(self, e):
-        """处理自定义启动参数变化事件"""
+        """处理自定义启动参数变化事件（带安全验证）"""
         custom_args = e.control.value
+
+        # 验证参数安全性
+        is_valid, error_msg = self.validate_custom_args(custom_args)
+        if not is_valid:
+            self.show_error_dialog("参数验证失败", error_msg)
+            # 恢复为上一个有效值
+            e.control.value = self.config_manager.get("custom_args", "")
+            self.page.update()
+            return
+
         self.config_manager.set("custom_args", custom_args)
         # 保存配置
         self.config_manager.save_config()
 
     def save_custom_args(self, value):
-        """保存自定义启动参数"""
+        """保存自定义启动参数（带安全验证）"""
+        # 验证参数安全性
+        is_valid, error_msg = self.validate_custom_args(value)
+        if not is_valid:
+            self.show_error_dialog("参数验证失败", error_msg)
+            return
+
         self.config_manager.set("custom_args", value)
         self.config_manager.save_config()
         self.showMsg('自定义启动参数已保存')

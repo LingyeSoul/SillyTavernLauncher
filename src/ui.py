@@ -3,6 +3,7 @@ from flet import UrlLauncher
 import platform
 import os
 import threading
+import weakref
 from env import Env
 from sysenv import SysEnv
 from stconfig import stcfg
@@ -194,8 +195,10 @@ class UniUI():
         
     def getTerminalView(self):
         if self.platform == "Windows":
-            # 修复：缓存按钮行，避免每次切换视图时重新创建
-            if not hasattr(self, '_terminal_button_row'):
+            # 修复：创建固定的终端页面布局，按钮行固定在底部
+            # 这样终端视图可以更换，但按钮行保持不动
+            if not hasattr(self, '_terminal_page_container'):
+                # 创建按钮行（只创建一次）
                 self._terminal_button_row = ft.Row(
                     [
                         ft.Button(
@@ -240,9 +243,21 @@ class UniUI():
                         ),
                     ],
                     alignment=ft.MainAxisAlignment.CENTER,
-                    expand=True
                 )
-            return [self.terminal.view, self._terminal_button_row]
+
+                # 创建固定的终端页面容器
+                # 结构：上方是终端视图（可更换），下方是按钮行（固定）
+                self._terminal_page_container = ft.Column(
+                    [
+                        self.terminal.view,  # 终端视图在上方
+                        ft.Divider(height=20, color=ft.Colors.TRANSPARENT),  # 间距
+                        self._terminal_button_row,  # 按钮行固定在下方
+                    ],
+                    expand=True,
+                    spacing=0,
+                )
+
+            return self._terminal_page_container
         
 
 
@@ -397,52 +412,72 @@ class UniUI():
             ],
         )
 
-        # 创建导航栏（简化版）
+        # 创建导航栏 - 基于Flet最佳实践重构
+        # 使用弱引用避免循环引用导致的内存泄漏
+        weak_self = weakref.ref(self)
+
+        def _on_rail_change(e):
+            """NavigationRail 变更事件处理器 - 使用弱引用"""
+            self_ref = weak_self()
+            if self_ref is None:
+                # UniUI 对象已被销毁，不再处理事件
+                return
+            self_ref._handle_view_change(e.control.selected_index)
+
         rail = ft.NavigationRail(
             selected_index=0,
             label_type=ft.NavigationRailLabelType.ALL,
-            min_width=50,
-            min_extended_width=50,
+            # 修复: min_width最小值为56（紧凑模式），默认为72
+            min_width=72,
+            # 修复: min_extended_width应该比min_width大，默认为256
+            min_extended_width=200,
             extended=False,
+            # 添加分组对齐控制：-1.0=顶部对齐，0.0=居中，1.0=底部对齐
+            group_alignment=-0.9,
+            # 启用选中指示器
+            use_indicator=True,
             destinations=[
                 ft.NavigationRailDestination(
-                    icon=ft.Icons.TERMINAL,
+                    # 改进: 为选中/未选中状态使用不同的图标样式
+                    icon=ft.Icons.TERMINAL_OUTLINED,
                     selected_icon=ft.Icons.TERMINAL,
                     label="终端"
                 ),
                 ft.NavigationRailDestination(
-                    icon=ft.Icons.HISTORY,
+                    icon=ft.Icons.HISTORY_TOGGLE_OFF_OUTLINED,
                     selected_icon=ft.Icons.HISTORY,
                     label="版本"
                 ),
                 ft.NavigationRailDestination(
-                    icon=ft.Icons.SYNC,
+                    icon=ft.Icons.SYNC_DISABLED,
                     selected_icon=ft.Icons.SYNC,
                     label="同步"
                 ),
                 ft.NavigationRailDestination(
-                    icon=ft.Icons.SETTINGS,
+                    icon=ft.Icons.SETTINGS_OUTLINED,
                     selected_icon=ft.Icons.SETTINGS,
                     label="设置"
                 ),
                 ft.NavigationRailDestination(
-                    icon=ft.Icons.INFO,
+                    icon=ft.Icons.INFO_OUTLINE,
                     selected_icon=ft.Icons.INFO,
                     label="关于"
                 ),
             ],
-            on_change=lambda e: self._handle_view_change(e.control.selected_index)
+            on_change=_on_rail_change
         )
 
         # 初始只显示终端视图
-        terminal_view = self.getTerminalView()
-        content = ft.Column(terminal_view, expand=True)
+        # 参考 ui2.py 模式：使用 Container.content 而不是 Column.controls
+        # getTerminalView() 现在返回固定的终端页面容器
+        terminal_page = self.getTerminalView()
+        content = ft.Container(content=terminal_page, expand=True)
 
         # 存储引用供异步加载使用
         self._page = page
         self._rail = rail
         self._content = content
-        self._terminal_view = terminal_view
+        self._terminal_page = terminal_page  # 存储终端页面容器的引用
         self._views_loaded = False
 
         # 添加到页面
@@ -464,38 +499,104 @@ class UniUI():
         if hasattr(self, 'terminal'):
             self.terminal.set_page_ready(True)
 
+    # 视图映射表 - 遵循 Flet NavigationRail 最佳实践
+    # 将索引映射到视图属性和显示名称
+    _VIEW_MAP = {
+        0: ('_terminal_page', '终端'),
+        1: ('version_view', '版本'),
+        2: ('sync_view', '同步'),
+        3: ('settings_view', '设置'),
+        4: ('about_view', '关于'),
+    }
+
     def _handle_view_change(self, index):
-        """处理视图切换 - 支持延迟加载"""
-        if not hasattr(self, '_views_loaded') or not self._views_loaded:
-            # 如果视图还未加载完成，显示加载提示
-            self._content.controls.clear()
-            loading_content = ft.Container(
-                ft.Column([
-                    ft.Text("正在加载...", size=16, weight=ft.FontWeight.BOLD),
-                    ft.ProgressBar(visible=True)
-                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-                height=400,
-                alignment=ft.alignment.Alignment(0, 0)
-            )
-            self._content.controls.append(loading_content)
-            self._page.update()
+        """处理视图切换 - 基于 Flet NavigationRail 最佳实践重构
+
+        Args:
+            index: NavigationRail selected_index，表示选中的目标索引
+        """
+        # 参数验证
+        if not isinstance(index, int) or index < 0 or index >= len(self._VIEW_MAP):
+            print(f"[UniUI] 无效的视图索引: {index}")
             return
 
-        # 正常切换视图
-        self._content.controls.clear()
-        if index == 0:
-            # 修复：使用缓存的按钮行，避免重新创建控件
-            terminal_view = self.getTerminalView()
-            self._content.controls.extend(terminal_view)
-        elif index == 1 and hasattr(self, 'version_view'):
-            self._content.controls.append(self.version_view)
-        elif index == 2 and hasattr(self, 'sync_view'):
-            self._content.controls.append(self.sync_view)
-        elif index == 3 and hasattr(self, 'settings_view'):
-            self._content.controls.append(self.settings_view)
-        elif index == 4 and hasattr(self, 'about_view'):
-            self._content.controls.append(self.about_view)
+        # 检查视图是否已加载完成
+        if not self._are_views_ready():
+            self._show_loading_indicator()
+            return
 
+        # 获取并显示目标视图
+        view = self._get_view_by_index(index)
+        if view is not None:
+            self._display_view(view)
+        else:
+            self._show_unavailable_view(index)
+
+    def _are_views_ready(self):
+        """检查所有视图是否已加载完成"""
+        return hasattr(self, '_views_loaded') and self._views_loaded
+
+    def _show_loading_indicator(self):
+        """显示加载指示器 """
+        loading_view = ft.Container(
+            content=ft.Column([
+                ft.Text("正在加载...", size=16, weight=ft.FontWeight.BOLD),
+                ft.ProgressBar(visible=True, width=200)
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
+            height=400,
+            alignment=ft.alignment.Alignment(0, 0)
+        )
+        self._content.content = loading_view
+        self._page.update()
+
+    def _get_view_by_index(self, index):
+        """根据索引获取视图控件
+
+        Args:
+            index: 视图索引
+
+        Returns:
+            Control: 视图控件，如果视图不可用则返回 None
+        """
+        if index == 0:
+            # 终端视图特殊处理 - 动态获取
+            return self.getTerminalView()
+
+        # 其他视图从映射表获取
+        attr_name, _ = self._VIEW_MAP.get(index, (None, None))
+        if attr_name and hasattr(self, attr_name):
+            return getattr(self, attr_name)
+
+        return None
+
+    def _display_view(self, view):
+        """显示指定视图 
+
+        直接替换 content_area.content，无需使用 controls.clear()/append()
+
+        Args:
+            view: 要显示的视图控件
+        """
+        self._content.content = view
+        self._page.update()
+
+    def _show_unavailable_view(self, index):
+        """显示视图不可用提示 
+
+        Args:
+            index: 视图索引
+        """
+        _, view_name = self._VIEW_MAP.get(index, ('', '未知'))
+        unavailable_view = ft.Container(
+            content=ft.Column([
+                ft.Icon(ft.Icons.ERROR_OUTLINE, size=48, color=ft.Colors.ORANGE),
+                ft.Text(f"{view_name}视图不可用", size=16, weight=ft.FontWeight.BOLD),
+                ft.Text("请稍后重试", size=13, color=ft.Colors.GREY_600)
+            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
+            height=400,
+            alignment=ft.alignment.Alignment(0, 0)
+        )
+        self._content.content = unavailable_view
         self._page.update()
 
     def _load_views_async(self, page):
@@ -569,9 +670,8 @@ class UniUI():
             # 如果加载失败，确保UI仍然可用
             def show_error():
                 if page:
-                    self._content.controls.clear()
                     error_content = ft.Container(
-                        ft.Column([
+                        content=ft.Column([
                             ft.Text("加载部分界面失败", size=16, color=ft.Colors.RED_500),
                             ft.Text(str(e), size=14),
                             ft.Text("请重启应用或联系开发者", size=14),
@@ -587,7 +687,7 @@ class UniUI():
                         height=400,
                         alignment=ft.alignment.Alignment(0, 0)
                     )
-                    self._content.controls.append(error_content)
+                    self._content.content = error_content
                     page.update()
 
             if page:
@@ -643,16 +743,41 @@ class UniUI():
             raise
 
     def cleanup(self):
-        """清理所有资源，防止内存泄漏"""
+        """清理所有资源，防止内存泄漏
+
+        使用弱引用和显式断开连接来避免循环引用
+        """
         try:
             print("[UniUI] 开始清理资源...")
 
-            # 1. 清理 ui_event（必须先清理，打破循环引用）
+            # 1. 显式断开 NavigationRail 的事件处理器（防止循环引用）
+            if hasattr(self, '_rail') and self._rail is not None:
+                try:
+                    self._rail.on_change = None
+                except Exception:
+                    pass
+                self._rail = None
+
+            # 2. 显式断开按钮行的事件处理器
+            if hasattr(self, '_terminal_button_row') and self._terminal_button_row is not None:
+                try:
+                    for control in self._terminal_button_row.controls[:]:
+                        if hasattr(control, 'on_click'):
+                            control.on_click = None
+                except Exception:
+                    pass
+                self._terminal_button_row = None
+
+            # 3. 清理 ui_event（必须先清理，打破循环引用）
             if hasattr(self, 'ui_event') and self.ui_event is not None:
-                self.ui_event.cleanup()
+                try:
+                    if hasattr(self.ui_event, 'cleanup'):
+                        self.ui_event.cleanup()
+                except Exception:
+                    pass
                 self.ui_event = None
 
-            # 2. 清理 terminal（添加异常处理，避免解释器关闭时的线程错误）
+            # 4. 清理 terminal（添加异常处理，避免解释器关闭时的线程错误）
             if hasattr(self, 'terminal') and self.terminal is not None:
                 try:
                     self.terminal.cleanup_all_resources(aggressive=True)
@@ -660,9 +785,11 @@ class UniUI():
                 except RuntimeError as e:
                     if "can't create new thread" not in str(e):
                         raise
+                except Exception:
+                    pass
                 self.terminal = None
 
-            # 3. 清理 sync_ui
+            # 5. 清理 sync_ui
             if hasattr(self, 'sync_ui') and self.sync_ui is not None:
                 try:
                     self.sync_ui.destroy()
@@ -670,14 +797,29 @@ class UniUI():
                     pass
                 self.sync_ui = None
 
-            # 4. 清理 page 引用
+            # 6. 清理 content 和 page 引用
+            if hasattr(self, '_content') and self._content is not None:
+                try:
+                    self._content.content = None
+                except Exception:
+                    pass
+                self._content = None
+
             if hasattr(self, 'page') and self.page is not None:
+                try:
+                    # 尝试清理 Flet 页面上的所有控件
+                    if hasattr(self.page, 'clean'):
+                        self.page.clean()
+                except Exception:
+                    pass
                 self.page = None
 
-            # 5. 清理视图引用
+            # 7. 清理视图引用
             self._views_loaded = False
-            if hasattr(self, '_terminal_view'):
-                self._terminal_view = None
+            if hasattr(self, '_terminal_page'):
+                self._terminal_page = None
+            if hasattr(self, '_terminal_page_container'):
+                self._terminal_page_container = None
             if hasattr(self, 'version_view'):
                 self.version_view = None
             if hasattr(self, 'sync_view'):
@@ -687,9 +829,9 @@ class UniUI():
             if hasattr(self, 'about_view'):
                 self.about_view = None
 
-            # 6. 清理控件引用
-            if hasattr(self, '_terminal_button_row'):
-                self._terminal_button_row = None
+            # 8. 强制垃圾回收
+            import gc
+            gc.collect()
 
             print("[UniUI] 资源清理完成")
         except RuntimeError as e:
