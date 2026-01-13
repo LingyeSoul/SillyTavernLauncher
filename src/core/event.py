@@ -1,16 +1,16 @@
 import threading
 import os
 import flet as ft
-from env import Env
-from config import ConfigManager
-from stconfig import stcfg
-from sysenv import SysEnv
+from features.system.env import Env
+from config.config_manager import ConfigManager
+from features.st.config import stcfg
+from features.system.env_checker import SysEnv
 import subprocess
 import json
 import asyncio
 from packaging import version
 import urllib.request
-from git_utils import switch_git_remote_to_gitee
+from core.git_utils import switch_git_remote_to_gitee
 import re
 
 
@@ -198,15 +198,9 @@ class UiEvent:
         - 正确处理 terminal.stop_processes() 的异步特性
         - 添加 None 检查提高健壮性
         - 根据参数决定是否停止托盘
+        - sync_ui 清理由生命周期管理器统一处理
         """
         import asyncio
-
-        # ========== 公共清理：销毁同步UI ==========
-        if self.uni_ui and hasattr(self.uni_ui, 'sync_ui'):
-            try:
-                self.uni_ui.sync_ui.destroy()
-            except Exception as ex:
-                print(f"销毁同步UI时出错: {ex}")
 
         # ========== 公共清理：停止所有运行的进程 ==========
         # stop_processes() 现在返回协程对象，需要通过 run_task 调用
@@ -215,12 +209,14 @@ class UiEvent:
                 # 在异步上下文中停止进程，避免阻塞UI
                 async def stop_and_cleanup():
                     try:
-                        await self.terminal.stop_processes()
+                        await self.terminal.stop_processes(force=False)
                     except Exception as ex:
-                        print(f"停止进程时出错: {ex}")
+                        from utils.logger import app_logger
+                        app_logger.exception("Error stopping processes")
                 self.page.run_task(stop_and_cleanup)
             except Exception as ex:
-                print(f"调用 stop_processes 失败: {ex}")
+                from utils.logger import app_logger
+                app_logger.exception("Failed to call stop_processes")
 
         # 检查是否启用了托盘功能
         use_tray = self.config_manager.get("tray", True) if self.config_manager else True
@@ -230,9 +226,11 @@ class UiEvent:
             if stop_tray and self.tray is not None:
                 try:
                     self.tray.tray.stop()
-                    print("[INFO] 托盘已停止")
+                    from utils.logger import app_logger
+                    app_logger.info("Tray stopped")
                 except Exception as ex:
-                    print(f"停止托盘时出错: {ex}")
+                    from utils.logger import app_logger
+                    app_logger.exception("Error stopping tray")
 
             # 隐藏窗口并设置允许关闭
             self.page.window.visible = False
@@ -313,9 +311,11 @@ class UiEvent:
         if self.tray is not None:
             try:
                 self.tray.tray.stop()
-                print("[INFO] 托盘已停止")
+                from utils.logger import app_logger
+                app_logger.info("Tray stopped")
             except Exception as ex:
-                print(f"停止托盘时出错: {ex}")
+                from utils.logger import app_logger
+                app_logger.exception("Error stopping tray")
 
         # 然后执行退出逻辑（stop_tray=False 避免重复停止托盘）
         self._exit_app_impl(stop_tray=False)
@@ -323,31 +323,42 @@ class UiEvent:
     def cleanup(self):
         """清理所有资源引用，打破循环引用"""
         try:
+            from utils.logger import app_logger
+            app_logger.info("UIEvent cleaning up resources...")
+
             # 1. 断开与 UniUI 的引用（打破循环引用）
-            self.uni_ui = None
+            if self.uni_ui is not None:
+                self.uni_ui = None
 
             # 2. 清理 page 引用
-            self.page = None
+            if hasattr(self, 'page') and self.page is not None:
+                self.page = None
 
             # 3. 清理 terminal 引用
-            self.terminal = None
+            if hasattr(self, 'terminal') and self.terminal is not None:
+                self.terminal = None
 
             # 4. 清理其他引用
-            self.env = None
-            self.stCfg = None
-            self.config_manager = None
-            self.tray = None
+            if hasattr(self, 'env') and self.env is not None:
+                self.env = None
+            if hasattr(self, 'stCfg') and self.stCfg is not None:
+                self.stCfg = None
+            if hasattr(self, 'config_manager') and self.config_manager is not None:
+                self.config_manager = None
+            if hasattr(self, 'tray') and self.tray is not None:
+                self.tray = None
 
-            print("[UiEvent] 资源已清理")
+            app_logger.info("UIEvent resources cleaned up")
         except Exception as e:
-            print(f"[UiEvent] 清理时出错: {e}")
+            app_logger.exception("UIEvent cleanup error")
 
     def __del__(self):
         """析构函数 - 确保资源释放"""
         try:
             self.cleanup()
-        except Exception:
-            pass
+        except Exception as e:
+            # 使用 print() 作为后备，避免在 __del__ 中 import 导致 ModuleNotFoundError
+            print(f"[DEBUG] Error in __del__: {e}")
 
     def switch_theme(self, e):
         try:
@@ -695,7 +706,7 @@ class UiEvent:
             # ========== 异步停止进程 ==========
             async def stop_and_restore():
                 try:
-                    await self.terminal.stop_processes()
+                    await self.terminal.stop_processes(force=False)
                     self.terminal.add_log("✓ 所有进程已停止")
                 except Exception as ex:
                     self.terminal.add_log(f"停止进程时出错: {str(ex)}")
@@ -722,7 +733,7 @@ class UiEvent:
         # ========== 异步停止服务 ==========
         async def stop_and_start():
             try:
-                await self.terminal.stop_processes()
+                await self.terminal.stop_processes(force=False)
                 self.terminal.add_log("旧进程已停止")
 
                 # 检查路径是否包含中文或空格
@@ -1864,7 +1875,7 @@ class UiEvent:
             version_info (dict): 版本信息 {version, commit, date, source}
             commit_hash (str): 目标commit hash
         """
-        from git_utils import checkout_st_version, check_git_status
+        from core.git_utils import checkout_st_version, check_git_status
         import os
 
         try:
@@ -1896,7 +1907,7 @@ class UiEvent:
                 print(f"✓ 成功切换到版本 v{version_info['version']}")
 
                 # 验证当前分支状态
-                from git_utils import get_current_commit
+                from core.git_utils import get_current_commit
                 verify_success, current_commit, verify_msg = get_current_commit()
                 if verify_success:
                     self.terminal.add_log(f"当前commit: {current_commit[:7]}")

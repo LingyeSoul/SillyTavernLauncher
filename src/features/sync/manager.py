@@ -29,7 +29,7 @@ except ImportError as e:
             raise ImportError("requests未安装，无法使用同步客户端功能")
 
 try:
-    from network import get_network_manager
+    from core.network import get_network_manager
 except ImportError as e:
     print(f"警告: 无法导入网络模块: {e}")
     def get_network_manager():

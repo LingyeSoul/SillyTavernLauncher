@@ -1,7 +1,7 @@
 import json
 import urllib.request
 import urllib.error
-from config import ConfigManager
+from config.config_manager import ConfigManager
 import flet as ft
 from flet import UrlLauncher
 import ssl

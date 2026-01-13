@@ -2,8 +2,8 @@
 SillyTavern版本切换UI组件
 """
 import flet as ft
-from st_version_manager import STVersionManager
-from git_utils import get_current_commit
+from features.st.version_manager import STVersionManager
+from core.git_utils import get_current_commit
 
 
 def parse_version(version_str):

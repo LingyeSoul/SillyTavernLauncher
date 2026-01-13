@@ -1,6 +1,6 @@
 import os
 import subprocess
-from env import Env
+from features.system.env import Env
 
 def checkout_st_version(commit_hash, st_dir=None):
     """
