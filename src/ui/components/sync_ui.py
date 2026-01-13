@@ -77,7 +77,7 @@ class DataSyncUI:
 
         # UI已创建，直接添加到视图
         try:
-            from terminal import parse_ansi_text
+            from core.terminal import parse_ansi_text
             spans = parse_ansi_text(message)
             log_text = ft.Text(spans=spans, size=14, selectable=True)
 
@@ -912,7 +912,7 @@ class DataSyncUI:
                     # 在开始同步前先检查服务器是否可用
                     self._add_log(f"检查服务器可用性: {server_url}")
                     try:
-                        from sync_client import SyncClient
+                        from features.sync.client import SyncClient
                         client = SyncClient(server_url, self.data_dir, timeout=3)
                         if not client.check_server_health():
                             self._add_log("服务器不可用或无响应")
