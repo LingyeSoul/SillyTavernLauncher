@@ -4,7 +4,7 @@ import flet as ft
 from features.system.env import Env
 from config.config_manager import ConfigManager
 from features.st.config import stcfg
-from features.system.env_checker import SysEnv
+from features.system.env_sys import SysEnv
 import subprocess
 import json
 import asyncio

@@ -5,7 +5,7 @@ import os
 import threading
 import weakref
 from features.system.env import Env
-from features.system.env_checker import SysEnv
+from features.system.env_sys import SysEnv
 from features.st.config import stcfg
 from core.event import UiEvent
 from config.config_manager import ConfigManager
