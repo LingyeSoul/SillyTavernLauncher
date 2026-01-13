@@ -206,12 +206,25 @@ async def main(page: ft.Page):
     # 保存原始的窗口事件处理
     original_window_event = page.window.on_event
 
+    async def close_window_async():
+        """异步关闭窗口"""
+        try:
+            await page.window.close()
+        except Exception as ex:
+            from utils.logger import app_logger
+            app_logger.exception("Error closing window")
+
     def combined_window_event(e):
         """组合的窗口事件处理"""
         if e.data == "close":
+            # 执行资源清理
             on_window_close(e)
-        # 调用原始的事件处理（由 UniUI 设置）
-        if original_window_event:
+
+            # 直接关闭窗口，不调用原始事件处理（避免双重清理）
+            page.run_task(close_window_async)
+
+        # 对于其他事件，仍然调用原始的事件处理
+        elif original_window_event:
             original_window_event(e)
 
     # 设置组合的窗口事件处理（在 setMainView 之后设置，会覆盖原来的）
