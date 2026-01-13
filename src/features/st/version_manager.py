@@ -7,7 +7,7 @@ import os
 import aiohttp
 import asyncio
 from datetime import datetime
-from config import ConfigManager
+from config.config_manager import ConfigManager
 
 
 class STVersionManager:

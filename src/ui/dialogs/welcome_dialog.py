@@ -7,7 +7,7 @@
 import random
 import flet as ft
 from flet import UrlLauncher
-from config import ConfigManager
+from config.config_manager import ConfigManager
 
 
 class WelcomeDialog:

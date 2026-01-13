@@ -3,7 +3,7 @@ from PIL import Image
 from io import BytesIO
 import base64
 import re
-from event import UiEvent
+from core.event import UiEvent
 class Tray:
     def _base64_to_image(self,base64_str: str) -> Image.Image:
         base64_data = re.sub('^data:image/.+;base64,', '', base64_str)

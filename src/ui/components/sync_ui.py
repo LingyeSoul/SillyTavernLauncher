@@ -12,11 +12,11 @@ import re
 import queue
 from typing import Optional
 import flet as ft
-import network
-from network import get_network_manager
+from core import network
+from core.network import get_network_manager
 
 try:
-    from data_sync_manager import DataSyncManager
+    from features.sync.manager import DataSyncManager
 except ImportError:
     DataSyncManager = None
 

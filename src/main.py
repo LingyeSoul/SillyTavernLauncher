@@ -1,14 +1,14 @@
 import flet as ft
 from flet import UrlLauncher
 from time import sleep
-from ui import UniUI
-from config import ConfigManager
-from update import VersionChecker
+from ui.main_ui import UniUI
+from config.config_manager import ConfigManager
+from features.update.checker import VersionChecker
 import asyncio
 import urllib.request
 from version import VERSION
-from sysenv import SysEnv
-from welcome_dialog import show_welcome_dialog
+from features.system.env_checker import SysEnv
+from ui.dialogs.welcome_dialog import show_welcome_dialog
 
 ft.context.disable_auto_update() #修复页面卡卡的感觉
 
@@ -113,39 +113,95 @@ async def main(page: ft.Page):
     def on_window_close(_):
         """窗口关闭时的清理处理"""
         try:
-            # 额外清理：停止托盘
-            if hasattr(uniUI, 'ui_event') and uniUI.ui_event:
-                if hasattr(uniUI.ui_event, 'tray') and uniUI.ui_event.tray:
-                    try:
-                        uniUI.ui_event.tray.tray.stop()
-                        uniUI.ui_event.tray = None  # 将 tray 设置为 None
-                        print("[INFO] 托盘已停止")
-                    except Exception as ex:
-                        print(f"停止托盘时出错: {ex}")
+            from core.lifecycle import lifecycle_manager, ResourceType
+            from utils.logger import app_logger
 
-            # 额外清理：确保终端进程已停止（使用同步方法强制终止）
-            if hasattr(uniUI, 'terminal') and uniUI.terminal:
+            app_logger.info("Window closing, starting cleanup...")
+
+            # Define cleanup functions
+            def cleanup_tray(tray_obj):
+                if hasattr(tray_obj, 'tray'):
+                    try:
+                        tray_obj.tray.stop()
+                        app_logger.info("Tray stopped")
+                    except Exception as e:
+                        app_logger.exception("Error stopping tray")
+
+            def cleanup_terminal(terminal_obj):
                 try:
-                    uniUI.terminal.stop_processes_sync()
-                except Exception:
-                    pass
+                    # Use unified stop_processes interface, force=True for immediate termination
+                    terminal_obj.stop_processes(force=True)
+                    app_logger.info("Terminal processes stopped")
+                except Exception as e:
+                    app_logger.exception("Error stopping terminal processes")
 
-            # 额外清理：确保数据同步服务器已停止
+            def cleanup_sync_server(data_sync_manager):
+                try:
+                    data_sync_manager.stop_sync_server()
+                    app_logger.info("Sync server stopped")
+                except Exception as e:
+                    app_logger.exception("Error stopping sync server")
+
+            def cleanup_terminal_resources(terminal_obj):
+                try:
+                    if hasattr(terminal_obj, 'cleanup_all_resources'):
+                        terminal_obj.cleanup_all_resources(aggressive=True)
+                except Exception as e:
+                    app_logger.exception("Error cleaning up terminal resources")
+
+            def cleanup_sync_ui(sync_ui_obj):
+                try:
+                    if hasattr(sync_ui_obj, 'destroy'):
+                        sync_ui_obj.destroy()
+                        app_logger.info("Sync UI cleaned up")
+                except Exception as e:
+                    app_logger.exception("Error cleaning up sync UI")
+
+            def cleanup_uni_ui(uni_ui_obj):
+                try:
+                    if hasattr(uni_ui_obj, 'cleanup'):
+                        uni_ui_obj.cleanup()
+                        app_logger.info("Main UI object cleaned up")
+                except Exception as e:
+                    app_logger.exception("Error cleaning up main UI")
+
+            # Register all resources
             if hasattr(uniUI, 'ui_event') and uniUI.ui_event:
+                lifecycle_manager.register(ResourceType.UI_EVENT, uniUI.ui_event)
+
+                if hasattr(uniUI.ui_event, 'tray') and uniUI.ui_event.tray:
+                    lifecycle_manager.register(ResourceType.TRAY, uniUI.ui_event.tray)
+
                 if hasattr(uniUI.ui_event, 'data_sync_manager') and uniUI.ui_event.data_sync_manager:
-                    try:
-                        uniUI.ui_event.data_sync_manager.stop_sync_server()
-                    except Exception:
-                        pass
+                    lifecycle_manager.register(ResourceType.SYNC_SERVER, uniUI.ui_event.data_sync_manager)
 
-            # 清理所有资源
-            if hasattr(uniUI, 'cleanup'):
-                uniUI.cleanup()
+            if hasattr(uniUI, 'terminal') and uniUI.terminal:
+                lifecycle_manager.register(ResourceType.TERMINAL_PROCESSES, uniUI.terminal)
+                lifecycle_manager.register(ResourceType.TERMINAL, uniUI.terminal)
 
-            print("[INFO] 资源清理完成，程序即将退出")
+            lifecycle_manager.register(ResourceType.UNI_UI, uniUI)
+
+            # Register SYNC_UI if it exists
+            if hasattr(uniUI, 'sync_ui') and uniUI.sync_ui:
+                lifecycle_manager.register(ResourceType.SYNC_UI, uniUI.sync_ui)
+
+            # Clean up all resources in order
+            cleanup_map = {
+                ResourceType.SYNC_UI: cleanup_sync_ui,
+                ResourceType.TRAY: cleanup_tray,
+                ResourceType.TERMINAL_PROCESSES: cleanup_terminal,
+                ResourceType.SYNC_SERVER: cleanup_sync_server,
+                ResourceType.TERMINAL: cleanup_terminal_resources,
+                ResourceType.UNI_UI: cleanup_uni_ui,
+            }
+
+            lifecycle_manager.cleanup_all(cleanup_map)
+
+            app_logger.info("Resource cleanup completed, program exiting")
 
         except Exception as ex:
-            print(f"清理资源时出错: {ex}")
+            from utils.logger import app_logger
+            app_logger.exception("Error during resource cleanup")
 
     # 保存原始的窗口事件处理
     original_window_event = page.window.on_event
@@ -207,7 +263,7 @@ async def main(page: ft.Page):
                 
                 if proxy_url:
                     # 启用代理并设置代理URL
-                    from stconfig import stcfg
+                    from features.st.config import stcfg
                     st_cfg = stcfg()
                     st_cfg.proxy_enabled = True
                     st_cfg.proxy_url = proxy_url

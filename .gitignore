@@ -19,3 +19,5 @@ backup
 /venv
 /test
 /.claude
+app.log
+/docs

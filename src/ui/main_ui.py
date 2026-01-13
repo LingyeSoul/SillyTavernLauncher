@@ -4,12 +4,12 @@ import platform
 import os
 import threading
 import weakref
-from env import Env
-from sysenv import SysEnv
-from stconfig import stcfg
-from event import UiEvent
-from config import ConfigManager
-from terminal import AsyncTerminal
+from features.system.env import Env
+from features.system.env_checker import SysEnv
+from features.st.config import stcfg
+from core.event import UiEvent
+from config.config_manager import ConfigManager
+from core.terminal import AsyncTerminal
 
 
 class UniUI():
@@ -28,6 +28,13 @@ class UniUI():
         self.terminal = AsyncTerminal(page, enable_logging=enable_logging)
         self.config = self.config_manager.config
         self.ui_event = UiEvent(self.page, self.terminal, self)
+
+        # 注册资源到生命周期管理器
+        from core.lifecycle import lifecycle_manager, ResourceType
+        lifecycle_manager.register(ResourceType.TERMINAL, self.terminal)
+        lifecycle_manager.register(ResourceType.UI_EVENT, self.ui_event)
+        lifecycle_manager.register(ResourceType.UNI_UI, self)
+
         self.BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
         self.port_field = ft.TextField(
             label="监听端口",
@@ -604,12 +611,16 @@ class UniUI():
         try:
             # 延迟创建同步管理器 - 带错误处理
             try:
-                from sync_ui import DataSyncUI
+                from ui.components.sync_ui import DataSyncUI
                 import os
                 data_dir = os.path.join(os.getcwd(), "SillyTavern", "data", "default-user")
                 # 不传入 terminal，使用独立的简单日志组件
                 self.sync_ui = DataSyncUI(data_dir, self.config_manager)
                 self.sync_view = self.sync_ui.create_ui(page)
+
+                # 注册 SYNC_UI 到生命周期管理器
+                from core.lifecycle import lifecycle_manager, ResourceType
+                lifecycle_manager.register(ResourceType.SYNC_UI, self.sync_ui)
             except Exception as e:
                 print(f"同步功能初始化失败，将显示简化界面: {e}")
                 # 创建简化的同步界面
@@ -628,7 +639,7 @@ class UniUI():
                     print(f"版本切换视图初始化跳过: 页面已销毁")
                     self.version_view = self._create_simple_version_view()
                 else:
-                    from st_version_ui import create_version_switch_view
+                    from features.st.ui.version_ui import create_version_switch_view
                     self.version_view = create_version_switch_view(page, self.terminal, self.ui_event)
             except Exception as e:
                 error_msg = str(e)
