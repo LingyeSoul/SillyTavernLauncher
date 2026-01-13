@@ -7,7 +7,7 @@ from features.update.checker import VersionChecker
 import asyncio
 import urllib.request
 from version import VERSION
-from features.system.env_checker import SysEnv
+from features.system.env_sys import SysEnv
 from ui.dialogs.welcome_dialog import show_welcome_dialog
 
 ft.context.disable_auto_update() #修复页面卡卡的感觉
