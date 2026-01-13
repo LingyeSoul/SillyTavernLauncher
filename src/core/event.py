@@ -1570,7 +1570,7 @@ class UiEvent:
         if e.control.value and self.tray is None:
             # 启用托盘功能且托盘未创建，则创建托盘
             try:
-                from tray import Tray
+                from features.tray.tray import Tray
                 self.tray = Tray(self.page, self)
                 self.page.show_dialog(ft.SnackBar(ft.Text("托盘功能已开启")))
             except Exception as ex:

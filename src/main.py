@@ -283,7 +283,7 @@ async def main(page: ft.Page):
     # 初始化时根据配置决定是否创建托盘
     if config_manager.get("tray", True):
         async def create_tray_delayed():
-            from tray import Tray
+            from features.tray.tray import Tray
             uniUI.ui_event.tray = Tray(page,uniUI.ui_event)
             # 检查是否应该自动启动酒馆
             if config_manager.get("autostart", False):

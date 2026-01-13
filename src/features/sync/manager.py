@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
 try:
-    from sync_server import SyncServer
-    from sync_client import SyncClient
+    from features.sync.server import SyncServer
+    from features.sync.client import SyncClient
 except ImportError as e:
     # Create dummy classes to handle import errors gracefully
     print(f"警告: 无法导入同步模块，某些功能将不可用: {e}")
