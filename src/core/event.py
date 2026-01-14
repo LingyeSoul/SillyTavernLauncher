@@ -163,87 +163,74 @@ class UiEvent:
         else:
             return True
         
-    def _exit_app_impl(self, stop_tray=False):
+    def hide_window(self):
+        """仅隐藏窗口（用于启用托盘时的窗口关闭）"""
+        self.page.window.visible = False
+        try:
+            self.page.update()
+        except (AssertionError, AttributeError, RuntimeError):
+            # RuntimeError: session 可能已被销毁
+            pass
+    def open_window(self):
+        """仅打开窗口（用于启用托盘时的窗口打开）"""
+        self.page.window.visible = True
+        self.page.update()
+        try:
+            self.page.update()
+        except (AssertionError, AttributeError, RuntimeError):
+            # RuntimeError: session 可能已被销毁
+            pass
+
+    def _exit_app_full(self, stop_processes=True):
         """
-        退出应用程序的内部实现
+        完全退出应用程序的内部实现
 
         Args:
-            stop_tray: 是否停止托盘（True: 正常退出时停止托盘，False: 托盘已在外部停止）
+            stop_processes: 是否停止进程（默认True）
+                           托盘退出时为False，因为进程已在Tray.exit_app中停止
 
-        改进说明：
-        - 提取公共逻辑，减少代码重复
-        - 正确处理 terminal.stop_processes() 的异步特性
-        - 添加 None 检查提高健壮性
-        - 根据参数决定是否停止托盘
-        - sync_ui 清理由生命周期管理器统一处理
+        执行以下操作：
+        1. 停止所有运行的进程（可选）
+        2. 隐藏窗口并允许关闭
+        3. 关闭窗口
+        4. 清理资源
         """
         import asyncio
 
-        # ========== 公共清理：停止所有运行的进程 ==========
-        # stop_processes() 现在返回协程对象，需要通过 run_task 调用
-        if self.terminal and self.terminal.is_running:
+        # ========== 1. 停止所有运行的进程（可选） ==========
+        if stop_processes and self.terminal and self.terminal.is_running:
             try:
-                # 在异步上下文中停止进程，避免阻塞UI
                 async def stop_and_cleanup():
                     try:
-                        await self.terminal.stop_processes(force=False)
+                        await self.terminal.stop_processes()
                     except Exception as ex:
                         app_logger.exception("Error stopping processes")
                 self.page.run_task(stop_and_cleanup)
             except Exception as ex:
                 app_logger.exception("Failed to call stop_processes")
 
-        # 检查是否启用了托盘功能
-        use_tray = self.config_manager.get("tray", True) if self.config_manager else True
+        # ========== 2. 隐藏窗口并设置允许关闭 ==========
+        self.page.window.visible = False
+        self.page.window.prevent_close = False
 
-        if use_tray:
-            # 启用托盘时：停止托盘（如果需要）并隐藏窗口
-            if stop_tray and self.tray is not None:
-                try:
-                    self.tray.tray.stop()
-                    app_logger.info("Tray stopped")
-                except Exception as ex:
-                    app_logger.exception("Error stopping tray")
+        # 同步更新UI，确保窗口隐藏立即生效
+        try:
+            if self.page:
+                self.page.update()
+        except (AssertionError, AttributeError, RuntimeError):
+            # RuntimeError: session 可能已被销毁（例如从托盘退出时）
+            pass
 
-            # 隐藏窗口并设置允许关闭
-            self.page.window.visible = False
-            self.page.window.prevent_close = False
+        # ========== 3. 关闭窗口 ==========
+        try:
+            async def async_close():
+                if self.page:  # 检查 page 是否为 None
+                    await self.page.window.close()
+            self.page.run_task(async_close)
+        except Exception:
+            pass
 
-            # 同步更新UI，确保窗口隐藏立即生效
-            try:
-                if self.page:
-                    self.page.update()
-            except (AssertionError, AttributeError):
-                pass
-
-            # 关闭窗口（真正退出程序）
-            try:
-                async def async_close():
-                    if self.page:  # 检查 page 是否为 None
-                        await self.page.window.close()
-                self.page.run_task(async_close)
-            except Exception:
-                pass
-        else:
-            # 未启用托盘时，正常退出程序
-            self.page.window.visible = False
-            self.page.window.prevent_close = False
-
-            # 同步更新UI，确保窗口隐藏立即生效
-            try:
-                if self.page:
-                    self.page.update()
-            except (AssertionError, AttributeError):
-                pass
-            try:
-                async def async_close():
-                    if self.page:  # 检查 page 是否为 None
-                        await self.page.window.close()
-                self.page.run_task(async_close)
-            except Exception:
-                pass
-
-        # ========== 清理自身资源（延迟到异步操作之后） ==========
+        # ========== 4. 清理自身资源（延迟到异步操作之后） ==========
         async def delayed_cleanup():
             await asyncio.sleep(0.5)  # 等待异步操作完成
             self.cleanup()
@@ -255,35 +242,48 @@ class UiEvent:
 
     def exit_app(self, e):
         """
-        退出应用程序（正常退出）
+        退出应用程序（窗口关闭时调用）
 
-        改进说明：
-        - 提取公共逻辑，减少代码重复
-        - 正确处理 terminal.stop_processes() 的异步特性
-        - 添加 None 检查提高健壮性
-        - 如果启用托盘，会停止托盘
+        根据是否启用托盘决定行为：
+        - 如果启用托盘：仅隐藏窗口，不停止进程
+        - 如果未启用托盘：完全退出程序
+
+        设计说明：
+        - 窗口关闭按钮（X）和 Alt+F4 会触发此方法
+        - 只有未启用托盘时才会真正退出程序
         """
-        self._exit_app_impl(stop_tray=True)
+        use_tray = self.config_manager.get("tray", True) if self.config_manager else True
+        tray_exists = self.tray is not None
+
+        if use_tray and tray_exists:
+            # 启用托盘时：仅隐藏窗口
+            app_logger.info("启用托盘模式，隐藏窗口而不退出")
+            self.hide_window()
+        else:
+            # 未启用托盘时：完全退出程序
+            app_logger.info("未启用托盘模式，执行完全退出")
+            self._exit_app_full()
 
     def exit_app_with_tray(self, e):
         """
         通过托盘退出应用程序
 
-        改进说明：
-        - 添加 None 检查提高健壮性
-        - 正确处理 terminal.stop_processes() 的异步特性
-        - 先停止托盘，再执行退出逻辑（避免重复停止）
+        设计说明：
+        - 此方法仅从托盘菜单的"退出启动器"选项调用
+        - 负责停止进程（使用同步方法）和UI清理
+        - 托盘本身已在 Tray.exit_app() 中停止
         """
-        # 先停止托盘（通过托盘退出时需要停止托盘本身）
-        if self.tray is not None:
-            try:
-                self.tray.tray.stop()
-                app_logger.info("Tray stopped")
-            except Exception as ex:
-                app_logger.exception("Error stopping tray")
+        app_logger.info("通过托盘退出应用程序")
 
-        # 然后执行退出逻辑（stop_tray=False 避免重复停止托盘）
-        self._exit_app_impl(stop_tray=False)
+        # ========== 1. 停止所有运行的进程（同步方法）==========
+        if self.terminal and self.terminal.is_running:
+            try:
+                self.terminal.stop_processes_sync()
+            except Exception as ex:
+                app_logger.exception("Error stopping processes")
+
+        # ========== 2. 执行UI清理 ==========
+        self._exit_app_full(stop_processes=False)
 
     def cleanup(self):
         """清理所有资源引用，打破循环引用"""
@@ -664,7 +664,7 @@ class UiEvent:
             # ========== 异步停止进程 ==========
             async def stop_and_restore():
                 try:
-                    await self.terminal.stop_processes(force=False)
+                    await self.terminal.stop_processes()
                     self.terminal.add_log("✓ 所有进程已停止")
                 except Exception as ex:
                     self.terminal.add_log(f"停止进程时出错: {str(ex)}")
@@ -689,7 +689,7 @@ class UiEvent:
         # ========== 异步停止服务 ==========
         async def stop_and_start():
             try:
-                await self.terminal.stop_processes(force=False)
+                await self.terminal.stop_processes()
                 self.terminal.add_log("旧进程已停止")
 
                 # 检查路径是否包含中文或空格
