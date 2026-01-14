@@ -1,3 +1,4 @@
+from utils.logger import app_logger
 #!/usr/bin/env python3
 """
 SillyTavern Data Sync Client
@@ -115,7 +116,7 @@ class SyncClient:
             print(f"服务器数据路径: {data.get('data_path', 'N/A')}")
             return True
         except Exception as e:
-            print(f"服务器健康检查失败: {e}")
+            app_logger.error(f"服务器健康检查失败: {e}")
             return False
 
     def get_server_info(self):
@@ -124,7 +125,7 @@ class SyncClient:
             response = self._request('info')
             return response.json()
         except Exception as e:
-            print(f"获取服务器信息失败: {e}")
+            app_logger.error(f"获取服务器信息失败: {e}")
             return None
 
     def get_remote_manifest(self):
@@ -137,7 +138,7 @@ class SyncClient:
             else:
                 raise Exception(data.get('error', '未知错误'))
         except Exception as e:
-            print(f"获取远程文件清单失败: {e}")
+            app_logger.error(f"获取远程文件清单失败: {e}")
             return None
 
     def get_local_manifest(self):
@@ -185,7 +186,7 @@ class SyncClient:
 
         if backup:
             if not self._backup_existing_data():
-                print("备份失败，取消同步")
+                app_logger.error("备份失败，取消同步")
                 return False
 
         temp_zip_path = None
@@ -209,7 +210,7 @@ class SyncClient:
             return True
 
         except Exception as e:
-            print(f"ZIP 同步失败: {e}")
+            app_logger.error(f"ZIP 同步失败: {e}")
             if backup:
                 print("尝试恢复备份...")
                 self._restore_backup()
@@ -220,7 +221,7 @@ class SyncClient:
                 try:
                     os.unlink(temp_zip_path)
                 except Exception as cleanup_error:
-                    print(f"清理临时文件失败: {cleanup_error}")
+                    app_logger.error(f"清理临时文件失败: {cleanup_error}")
 
     def sync_incremental(self):
         """
@@ -484,11 +485,11 @@ def main():
             print("同步完成!")
             return 0
         else:
-            print("同步失败!")
+            app_logger.error("同步失败!")
             return 1
 
     except Exception as e:
-        print(f"同步过程中发生错误: {e}")
+        app_logger.error(f"同步过程中发生错误: {e}")
         return 1
 
 

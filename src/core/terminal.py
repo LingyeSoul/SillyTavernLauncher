@@ -5,6 +5,7 @@ import threading
 import queue
 import time
 import os
+from utils.logger import app_logger
 
 
 # ANSI颜色代码正则表达式
@@ -193,7 +194,7 @@ class AsyncTerminal:
                         self._process_batch()
                     time.sleep(0.02)
                 except Exception as e:
-                    print(f"日志处理循环错误: {str(e)}")
+                    app_logger.exception("日志处理循环错误")
 
         # 在单独的线程中运行日志处理循环（保持为 daemon，避免阻塞程序退出）
         self._log_thread = threading.Thread(target=log_processing_worker, daemon=True)
@@ -208,7 +209,7 @@ class AsyncTerminal:
             # 预先打开文件句柄（添加错误处理）
             file_opened = self._open_log_file()
             if not file_opened:
-                print("[警告] 无法打开日志文件，日志文件写入将继续尝试")
+                app_logger.warning("无法打开日志文件，日志文件写入将继续尝试")
 
             while not self._log_file_stop_event.is_set():
                 try:
@@ -235,7 +236,7 @@ class AsyncTerminal:
                             self._write_log_entries_to_file(entries)
 
                 except Exception as e:
-                    print(f"日志文件写入线程错误: {str(e)}")
+                    app_logger.exception("日志文件写入线程错误")
 
             # 关闭文件句柄
             self._close_log_file()
@@ -266,7 +267,7 @@ class AsyncTerminal:
                     self._log_file_handle = open(log_file_path, "a", encoding="utf-8", buffering=8192)
             return True
         except Exception as e:
-            print(f"打开日志文件失败: {str(e)}")
+            app_logger.error(f"打开日志文件失败: {str(e)}")
             with self._log_file_lock:
                 self._log_file_handle = None
             return False
@@ -441,9 +442,7 @@ class AsyncTerminal:
                     print(f"[DEBUG] UI更新失败（预期错误）: {str(e)}")
             except Exception as e:
                 # 捕获所有其他异常（这些可能导致灰屏）
-                import traceback
-                print(f"[ERROR] UI更新时发生未预期错误（可能导致灰屏）: {str(e)}")
-                print(f"错误详情: {traceback.format_exc()}")
+                app_logger.exception("UI更新时发生未预期错误（可能导致灰屏）")
                 # 尝试恢复：确保至少有一个控件
                 try:
                     if hasattr(self, 'logs') and self.logs:
@@ -461,9 +460,7 @@ class AsyncTerminal:
                     pass
 
         except Exception as e:
-            import traceback
-            print(f"批量处理失败: {str(e)}")
-            print(f"错误详情: {traceback.format_exc()}")
+            app_logger.exception("批量处理失败")
         finally:
             self._processing = False
             if not self._log_queue.empty():
@@ -512,10 +509,7 @@ class AsyncTerminal:
                     self._process_batch()
                 except Exception as e:
                     # 捕获并记录所有异常，避免导致灰屏
-                    import traceback
-                    error_msg = f"[ERROR] 批量处理失败: {str(e)}"
-                    print(error_msg)
-                    print(f"错误详情: {traceback.format_exc()}")
+                    app_logger.exception("批量处理失败（同步阶段）")
 
             # 尝试异步调度，失败则使用同步处理
             try:
@@ -549,38 +543,32 @@ class AsyncTerminal:
                                 pass
 
                         if discard_count > 0:
-                            print(f"[INFO] 事件循环已关闭，丢弃了 {discard_count} 条日志")
+                            app_logger.info(f"事件循环已关闭，丢弃了 {discard_count} 条日志")
                     return
                 # 其他 RuntimeError 仍然记录但继续尝试同步处理
-                print(f"[WARN] 调度批量处理遇到 RuntimeError: {error_msg}，尝试同步处理")
+                app_logger.warning(f"调度批量处理遇到 RuntimeError: {error_msg}，尝试同步处理")
                 try:
                     self._process_batch()
                 except Exception as sync_error:
-                    print(f"[ERROR] 同步处理也失败: {sync_error}")
+                    app_logger.error(f"同步处理也失败: {sync_error}")
                 return
             except Exception as e:
                 # 记录其他异常并尝试同步处理
-                import traceback
-                print(f"[ERROR] 调度批量处理时发生未预期错误: {str(e)}，尝试同步处理")
-                print(f"错误详情: {traceback.format_exc()}")
+                app_logger.exception("调度批量处理时发生未预期错误")
                 try:
                     self._process_batch()
                 except Exception as sync_error:
-                    print(f"[ERROR] 同步处理也失败: {sync_error}")
+                    app_logger.error(f"同步处理也失败: {sync_error}")
                 return
 
             return
         except (RuntimeError, AttributeError) as e:
             # 控件已从页面移除或 page 属性访问失败
-            import traceback
-            print(f"[ERROR] 访问页面属性失败: {str(e)}")
-            print(f"错误详情: {traceback.format_exc()}")
+            app_logger.exception("访问页面属性失败")
             return
         except Exception as e:
             # 捕获所有其他异常
-            import traceback
-            print(f"[ERROR] _schedule_batch_process 发生未预期错误: {str(e)}")
-            print(f"错误详情: {traceback.format_exc()}")
+            app_logger.exception("_schedule_batch_process 发生未预期错误")
 
         return
 
@@ -1537,7 +1525,7 @@ class AsyncTerminal:
             self.stop_processes()
             self.cleanup_all_resources(aggressive=True)
         except Exception as e:
-            print(f"清理资源时出错: {e}")
+            app_logger.exception("清理资源时出错")
         return False  # 不抑制异常
 
     def get_resource_stats(self):
@@ -1604,7 +1592,7 @@ class AsyncTerminal:
             if self._debug_mode:
                 print("[DEBUG] UI 控件已清理")
         except Exception as e:
-            print(f"清理 UI 控件时出错: {e}")
+            app_logger.exception("清理 UI 控件时出错")
 
     def clear_terminal(self):
         """
@@ -1747,6 +1735,7 @@ class AsyncTerminal:
                 if discard_count > 0 and self._debug_mode:
                     # 使用 print 避免递归调用 add_log
                     print(f"[WARNING] 队列积累过多，已丢弃 {discard_count} 条旧日志")
+                    app_logger.warning(f"队列积累过多，已丢弃 {discard_count} 条旧日志")
 
             # 添加到队列（带条件变量通知）
             try:
@@ -1798,13 +1787,9 @@ class AsyncTerminal:
                     pass
 
         except (TypeError, IndexError, AttributeError) as e:
-            import traceback
-            print(f"日志处理异常: {str(e)}")
-            print(f"错误详情: {traceback.format_exc()}")
+            app_logger.exception("日志处理异常")
         except Exception as e:
-            import traceback
-            print(f"未知错误: {str(e)}")
-            print(f"错误详情: {traceback.format_exc()}")
+            app_logger.exception("日志处理未知错误")
 
     def set_page_ready(self, ready=True):
         """设置页面就绪标志"""
@@ -1836,7 +1821,7 @@ class AsyncTerminal:
                     self._log_file_handle.writelines(log_lines)
                     self._log_file_handle.flush()
                 except OSError as e:
-                    print(f"写入日志文件时发生IO错误: {str(e)}")
+                    app_logger.error(f"写入日志文件时发生IO错误: {str(e)}")
                     try:
                         self._log_file_handle.close()
                         # 检查重新打开是否成功
@@ -1844,12 +1829,12 @@ class AsyncTerminal:
                             self._log_file_handle.writelines(log_lines)
                             self._log_file_handle.flush()
                         else:
-                            print("无法重新打开日志文件，跳过本次写入")
+                            app_logger.error("无法重新打开日志文件，跳过本次写入")
                     except Exception as retry_error:
-                        print(f"重试写入日志文件也失败: {str(retry_error)}")
+                        app_logger.error(f"重试写入日志文件也失败: {str(retry_error)}")
 
         except Exception as e:
-            print(f"写入日志文件失败: {str(e)}")
+            app_logger.exception("写入日志文件失败")
 
     def _flush_log_buffer(self):
         """刷新日志缓冲区"""

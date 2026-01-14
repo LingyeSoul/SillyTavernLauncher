@@ -1,3 +1,4 @@
+from utils.logger import app_logger
 #!/usr/bin/env python3
 """
 SillyTavern Data Sync UI
@@ -64,7 +65,7 @@ class DataSyncUI:
         3. auto_scroll=True 自动处理滚动
         """
         # 同时输出到控制台（便于调试）
-        print(f"[同步UI] {message}")
+        app_logger.warning(f"[同步UI] {message}")
 
         if self._sync_log_view is None:
             # UI还未创建，直接返回
@@ -72,7 +73,7 @@ class DataSyncUI:
 
         if self.page is None:
             # page对象不可用，无法更新UI
-            print(f"[同步UI] 警告：page对象不可用，无法更新UI")
+            app_logger.warning(f"[同步UI] 警告：page对象不可用，无法更新UI")
             return
 
         # UI已创建，直接添加到视图
@@ -107,15 +108,15 @@ class DataSyncUI:
                 try:
                     self._sync_log_view.update()
                 except Exception as sync_error:
-                    print(f"[同步UI] 同步更新失败: {sync_error}")
+                    app_logger.warning(f"[同步UI] 同步更新失败: {sync_error}")
             except Exception as update_error:
-                print(f"[同步UI] 调度更新失败: {update_error}")
+                app_logger.warning(f"[同步UI] 调度更新失败: {update_error}")
 
         except Exception as e:
             # 记录详细错误信息
             import traceback
-            print(f"[同步UI] 添加日志失败: {e}")
-            print(f"[同步UI] 错误堆栈:\n{traceback.format_exc()}")
+            app_logger.warning(f"[同步UI] 添加日志失败: {e}")
+            app_logger.warning(f"[同步UI] 错误堆栈:\n{traceback.format_exc()}")
 
     def _flush_log_buffer(self):
         """由于移除了缓存机制，此方法不再需要，保留为空实现以维持兼容性"""
@@ -155,7 +156,7 @@ class DataSyncUI:
             try:
                 self._create_server_controls()
             except Exception as e:
-                print(f"[同步UI] 创建服务器控件失败: {e}")
+                app_logger.warning(f"[同步UI] 创建服务器控件失败: {e}")
                 # 创建默认的服务器开关
                 self._controls['server_switch'] = ft.Switch(
                     label="启动同步服务",
@@ -178,22 +179,22 @@ class DataSyncUI:
             try:
                 self._create_client_controls()
             except Exception as e:
-                print(f"[同步UI] 创建客户端控件失败: {e}")
+                app_logger.warning(f"[同步UI] 创建客户端控件失败: {e}")
 
             try:
                 self._create_progress_controls()
             except Exception as e:
-                print(f"[同步UI] 创建进度控件失败: {e}")
+                app_logger.warning(f"[同步UI] 创建进度控件失败: {e}")
 
             try:
                 self._create_server_list()
             except Exception as e:
-                print(f"[同步UI] 创建服务器列表失败: {e}")
+                app_logger.warning(f"[同步UI] 创建服务器列表失败: {e}")
 
             try:
                 self._create_log_area()
             except Exception as e:
-                print(f"[同步UI] 创建日志区域失败: {e}")
+                app_logger.warning(f"[同步UI] 创建日志区域失败: {e}")
 
         except ImportError:
             # Fallback controls when dependencies are missing
@@ -202,7 +203,7 @@ class DataSyncUI:
             self._controls['server_url_text'] = ft.Text("服务器地址: 不可用", size=12, selectable=True)
         except Exception as e:
             # Fallback controls for other errors
-            print(f"[同步UI] 初始化失败: {e}")
+            app_logger.warning(f"[同步UI] 初始化失败: {e}")
             import traceback
             traceback.print_exc()
 
