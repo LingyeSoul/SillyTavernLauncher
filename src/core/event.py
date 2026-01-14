@@ -192,80 +192,74 @@ class UiEvent:
                 # RuntimeError: session 可能已被销毁
                 pass
 
+    def _hide_window_sync(self):
+        """
+        同步隐藏窗口（用于立即用户反馈）
+
+        此方法在退出流程中最先调用，确保窗口立即从屏幕上消失
+        """
+        if self.page is not None:
+            try:
+                self.page.window.visible = False
+                self.page.window.prevent_close = False
+                self.page.update()
+                app_logger.info("窗口已隐藏")
+            except (AssertionError, AttributeError, RuntimeError) as e:
+                app_logger.warning(f"隐藏窗口时出错: {e}")
+
+    async def _close_and_destroy_window_async(self):
+        """
+        异步关闭并销毁窗口
+
+        此方法在进程停止后调用，负责优雅地关闭窗口
+        """
+        try:
+            if self.page and self.page.window:
+                # 先尝试正常关闭窗口
+                try:
+                    await self.page.window.close()
+                    app_logger.info("窗口已关闭")
+                except (RuntimeError, AttributeError):
+                    # 关闭失败时，强制销毁窗口
+                    app_logger.warning("窗口关闭失败，尝试强制销毁")
+                    await self.page.window.destroy()
+                    app_logger.info("窗口已强制销毁")
+        except (RuntimeError, AttributeError) as e:
+            app_logger.warning(f"销毁窗口时出错: {e}")
+
     def _exit_app_full(self, stop_processes=True):
         """
         完全退出应用程序的内部实现
 
         Args:
             stop_processes: 是否停止进程（默认True）
-                           托盘退出时为False，因为进程已在Tray.exit_app中停止
 
         执行以下操作：
-        1. 停止所有运行的进程（可选）
-        2. 隐藏窗口并允许关闭
-        3. 关闭窗口
-        4. 清理资源
+        1. 立即隐藏窗口（同步，用户体验优先）
+        2. 停止所有运行的进程（可选）
+        3. 异步关闭并销毁窗口
         """
-        import asyncio
+        # ========== 1. 立即隐藏窗口（同步操作，保证用户体验） ==========
+        self._hide_window_sync()
 
-        # ========== 1. 停止所有运行的进程（可选） ==========
-        if stop_processes and self.terminal and self.terminal.is_running:
-            try:
-                async def stop_and_cleanup():
-                    try:
-                        await self.terminal.stop_processes()
-                    except Exception as ex:
-                        app_logger.exception("Error stopping processes")
-                self.page.run_task(stop_and_cleanup)
-            except Exception as ex:
-                app_logger.exception("Failed to call stop_processes")
-
-        # ========== 2. 隐藏窗口并设置允许关闭 ==========
-        # 检查 page 是否可用（从托盘退出时可能为 None）
+        # ========== 2 & 3. 停止所有运行的进程（可选）然后销毁窗口 ==========
         if self.page is not None:
             try:
-                self.page.window.visible = False
-                self.page.window.prevent_close = False
-
-                # 同步更新UI，确保窗口隐藏立即生效
-                try:
-                    self.page.update()
-                except (AssertionError, AttributeError, RuntimeError):
-                    # RuntimeError: session 可能已被销毁（例如从托盘退出时）
-                    pass
-            except (AttributeError, RuntimeError):
-                # page.window 可能已不可用
-                pass
-
-        # ========== 3. 关闭窗口（如果 page 可用） ==========
-        if self.page is not None:
-            try:
-                async def async_close():
-                    try:
-                        if self.page and self.page.window:
-                            await self.page.window.close()
-                    except (RuntimeError, AttributeError):
-                        # session 可能已被销毁
-                        pass
-                self.page.run_task(async_close)
+                async def stop_and_destroy():
+                    """先停止进程，再销毁窗口"""
+                    # 2. 停止所有运行的进程（可选）
+                    if stop_processes and self.terminal and self.terminal.is_running:
+                        try:
+                            await self.terminal.stop_processes()
+                            app_logger.info("进程已停止")
+                        except Exception as ex:
+                            app_logger.exception("停止进程时出错")
+                    # 3. 销毁窗口
+                    await self._close_and_destroy_window_async()
+                self.page.run_task(stop_and_destroy)
             except (AttributeError, RuntimeError):
                 # page 可能已不可用
                 pass
-
-        # ========== 4. 清理自身资源 ==========
-        if self.page is not None:
-            # 延迟清理，等待异步操作完成
-            async def delayed_cleanup():
-                await asyncio.sleep(0.5)  # 等待异步操作完成
-                self.cleanup()
-            try:
-                self.page.run_task(delayed_cleanup)
-            except (AttributeError, RuntimeError):
-                # 如果 page 不可用，直接清理
-                self.cleanup()
-        else:
-            # page 不可用，直接清理
-            self.cleanup()
 
     def exit_app(self, e):
         """
@@ -293,30 +287,39 @@ class UiEvent:
 
     def exit_app_with_tray(self, e):
         """
-        通过托盘退出应用程序。
+        通过托盘退出应用程序
 
-        此方法仅从托盘菜单的"退出启动器"选项调用，负责停止运行进程（使用同步方法）
-        和执行UI清理。托盘本身已在 Tray.exit_app() 中停止。
+        此方法仅从托盘菜单的"退出启动器"选项调用，负责停止运行进程
+        和关闭应用窗口。托盘本身已在 Tray.exit_app() 中停止。
 
         Args:
-            e: 事件对象，用于触发退出操作
+            e: 事件对象，用于触发退出操作（未使用）
 
         Note:
-            - 首先停止所有正在运行的进程（同步方式）
-            - 然后执行UI清理工作
+            - 立即隐藏窗口（同步）
+            - 停止所有正在运行的进程（同步方式）
+            - 异步销毁窗口
             - 托盘图标已在 Tray.exit_app() 中停止
         """
         app_logger.info("通过托盘退出应用程序")
 
-        # ========== 1. 停止所有运行的进程（同步方法）==========
+        # ========== 1. 立即隐藏窗口（同步，用户体验优先） ==========
+        self._hide_window_sync()
+
+        # ========== 2. 停止所有运行的进程（同步方法）==========
         if self.terminal and self.terminal.is_running:
             try:
                 self.terminal.stop_processes_sync()
-            except Exception as ex:
-                app_logger.exception("Error stopping processes")
+                app_logger.info("进程已停止")
+            except Exception as e:
+                app_logger.exception("停止进程时出错")
 
-        # ========== 2. 执行UI清理 ==========
-        self._exit_app_full(stop_processes=False)
+        # ========== 3. 异步销毁窗口 ==========
+        if self.page is not None:
+            try:
+                self.page.run_task(self._close_and_destroy_window_async)
+            except (AttributeError, RuntimeError):
+                pass
 
     def cleanup(self):
         """清理所有资源引用，打破循环引用"""
@@ -1778,7 +1781,14 @@ class UiEvent:
             self.start_sillytavern(None)
 
     def start_cmd(self, e):
-        """启动命令行窗口，设置预设的环境变量"""
+        """
+        启动命令行窗口，设置环境变量
+
+        安全说明：
+        - 不使用 shell=True 避免命令注入
+        - 直接使用 cmd.exe /k 启动交互式命令行
+        - 环境变量通过 env 参数传递，而非命令行注入
+        """
         import os
         import subprocess
         import platform
@@ -1789,17 +1799,10 @@ class UiEvent:
                 self.show_error_dialog("不支持", "启动命令行功能仅支持Windows系统")
                 return
 
-            # 预设环境变量
-            env_vars = {
-                "MY_VAR": "hello",
-                "ANOTHER_VAR": "world"
-            }
-
             # 构建新环境
             new_env = os.environ.copy()
-            new_env.update(env_vars)
 
-            # 如果不使用系统环境，添加 Node.js 和 Git 路径
+            # 如果不使用系统环境，添加 Node.js 和 Git 路径到 PATH
             if not self.config_manager.get("use_sys_env", False):
                 node_path = self.env.get_node_path()
                 git_path = self.env.get_git_path()
@@ -1808,16 +1811,10 @@ class UiEvent:
                     current_path = new_env.get('PATH', '')
                     new_env['PATH'] = ';'.join(paths_to_add) + (';' + current_path if current_path else '')
 
-            # 构造要执行的命令（一次性设置所有变量并启动交互式 cmd）
-                    cmd_script = (
-                        "chcp 65001 >nul && " +
-                        " && ".join([f"set {k}={v}" for k, v in env_vars.items()]) +
-                        " && echo 环境变量已加载，欢迎使用！ && cmd /k"
-                    )
-
-            # 关键：不使用 shell=True，而是直接调用 cmd.exe
+            # 直接启动 cmd.exe，不使用 shell 命令注入
+            # /k 参数表示保持窗口打开并执行后续命令
             subprocess.Popen(
-                ["cmd.exe", "/k", cmd_script],
+                ["cmd.exe", "/k", "chcp 65001 >nul && echo 环境变量已设置，欢迎使用！ && cmd /k"],
                 env=new_env,
                 creationflags=subprocess.CREATE_NEW_CONSOLE
             )
