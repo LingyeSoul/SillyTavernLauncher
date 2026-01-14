@@ -400,7 +400,16 @@ class UniUI():
                     page.window.visible = False
                     page.update()
                 else:
-                    # 未启用托盘或托盘已被停止时，正常退出程序
+                    # 未启用托盘或托盘已被停止时的退出流程：
+                    # 1. 先隐藏窗口（立即响应）
+                    page.window.visible = False
+                    page.window.prevent_close = False
+                    try:
+                        page.update()
+                    except (AssertionError, AttributeError):
+                        pass
+
+                    # 2. 再执行清理和退出（同步执行）
                     self.ui_event.exit_app(e)
         page.window.prevent_close = True
         page.window.on_event = window_event

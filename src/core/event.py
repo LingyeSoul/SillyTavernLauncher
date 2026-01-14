@@ -46,30 +46,6 @@ class UiEvent:
         self.stCfg = stcfg()
         self.tray = None  # 添加tray引用
 
-    def safe_update(self):
-        """安全地调用 page.update()，处理控件 uid 为 None 的异常"""
-        try:
-            if self.page is None:
-                return
-            async def async_update():
-                try:
-                    if self.page:
-                        self.page.update()
-                except AssertionError as e:
-                    # 控件 __uid 为 None，说明控件未初始化或已被移除
-                    import traceback
-                    print(f"safe_update: AssertionError (控件 __uid 为 None) - {str(e)}")
-                    traceback.print_stack()
-                except Exception as e:
-                    # 其他异常也记录但继续运行
-                    import traceback
-                    print(f"safe_update: 更新失败 - {str(e)}")
-                    traceback.print_exc()
-            self.page.run_task(async_update)
-        except Exception:
-            # run_task 本身失败，忽略
-            pass
-
     def run_async_task(self, coroutine):
         """运行异步任务"""
         def run_in_thread():
@@ -235,15 +211,12 @@ class UiEvent:
             # 隐藏窗口并设置允许关闭
             self.page.window.visible = False
             self.page.window.prevent_close = False
+
+            # 同步更新UI，确保窗口隐藏立即生效
             try:
-                async def async_update():
-                    try:
-                        if self.page:  # 检查 page 是否为 None
-                            self.page.update()
-                    except (AssertionError, AttributeError):
-                        pass
-                self.page.run_task(async_update)
-            except Exception:
+                if self.page:
+                    self.page.update()
+            except (AssertionError, AttributeError):
                 pass
 
             # 关闭窗口（真正退出程序）
@@ -258,15 +231,12 @@ class UiEvent:
             # 未启用托盘时，正常退出程序
             self.page.window.visible = False
             self.page.window.prevent_close = False
+
+            # 同步更新UI，确保窗口隐藏立即生效
             try:
-                async def async_update():
-                    try:
-                        if self.page:  # 检查 page 是否为 None
-                            self.page.update()
-                    except (AssertionError, AttributeError):
-                        pass
-                self.page.run_task(async_update)
-            except Exception:
+                if self.page:
+                    self.page.update()
+            except (AssertionError, AttributeError):
                 pass
             try:
                 async def async_close():
