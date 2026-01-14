@@ -1,3 +1,4 @@
+from utils.logger import app_logger
 import json
 import urllib.request
 import urllib.error
@@ -104,8 +105,8 @@ class VersionChecker:
                     return None
                 
         except aiohttp.ClientError as e:
-            print(f"网络错误: {e}")
-            print(f"网络错误: {e}")
+            app_logger.error(f"网络错误: {e}")
+            app_logger.error(f"网络错误: {e}")
             return None
         except Exception as e:
             print(f"获取版本信息时出错: {e}")
@@ -151,7 +152,7 @@ class VersionChecker:
                         return None
                 
         except aiohttp.ClientError as e:
-            print(f"网络错误: {e}")
+            app_logger.error(f"网络错误: {e}")
             return None
         except Exception as e:
             print(f"获取版本信息时出错: {e}")

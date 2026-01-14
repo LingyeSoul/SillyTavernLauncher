@@ -21,3 +21,6 @@ backup
 /.claude
 app.log
 /docs
+CLAUDE.md
+AGENTS.md
+/openspec

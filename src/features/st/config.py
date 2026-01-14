@@ -1,5 +1,6 @@
 import os
 from ruamel.yaml import YAML
+from utils.logger import app_logger
 
 
 class stcfg:
@@ -32,7 +33,7 @@ class stcfg:
                 self.proxy_enabled = request_proxy.get('enabled', False)
                 self.proxy_url = request_proxy.get('url', "")
         except Exception as e:
-            print(f"配置加载错误: {str(e)}")
+            app_logger.error(f"配置加载错误: {str(e)}")
             self.config_data = {
                 'listen': self.listen,
                 'port': self.port
@@ -57,7 +58,7 @@ class stcfg:
 
             
         except Exception as e:
-            print(f"配置保存失败: {str(e)}")
+            app_logger.error(f"配置保存失败: {str(e)}")
 
     def create_whitelist(self):
         if not os.path.exists(self.whitelist_path):
@@ -67,4 +68,4 @@ class stcfg:
                 with open(self.whitelist_path, 'w', encoding='utf-8') as f:
                     f.write("192.168.*.*\n127.0.0.1\n")
             except Exception as e:
-                print(f"白名单文件创建失败: {str(e)}")
+                app_logger.error(f"白名单文件创建失败: {str(e)}")

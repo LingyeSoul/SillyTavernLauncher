@@ -1,3 +1,4 @@
+from utils.logger import app_logger
 #!/usr/bin/env python3
 """
 SillyTavern Data Sync Manager
@@ -18,7 +19,7 @@ try:
     from features.sync.client import SyncClient
 except ImportError as e:
     # Create dummy classes to handle import errors gracefully
-    print(f"警告: 无法导入同步模块，某些功能将不可用: {e}")
+    app_logger.warning(f"无法导入同步模块，某些功能将不可用: {e}")
 
     class SyncServer:
         def __init__(self, *args, **kwargs):
@@ -31,7 +32,7 @@ except ImportError as e:
 try:
     from core.network import get_network_manager
 except ImportError as e:
-    print(f"警告: 无法导入网络模块: {e}")
+    app_logger.warning(f"无法导入网络模块: {e}")
     def get_network_manager():
         return None
 
@@ -346,7 +347,7 @@ class DataSyncManager:
             bool: Success status
         """
         if self.is_server_running:
-            print("错误: 服务器正在运行时无法同步数据")
+            app_logger.error("错误: 服务器正在运行时无法同步数据")
             return False
 
         try:

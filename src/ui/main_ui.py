@@ -1,3 +1,4 @@
+from utils.logger import app_logger
 import flet as ft
 from flet import UrlLauncher
 import platform
@@ -382,11 +383,11 @@ class UniUI():
                 except Exception as inner_e:
                     import traceback
                     print(f"最小化窗口失败: {str(inner_e)}")
-                    print(f"错误详情: {traceback.format_exc()}")
+                    app_logger.error("错误详情: {traceback.format_exc()}")
             except Exception as e:
                 import traceback
                 print(f"最小化窗口失败: {str(e)}")
-                print(f"错误详情: {traceback.format_exc()}")
+                app_logger.error("错误详情: {traceback.format_exc()}")
 
         # 设置窗口事件
         def window_event(e):
@@ -645,7 +646,7 @@ class UniUI():
             try:
                 # 检查页面是否仍然有效
                 if not self.is_page_valid():
-                    print(f"版本切换视图初始化跳过: 页面已销毁")
+                    app_logger.warning("版本切换视图初始化跳过: 页面已销毁")
                     self.version_view = self._create_simple_version_view()
                 else:
                     from features.st.ui.version_ui import create_version_switch_view
@@ -654,7 +655,7 @@ class UniUI():
                 error_msg = str(e)
                 # 如果是页面已销毁的错误，静默处理
                 if "destroyed" in error_msg.lower() or "session" in error_msg.lower():
-                    print(f"版本切换视图初始化跳过: {error_msg}")
+                    app_logger.warning("版本切换视图初始化跳过: {error_msg}")
                     self.version_view = self._create_simple_version_view()
                 else:
                     print(f"版本切换视图初始化失败: {e}")

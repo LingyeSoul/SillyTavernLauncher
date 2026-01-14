@@ -2,6 +2,7 @@ import json
 import os
 import threading
 import atexit
+from utils.logger import app_logger
 
 
 class ConfigManager:
@@ -112,7 +113,7 @@ class ConfigManager:
             self.save_config()
         except Exception as e:
             # 退出时如果保存失败，不抛出异常
-            print(f"警告：配置保存失败: {str(e)}")
+            app_logger.warning(f"配置保存失败: {str(e)}")
     
     def get(self, key, default=None):
         """

@@ -12,6 +12,7 @@ from packaging import version
 import urllib.request
 from core.git_utils import switch_git_remote_to_gitee
 import re
+from utils.logger import app_logger
 
 
 class UiEvent:
@@ -25,10 +26,10 @@ class UiEvent:
             self.config_manager = ConfigManager()
             self.config = self.config_manager.config if self.config_manager and hasattr(self.config_manager, 'config') else {}
             if not isinstance(self.config, dict):
-                print(f"[警告] config 不是字典类型: {type(self.config)}，使用空字典")
+                app_logger.warning(f"config 不是字典类型: {type(self.config)}，使用空字典")
                 self.config = {}
         except Exception as e:
-            print(f"[错误] ConfigManager初始化异常: {e}")
+            app_logger.error(f"ConfigManager初始化异常: {e}", exc_info=True)
             self.config_manager = None
             self.config = {}
 
@@ -187,11 +188,9 @@ class UiEvent:
                     try:
                         await self.terminal.stop_processes(force=False)
                     except Exception as ex:
-                        from utils.logger import app_logger
                         app_logger.exception("Error stopping processes")
                 self.page.run_task(stop_and_cleanup)
             except Exception as ex:
-                from utils.logger import app_logger
                 app_logger.exception("Failed to call stop_processes")
 
         # 检查是否启用了托盘功能
@@ -202,10 +201,8 @@ class UiEvent:
             if stop_tray and self.tray is not None:
                 try:
                     self.tray.tray.stop()
-                    from utils.logger import app_logger
                     app_logger.info("Tray stopped")
                 except Exception as ex:
-                    from utils.logger import app_logger
                     app_logger.exception("Error stopping tray")
 
             # 隐藏窗口并设置允许关闭
@@ -281,10 +278,8 @@ class UiEvent:
         if self.tray is not None:
             try:
                 self.tray.tray.stop()
-                from utils.logger import app_logger
                 app_logger.info("Tray stopped")
             except Exception as ex:
-                from utils.logger import app_logger
                 app_logger.exception("Error stopping tray")
 
         # 然后执行退出逻辑（stop_tray=False 避免重复停止托盘）
@@ -293,7 +288,6 @@ class UiEvent:
     def cleanup(self):
         """清理所有资源引用，打破循环引用"""
         try:
-            from utils.logger import app_logger
             app_logger.info("UIEvent cleaning up resources...")
 
             # 1. 断开与 UniUI 的引用（打破循环引用）
@@ -327,14 +321,14 @@ class UiEvent:
         try:
             self.cleanup()
         except Exception as e:
-            # 使用 print() 作为后备，避免在 __del__ 中 import 导致 ModuleNotFoundError
-            print(f"[DEBUG] Error in __del__: {e}")
+            # __del__ 中避免使用 logger，防止模块已卸载导致错误
+            pass
 
     def switch_theme(self, e):
         try:
             # 验证事件和控制对象
             if e is None or e.control is None:
-                print("[警告] switch_theme: 事件对象或控制对象为空")
+                app_logger.warning("switch_theme: 事件对象或控制对象为空")
                 return
 
             # 获取正确的图标常量
@@ -364,13 +358,11 @@ class UiEvent:
                         pass  # 忽略控件树过深错误
                 self.page.run_task(async_update)
             except Exception as update_error:
-                print(f"[错误] 页面更新失败: {str(update_error)}")
+                app_logger.error(f"页面更新失败: {str(update_error)}")
 
         except Exception as ex:
             # 捕获并记录所有错误
-            import traceback
-            print(f"[错误] 切换主题失败: {str(ex)}")
-            print(f"堆栈跟踪:\n{traceback.format_exc()}")
+            app_logger.exception(f"切换主题失败: {str(ex)}")
 
 
     def install_sillytavern(self, e):
@@ -447,9 +439,7 @@ class UiEvent:
         except Exception as ex:
             error_msg = f"安装SillyTavern时出错: {str(ex)}"
             self.terminal.add_log(error_msg)
-            print(error_msg)
-            import traceback
-            traceback.print_exc()
+            app_logger.exception(error_msg)
 
     def validate_path_for_npm(self, path=None, show_success=True):
         """
@@ -652,9 +642,7 @@ class UiEvent:
         except Exception as ex:
             error_msg = f"启动SillyTavern时出错: {str(ex)}"
             self.terminal.add_log(error_msg)
-            print(error_msg)
-            import traceback
-            traceback.print_exc()
+            app_logger.exception(error_msg)
 
     def stop_sillytavern(self, e):
         """
@@ -686,9 +674,7 @@ class UiEvent:
         except Exception as ex:
             error_msg = f"停止进程时出错: {str(ex)}"
             self.terminal.add_log(error_msg)
-            print(error_msg)
-            import traceback
-            traceback.print_exc()
+            app_logger.exception(error_msg)
 
     def restart_sillytavern(self, e):
         """
@@ -989,9 +975,7 @@ class UiEvent:
         except Exception as ex:
             error_msg = f"更新SillyTavern时出错: {str(ex)}"
             self.terminal.add_log(error_msg)
-            print(error_msg)
-            import traceback
-            traceback.print_exc()
+            app_logger.exception(error_msg)
 
     def update_sillytavern_with_callback(self, e):
         """
@@ -1185,10 +1169,8 @@ class UiEvent:
                 self.terminal.add_log("SillyTavern未安装")
         except Exception as ex:
             error_msg = f"更新SillyTavern时出错: {str(ex)}"
-        self.terminal.add_log(error_msg)
-        print(error_msg)
-        import traceback
-        traceback.print_exc()
+            self.terminal.add_log(error_msg)
+            app_logger.exception(error_msg)
 
     def port_changed(self,e):
         self.stCfg.port = e.control.value
@@ -1853,18 +1835,18 @@ class UiEvent:
             if self.terminal.is_running:
                 error_msg = "错误: 请先停止SillyTavern后再切换版本"
                 self.terminal.add_log(error_msg)
-                print(error_msg)
+                app_logger.error(error_msg)
                 self.show_error_dialog("切换失败", "请先停止SillyTavern后再切换版本")
                 return
 
             self.terminal.add_log(f"开始切换到版本 v{version_info['version']}...")
-            print(f"开始切换到版本 v{version_info['version']}...")
+            app_logger.info(f"开始切换到版本 v{version_info['version']}...")
 
             # 2. 检查Git工作区状态
             is_clean, status_msg = check_git_status()
             if not is_clean:
                 self.terminal.add_log(f"警告: {status_msg}")
-                print(f"警告: {status_msg}")
+                app_logger.warning(f"版本切换警告: {status_msg}")
                 self.show_error_dialog("警告", f"{status_msg}，切换可能丢失更改")
 
             # 3. 执行版本切换（在release分支上使用reset --hard）
@@ -1873,8 +1855,7 @@ class UiEvent:
             if success:
                 self.terminal.add_log(f"✓ {message}")
                 self.terminal.add_log(f"✓ 成功切换到版本 v{version_info['version']}")
-                print(f"✓ {message}")
-                print(f"✓ 成功切换到版本 v{version_info['version']}")
+                app_logger.info(f"成功切换到版本 v{version_info['version']}")
 
                 # 验证当前分支状态
                 from core.git_utils import get_current_commit
@@ -1893,16 +1874,14 @@ class UiEvent:
 
             else:
                 self.terminal.add_log(f"✗ {message}")
-                print(f"✗ 切换失败: {message}")
+                app_logger.error(f"切换版本失败: {message}")
                 self.show_error_dialog("切换失败", f"切换版本失败: {message}")
 
         except Exception as ex:
             error_msg = f"切换版本时发生错误: {str(ex)}"
             self.terminal.add_log(error_msg)
-            print(error_msg)
+            app_logger.exception(error_msg)
             self.show_error_dialog("切换失败", f"切换版本时发生错误: {str(ex)}")
-            import traceback
-            traceback.print_exc()  # 打印完整堆栈跟踪以便调试
 
     def _refresh_version_view(self):
         """刷新版本页面的显示"""
@@ -1914,7 +1893,7 @@ class UiEvent:
                     # 调用版本视图的刷新方法
                     version_view.refresh()
         except Exception as e:
-            print(f"刷新版本视图时出错: {str(e)}")
+            app_logger.exception("刷新版本视图时出错")
 
     def _ask_install_dependencies(self):
         """
