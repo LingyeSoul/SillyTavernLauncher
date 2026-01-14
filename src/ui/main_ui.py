@@ -30,12 +30,6 @@ class UniUI():
         self.config = self.config_manager.config
         self.ui_event = UiEvent(self.page, self.terminal, self)
 
-        # 注册资源到生命周期管理器
-        from core.lifecycle import lifecycle_manager, ResourceType
-        lifecycle_manager.register(ResourceType.TERMINAL, self.terminal)
-        lifecycle_manager.register(ResourceType.UI_EVENT, self.ui_event)
-        lifecycle_manager.register(ResourceType.UNI_UI, self)
-
         self.BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
         self.port_field = ft.TextField(
             label="监听端口",
@@ -627,10 +621,6 @@ class UniUI():
                 # 不传入 terminal，使用独立的简单日志组件
                 self.sync_ui = DataSyncUI(data_dir, self.config_manager)
                 self.sync_view = self.sync_ui.create_ui(page)
-
-                # 注册 SYNC_UI 到生命周期管理器
-                from core.lifecycle import lifecycle_manager, ResourceType
-                lifecycle_manager.register(ResourceType.SYNC_UI, self.sync_ui)
             except Exception as e:
                 print(f"同步功能初始化失败，将显示简化界面: {e}")
                 # 创建简化的同步界面

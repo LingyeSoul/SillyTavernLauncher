@@ -36,17 +36,19 @@ class Tray:
         """
         从托盘退出应用程序
 
-        设计说明：
-        - 停止托盘图标
-        - 调用 ui_event.exit_app_with_tray() 处理进程停止和UI清理
+        设计说明（保证用户体验）：
+        1. 先立即停止托盘图标
+        2. 调用 ui_event.exit_app_with_tray() 处理窗口隐藏、进程停止和UI清理
+
+        注意：窗口隐藏现在由 ui_event.exit_app_with_tray() 统一处理
         """
-        # 先停止托盘图标
+        # 步骤 1: 停止托盘图标
         try:
             self.tray.stop()
         except Exception as e:
             pass  # 托盘可能已经停止
 
-        # 然后处理进程停止和UI清理
+        # 步骤 2: 调用 ui_event 处理窗口隐藏、进程停止和异步销毁
         if self.ui_event:
             self.ui_event.exit_app_with_tray(None)
 

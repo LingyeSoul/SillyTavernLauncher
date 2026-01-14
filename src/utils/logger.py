@@ -65,7 +65,16 @@ class AppLogger:
 
             # 文件处理器（可选）
             try:
-                file_handler = logging.FileHandler('app.log', encoding='utf-8')
+                # 创建 logs 文件夹
+                logs_dir = os.path.join(os.getcwd(), "logs")
+                os.makedirs(logs_dir, exist_ok=True)
+
+                # 使用 app_时间.txt 格式
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                log_file_path = os.path.join(logs_dir, f"app_{timestamp}.txt")
+
+                file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
                 file_handler.setFormatter(formatter)
                 self.logger.addHandler(file_handler)
             except Exception:
