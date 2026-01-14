@@ -27,25 +27,37 @@ class Tray:
                             )
         self.tray.run_detached()
 
-    def open_app(self,icon,query):
+    def open_app(self, icon, query):
         """打开主窗口（从托盘）"""
         if self.ui_event:
             self.ui_event.open_window()
 
-    def exit_app(self,icon,query):
+    def exit_app(self, icon, query):
         """
         从托盘退出应用程序
 
         设计说明：
-        - 仅调用 ui_event.exit_app_with_tray()
-        - 停止进程等业务逻辑由 event.py 统一处理
+        - 停止托盘图标
+        - 调用 ui_event.exit_app_with_tray() 处理进程停止和UI清理
         """
+        # 先停止托盘图标
+        try:
+            self.tray.stop()
+        except Exception as e:
+            pass  # 托盘可能已经停止
+
+        # 然后处理进程停止和UI清理
         if self.ui_event:
             self.ui_event.exit_app_with_tray(None)
 
     def restart_st(self, icon, query):
-        self.ui_event.restart_sillytavern(None)
+        if self.ui_event:
+            self.ui_event.restart_sillytavern(None)
+
     def start_st(self, icon, query):
-        self.ui_event.start_sillytavern(None)
+        if self.ui_event:
+            self.ui_event.start_sillytavern(None)
+
     def stop_st(self, icon, query):
-        self.ui_event.stop_sillytavern(None)
+        if self.ui_event:
+            self.ui_event.stop_sillytavern(None)

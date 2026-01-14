@@ -165,21 +165,32 @@ class UiEvent:
         
     def hide_window(self):
         """仅隐藏窗口（用于启用托盘时的窗口关闭）"""
-        self.page.window.visible = False
-        try:
-            self.page.update()
-        except (AssertionError, AttributeError, RuntimeError):
-            # RuntimeError: session 可能已被销毁
-            pass
+        if self.page is not None:
+            try:
+                self.page.window.visible = False
+                self.page.update()
+            except (AssertionError, AttributeError, RuntimeError):
+                # RuntimeError: session 可能已被销毁
+                pass
+
     def open_window(self):
         """仅打开窗口（用于启用托盘时的窗口打开）"""
-        self.page.window.visible = True
-        self.page.update()
-        try:
-            self.page.update()
-        except (AssertionError, AttributeError, RuntimeError):
-            # RuntimeError: session 可能已被销毁
-            pass
+        if self.page is not None:
+            try:
+                self.page.window.visible = True
+                self.page.update()
+
+                # to_front() 是异步方法，需要使用 run_task 调度
+                async def bring_to_front():
+                    try:
+                        if self.page and self.page.window:
+                            await self.page.window.to_front()
+                    except (RuntimeError, AttributeError):
+                        pass
+                self.page.run_task(bring_to_front)
+            except (AssertionError, AttributeError, RuntimeError):
+                # RuntimeError: session 可能已被销毁
+                pass
 
     def _exit_app_full(self, stop_processes=True):
         """
@@ -210,34 +221,50 @@ class UiEvent:
                 app_logger.exception("Failed to call stop_processes")
 
         # ========== 2. 隐藏窗口并设置允许关闭 ==========
-        self.page.window.visible = False
-        self.page.window.prevent_close = False
+        # 检查 page 是否可用（从托盘退出时可能为 None）
+        if self.page is not None:
+            try:
+                self.page.window.visible = False
+                self.page.window.prevent_close = False
 
-        # 同步更新UI，确保窗口隐藏立即生效
-        try:
-            if self.page:
-                self.page.update()
-        except (AssertionError, AttributeError, RuntimeError):
-            # RuntimeError: session 可能已被销毁（例如从托盘退出时）
-            pass
+                # 同步更新UI，确保窗口隐藏立即生效
+                try:
+                    self.page.update()
+                except (AssertionError, AttributeError, RuntimeError):
+                    # RuntimeError: session 可能已被销毁（例如从托盘退出时）
+                    pass
+            except (AttributeError, RuntimeError):
+                # page.window 可能已不可用
+                pass
 
-        # ========== 3. 关闭窗口 ==========
-        try:
-            async def async_close():
-                if self.page:  # 检查 page 是否为 None
-                    await self.page.window.close()
-            self.page.run_task(async_close)
-        except Exception:
-            pass
+        # ========== 3. 关闭窗口（如果 page 可用） ==========
+        if self.page is not None:
+            try:
+                async def async_close():
+                    try:
+                        if self.page and self.page.window:
+                            await self.page.window.close()
+                    except (RuntimeError, AttributeError):
+                        # session 可能已被销毁
+                        pass
+                self.page.run_task(async_close)
+            except (AttributeError, RuntimeError):
+                # page 可能已不可用
+                pass
 
-        # ========== 4. 清理自身资源（延迟到异步操作之后） ==========
-        async def delayed_cleanup():
-            await asyncio.sleep(0.5)  # 等待异步操作完成
-            self.cleanup()
-        try:
-            self.page.run_task(delayed_cleanup)
-        except:
-            # 如果 page 已经不可用，直接清理
+        # ========== 4. 清理自身资源 ==========
+        if self.page is not None:
+            # 延迟清理，等待异步操作完成
+            async def delayed_cleanup():
+                await asyncio.sleep(0.5)  # 等待异步操作完成
+                self.cleanup()
+            try:
+                self.page.run_task(delayed_cleanup)
+            except (AttributeError, RuntimeError):
+                # 如果 page 不可用，直接清理
+                self.cleanup()
+        else:
+            # page 不可用，直接清理
             self.cleanup()
 
     def exit_app(self, e):
@@ -266,12 +293,18 @@ class UiEvent:
 
     def exit_app_with_tray(self, e):
         """
-        通过托盘退出应用程序
+        通过托盘退出应用程序。
 
-        设计说明：
-        - 此方法仅从托盘菜单的"退出启动器"选项调用
-        - 负责停止进程（使用同步方法）和UI清理
-        - 托盘本身已在 Tray.exit_app() 中停止
+        此方法仅从托盘菜单的"退出启动器"选项调用，负责停止运行进程（使用同步方法）
+        和执行UI清理。托盘本身已在 Tray.exit_app() 中停止。
+
+        Args:
+            e: 事件对象，用于触发退出操作
+
+        Note:
+            - 首先停止所有正在运行的进程（同步方式）
+            - 然后执行UI清理工作
+            - 托盘图标已在 Tray.exit_app() 中停止
         """
         app_logger.info("通过托盘退出应用程序")
 
