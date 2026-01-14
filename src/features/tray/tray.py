@@ -26,20 +26,20 @@ class Tray:
             pystray.MenuItem('退出启动器',self.exit_app),
                             )
         self.tray.run_detached()
+
     def open_app(self,icon,query):
-        self.page.window.visible = True
-        try:
-            self.page.update()
-        except RuntimeError as e:
-            if "Event loop is closed" in str(e):
-                # 如果事件循环已关闭，则不执行更新操作
-                pass
-            else:
-                raise
+        """打开主窗口（从托盘）"""
+        if self.ui_event:
+            self.ui_event.open_window()
+
     def exit_app(self,icon,query):
-        # 确保在退出前停止所有运行的进程（添加 None 检查）
-        if self.ui_event and self.ui_event.terminal and self.ui_event.terminal.is_running:
-            self.ui_event.terminal.stop_processes()
+        """
+        从托盘退出应用程序
+
+        设计说明：
+        - 仅调用 ui_event.exit_app_with_tray()
+        - 停止进程等业务逻辑由 event.py 统一处理
+        """
         if self.ui_event:
             self.ui_event.exit_app_with_tray(None)
 

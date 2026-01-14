@@ -129,8 +129,8 @@ async def main(page: ft.Page):
 
             def cleanup_terminal(terminal_obj):
                 try:
-                    # Use unified stop_processes interface, force=True for immediate termination
-                    terminal_obj.stop_processes(force=True)
+                    # Use synchronous stop method for immediate termination during cleanup
+                    terminal_obj.stop_processes_sync()
                     app_logger.info("Terminal processes stopped")
                 except Exception as e:
                     app_logger.exception("Error stopping terminal processes")
