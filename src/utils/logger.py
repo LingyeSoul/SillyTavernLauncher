@@ -3,6 +3,7 @@
 - 使用 logging 模块作为主要日志工具
 - 降级到 print 作为后备
 - 所有异常必须记录，不再静默吞噬
+- 文件日志只记录ERROR及以上级别
 """
 
 import logging
@@ -10,6 +11,12 @@ import os
 import sys
 import threading
 from typing import Optional
+
+
+class ErrorOnlyFilter(logging.Filter):
+    """自定义过滤器：只允许ERROR及以上级别的日志通过"""
+    def filter(self, record):
+        return record.levelno >= logging.ERROR
 
 
 class AppLogger:
@@ -39,6 +46,12 @@ class AppLogger:
         # 从环境变量读取日志级别，默认 INFO
         log_level = os.getenv('LOG_LEVEL', 'INFO')
         self._setup_logger(log_level)
+
+        # 文件handler延迟创建（第一次ERROR时才创建）
+        self._file_handler = None
+        self._file_handler_lock = threading.Lock()
+        self._file_handler_failed = False  # 标记文件处理器创建是否失败
+
         self._initialized = True
 
     def _setup_logger(self, log_level: str = 'INFO'):
@@ -53,32 +66,15 @@ class AppLogger:
                 return
 
             # 配置日志格式（包含时间戳）
-            formatter = logging.Formatter(
+            self.formatter = logging.Formatter(
                 '[%(asctime)s] [%(levelname)s] %(name)s - %(message)s',
                 datefmt='%Y-%m-%d %H:%M:%S'
             )
 
             # 控制台处理器
             console_handler = logging.StreamHandler(sys.stdout)
-            console_handler.setFormatter(formatter)
+            console_handler.setFormatter(self.formatter)
             self.logger.addHandler(console_handler)
-
-            # 文件处理器（可选）
-            try:
-                # 创建 logs 文件夹
-                logs_dir = os.path.join(os.getcwd(), "logs")
-                os.makedirs(logs_dir, exist_ok=True)
-
-                # 使用 app_时间.txt 格式
-                from datetime import datetime
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                log_file_path = os.path.join(logs_dir, f"app_{timestamp}.txt")
-
-                file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
-                file_handler.setFormatter(formatter)
-                self.logger.addHandler(file_handler)
-            except Exception:
-                pass  # 文件日志失败不影响控制台日志
 
             # 设置日志级别（支持环境变量配置）
             level = getattr(logging, log_level.upper(), logging.INFO)
@@ -86,6 +82,34 @@ class AppLogger:
         except Exception as e:
             # logging 配置失败，使用 print 后备
             print(f"[WARNING] 日志系统初始化失败: {e}")
+
+    def _ensure_file_handler(self):
+        """确保文件处理器已创建（线程安全）
+
+        只在第一次记录ERROR时创建，避免无错误时创建空日志文件
+        """
+        if self._file_handler is None and not self._file_handler_failed:
+            with self._file_handler_lock:
+                # 双重检查锁定
+                if self._file_handler is None and not self._file_handler_failed:
+                    try:
+                        # 创建 logs 文件夹
+                        logs_dir = os.path.join(os.getcwd(), "logs")
+                        os.makedirs(logs_dir, exist_ok=True)
+
+                        # 使用 Error_时间.txt 格式
+                        from datetime import datetime
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        log_file_path = os.path.join(logs_dir, f"Error_{timestamp}.txt")
+
+                        self._file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
+                        self._file_handler.setFormatter(self.formatter)
+                        # 添加过滤器：只记录ERROR及以上级别
+                        self._file_handler.addFilter(ErrorOnlyFilter())
+                        self.logger.addHandler(self._file_handler)
+                    except Exception as e:
+                        print(f"[WARNING] 创建日志文件失败: {e}")
+                        self._file_handler_failed = True  # 标记为失败，避免重试
 
     def _get_timestamp(self):
         """获取当前时间戳字符串"""
@@ -106,6 +130,8 @@ class AppLogger:
 
     def error(self, msg: str, exc_info: bool = False):
         try:
+            # 确保文件处理器已创建
+            self._ensure_file_handler()
             self.logger.error(msg, exc_info=exc_info)
         except Exception:
             print(f"[{self._get_timestamp()}] [ERROR] {msg}")
@@ -113,6 +139,8 @@ class AppLogger:
     def exception(self, msg: str):
         """记录异常，包含堆栈跟踪"""
         try:
+            # 确保文件处理器已创建
+            self._ensure_file_handler()
             self.logger.exception(msg)
         except Exception:
             print(f"[{self._get_timestamp()}] [EXCEPTION] {msg}")
@@ -129,6 +157,8 @@ class AppLogger:
     def critical(self, msg: str):
         """记录严重错误"""
         try:
+            # 确保文件处理器已创建
+            self._ensure_file_handler()
             self.logger.critical(msg)
         except Exception:
             print(f"[{self._get_timestamp()}] [CRITICAL] {msg}")

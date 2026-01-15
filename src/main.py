@@ -9,6 +9,7 @@ import urllib.request
 from version import VERSION
 from features.system.env_sys import SysEnv
 from ui.dialogs.welcome_dialog import show_welcome_dialog
+from utils.logger import app_logger
 
 ft.context.disable_auto_update() #修复页面卡卡的感觉
 
@@ -109,6 +110,9 @@ async def main(page: ft.Page):
     uniUI=UniUI(page,version,version_checker)
     uniUI.setMainView(page)
 
+    # 获取配置管理器实例（用于后续的异步任务）
+    config_manager = uniUI.config_manager
+
     # 检测启动器版本号，如果是测试版则启用 DEBUG 模式
     def is_prerelease_version(version_str):
         """检测版本号是否为测试版"""
@@ -135,42 +139,45 @@ async def main(page: ft.Page):
         uniUI.terminal.enable_debug_mode(True)
         uniUI.terminal.add_log(f"检测到启动器测试版 {version}，已自动启用 DEBUG 模式")
 
-    # 检查自动代理设置
-    config_manager = ConfigManager()
-    if config_manager.get("auto_proxy", False):
-        # 如果启用了自动代理设置，则自动检测并设置代理
-        try:
-            proxies = urllib.request.getproxies()
-            if proxies:
-                # 查找HTTP或SOCKS代理
-                proxy_url = ""
-                if 'http' in proxies:
-                    proxy_url = proxies['http']
-                elif 'https' in proxies:
-                    proxy_url = proxies['https']
-                elif 'socks' in proxies:
-                    proxy_url = proxies['socks']
-                elif 'socks5' in proxies:
-                    proxy_url = proxies['socks5']
-                
-                if proxy_url:
-                    # 启用代理并设置代理URL
-                    from features.st.config import stcfg
-                    st_cfg = stcfg()
-                    st_cfg.proxy_enabled = True
-                    st_cfg.proxy_url = proxy_url
-                    st_cfg.save_config()
-        except Exception as e:
-            print(f"自动设置代理时出错: {str(e)}")
-
-    # 异步检查系统环境（必须在UI初始化之后，但在显示窗口之前）
+    # 异步检查系统环境
     async def check_system_environment_async():
         try:
             check_system_environment()
         except Exception as e:
-            print(f"系统环境检查时出错: {e}")
+            app_logger.error(f"系统环境检查时出错: {e}", exc_info=True)
 
+    # 异步检查自动代理设置
+    async def check_auto_proxy_async():
+        """异步检查并自动设置系统代理"""
+        if config_manager.get("auto_proxy", False):
+            # 如果启用了自动代理设置，则自动检测并设置代理
+            try:
+                proxies = urllib.request.getproxies()
+                if proxies:
+                    # 查找HTTP或SOCKS代理
+                    proxy_url = ""
+                    if 'http' in proxies:
+                        proxy_url = proxies['http']
+                    elif 'https' in proxies:
+                        proxy_url = proxies['https']
+                    elif 'socks' in proxies:
+                        proxy_url = proxies['socks']
+                    elif 'socks5' in proxies:
+                        proxy_url = proxies['socks5']
+
+                    if proxy_url:
+                        # 启用代理并设置代理URL
+                        from features.st.config import stcfg
+                        st_cfg = stcfg()
+                        st_cfg.proxy_enabled = True
+                        st_cfg.proxy_url = proxy_url
+                        st_cfg.save_config()
+            except Exception as e:
+                app_logger.error(f"自动设置代理时出错: {str(e)}", exc_info=True)
+
+    # 创建所有异步任务
     asyncio.create_task(check_system_environment_async())
+    asyncio.create_task(check_auto_proxy_async())
 
     # 初始化时根据配置决定是否创建托盘
     if config_manager.get("tray", True):
@@ -188,8 +195,7 @@ async def main(page: ft.Page):
     page.window.visible = True
     page.update()
     await page.window.center()
-    
-    
-    
+
+
 
 ft.run(main, view=ft.AppView.FLET_APP_HIDDEN)
