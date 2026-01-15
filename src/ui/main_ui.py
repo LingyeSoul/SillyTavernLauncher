@@ -16,33 +16,60 @@ from core.terminal import AsyncTerminal
 class UniUI():
     def __init__(self,page,ver,version_checker):
         self.page = page
-        self.env = Env()
         self.version_checker = version_checker
         self.version = ver
-        self.sysenv = SysEnv()
-        self.stcfg = stcfg()
         self.platform = platform.system()
+
+        # 必须立即初始化的核心组件
         self.config_manager = ConfigManager()
         self.config = self.config_manager.config
+        self.stcfg = stcfg()
+
         # 从配置中读取日志开关，默认关闭
         enable_logging = self.config_manager.get("log", False)
         self.terminal = AsyncTerminal(page, enable_logging=enable_logging)
-        self.config = self.config_manager.config
         self.ui_event = UiEvent(self.page, self.terminal, self)
 
-        self.BSytle=ft.ButtonStyle(icon_size=25,text_style=ft.TextStyle(size=20,font_family="Microsoft YaHei"))
+        # 延迟初始化的组件（使用懒加载属性）
+        self._env = None
+        self._sysenv = None
+        self._env_lock = threading.Lock()
+        self._sysenv_lock = threading.Lock()
+
+        # UI样式和字段初始化
+        self.BSytle = ft.ButtonStyle(icon_size=25, text_style=ft.TextStyle(size=20, font_family="Microsoft YaHei"))
         self.port_field = ft.TextField(
             label="监听端口",
-            width= 610,
+            width=610,
             value=str(self.stcfg.port),
             hint_text="默认端口: 8000",
         )
         self.proxy_url_field = ft.TextField(
             label="代理URL",
-            width= 610,
+            width=610,
             value=str(self.stcfg.proxy_url),
             hint_text="有效的代理URL，支持http, https, socks, socks5, socks4, pac",
         )
+
+    @property
+    def env(self):
+        """懒加载：Env对象（首次访问时初始化，线程安全）"""
+        if self._env is None:
+            with self._env_lock:
+                # 双重检查锁定
+                if self._env is None:
+                    self._env = Env()
+        return self._env
+
+    @property
+    def sysenv(self):
+        """懒加载：SysEnv对象（首次访问时初始化，线程安全）"""
+        if self._sysenv is None:
+            with self._sysenv_lock:
+                # 双重检查锁定
+                if self._sysenv is None:
+                    self._sysenv = SysEnv()
+        return self._sysenv
 
     def getSettingView(self):
         if self.platform == "Windows":
