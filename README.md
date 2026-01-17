@@ -1,4 +1,4 @@
-# SillyTavern Launcher
+# SillyTavernLauncher
 
 [![License](https://img.shields.io/github/license/LingyeSoul/SillyTavernLauncher)](LICENSE) [![GitHub release](https://img.shields.io/github/v/release/LingyeSoul/SillyTavernLauncher)](https://github.com/LingyeSoul/SillyTavernLauncher/releases)
 
