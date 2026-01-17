@@ -25,9 +25,8 @@ class UniUI():
         self.config = self.config_manager.config
         self.stcfg = stcfg()
 
-        # 从配置中读取日志开关，默认关闭
-        enable_logging = self.config_manager.get("log", False)
-        self.terminal = AsyncTerminal(page, enable_logging=enable_logging)
+        # 初始化终端和事件处理
+        self.terminal = AsyncTerminal(page)
         self.ui_event = UiEvent(self.page, self.terminal, self)
 
         # 延迟初始化的组件（使用懒加载属性）
@@ -160,12 +159,6 @@ class UniUI():
                     ft.Text("开启后将在启动命令中添加 --max-old-space-size=4096 参数（在自定义启动参数前）", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
                     ft.Text("启动器功能设置", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Switch(
-                        label="启用日志",
-                        value=self.config_manager.get("log", True),
-                        on_change=self.ui_event.log_changed,
-                    ),
-                    ft.Text("开启后会在logs文件夹生成每次运行时的终端日志，在反馈时可以发送日志。", size=14, color=ft.Colors.BLUE_400),
                     ft.Switch(
                         label="自动检查启动器更新",
                         value=self.config_manager.get("checkupdate", True),

@@ -75,10 +75,7 @@ class AsyncTerminal:
     HIGH_LOAD_THRESHOLD = 500  # 高负载阈值
     OVERLOAD_THRESHOLD = 2000  # 过载阈值
 
-    # 日志文件大小限制（100MB）
-    MAX_LOG_FILE_SIZE = 100 * 1024 * 1024
-
-    def __init__(self, page, enable_logging=True, local_enabled=False):
+    def __init__(self, page, local_enabled=False):
         self.logs = ft.ListView(
             expand=True,
             build_controls_on_demand=True,
@@ -125,7 +122,6 @@ class AsyncTerminal:
         self.active_processes = []
         self.is_running = False
         self._output_threads = []  # 存储输出处理线程
-        self.enable_logging = enable_logging
 
         # DEBUG 模式控制
         self._debug_mode = False
@@ -139,13 +135,6 @@ class AsyncTerminal:
         self._batch_size_threshold = 30
         self._stop_event = threading.Event()
         self._max_log_entries = 1500
-
-        # 日志文件写入线程相关属性
-        self._log_file_queue = queue.Queue(maxsize=10000)
-        self._log_file_thread = None
-        self._log_file_stop_event = threading.Event()
-        self._log_file_handle = None  # 文件句柄，保持打开以减少I/O
-        self._log_file_lock = threading.Lock()
 
         # UI更新防抖
         self._update_pending = False
@@ -164,7 +153,6 @@ class AsyncTerminal:
 
         # ========== 新增：线程引用管理 ==========
         self._log_thread = None
-        self._log_file_thread = None
         self._cleanup_thread = None
         self._threads_lock = threading.Lock()  # 保护线程列表
 
@@ -177,10 +165,6 @@ class AsyncTerminal:
 
         # 启动日志处理循环
         self._start_log_processing_loop()
-
-        # 启动日志文件写入线程
-        if self.enable_logging:
-            self._start_log_file_thread()
 
     # ============ 日志处理循环 ============
 
@@ -199,119 +183,6 @@ class AsyncTerminal:
         # 在单独的线程中运行日志处理循环（保持为 daemon，避免阻塞程序退出）
         self._log_thread = threading.Thread(target=log_processing_worker, daemon=True)
         self._log_thread.start()
-
-    # ============ 日志文件写入线程 ============
-
-    def _start_log_file_thread(self):
-        """启动日志文件写入线程"""
-        def log_file_worker():
-            """日志文件写入工作线程"""
-            # 预先打开文件句柄（添加错误处理）
-            file_opened = self._open_log_file()
-            if not file_opened:
-                app_logger.warning("无法打开日志文件，日志文件写入将继续尝试")
-
-            while not self._log_file_stop_event.is_set():
-                try:
-                    # 批量处理日志文件写入
-                    entries = []
-                    try:
-                        # 先处理一个日志条目
-                        entry = self._log_file_queue.get(timeout=0.1)
-                        entries.append(entry)
-
-                        # 尝试获取更多日志条目进行批量处理
-                        while len(entries) < 100:  # 批量处理100条
-                            try:
-                                entry = self._log_file_queue.get_nowait()
-                                entries.append(entry)
-                            except queue.Empty:
-                                break
-                    except queue.Empty:
-                        continue
-
-                    if entries:
-                        # 只在文件句柄可用时写入
-                        if self._log_file_handle is not None:
-                            self._write_log_entries_to_file(entries)
-
-                except Exception as e:
-                    app_logger.exception("日志文件写入线程错误")
-
-            # 关闭文件句柄
-            self._close_log_file()
-
-        # 启动日志文件写入线程（保持为 daemon，避免阻塞程序退出）
-        self._log_file_thread = threading.Thread(target=log_file_worker, daemon=True)
-        self._log_file_thread.start()
-
-    # ============ 日志文件操作 ============
-
-    def _open_log_file(self):
-        """
-        打开日志文件句柄
-
-        Returns:
-            bool: 成功返回True，失败返回False
-        """
-        if not self.enable_logging:
-            return True
-
-        try:
-            logs_dir = os.path.join(os.getcwd(), "logs")
-            os.makedirs(logs_dir, exist_ok=True)
-            log_file_path = os.path.join(logs_dir, f"{self.launch_timestamp}.log")
-
-            with self._log_file_lock:
-                if self._log_file_handle is None:
-                    self._log_file_handle = open(log_file_path, "a", encoding="utf-8", buffering=8192)
-            return True
-        except Exception as e:
-            app_logger.error(f"打开日志文件失败: {str(e)}")
-            with self._log_file_lock:
-                self._log_file_handle = None
-            return False
-
-    def _close_log_file(self):
-        """关闭日志文件句柄"""
-        with self._log_file_lock:
-            if self._log_file_handle:
-                try:
-                    self._log_file_handle.close()
-                except:
-                    pass
-                self._log_file_handle = None
-
-    def update_log_setting(self, enabled: bool):
-        """更新日志设置"""
-        self.enable_logging = enabled
-        if not enabled:
-            self._close_log_file()
-        else:
-            self._open_log_file()
-
-    def _get_current_log_file_size(self):
-        """获取当前日志文件的大小"""
-        if self._log_file_handle:
-            try:
-                return self._log_file_handle.tell()
-            except:
-                try:
-                    log_file_path = os.path.join(os.getcwd(), "logs", f"{self.launch_timestamp}.log")
-                    return os.path.getsize(log_file_path) if os.path.exists(log_file_path) else 0
-                except:
-                    return 0
-        return 0
-
-    def _rotate_log_file_if_needed(self):
-        """检查是否需要轮转日志文件"""
-        if self._get_current_log_file_size() >= self.MAX_LOG_FILE_SIZE:
-            self._close_log_file()
-            self.launch_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            if self._open_log_file():
-                self.add_log(f"[INFO] 日志文件轮转到新文件: {self.launch_timestamp}.log")
-            else:
-                self.add_log("[WARNING] 日志文件轮转失败，无法打开新的日志文件")
 
     def _verify_process_running(self, pid):
         """使用 tasklist 验证进程是否仍在运行"""
@@ -709,7 +580,6 @@ class AsyncTerminal:
 
         # 设置停止事件
         self._stop_event.set()
-        self._log_file_stop_event.set()
 
         # 强制终止所有进程
         for proc_info in processes_to_stop:
@@ -773,27 +643,14 @@ class AsyncTerminal:
         if timer_count > 0:
             self.add_log(f"  清理了 {timer_count} 个定时器")
 
-        # 刷新日志缓冲区（添加异常处理）
-        try:
-            self._flush_log_buffer()
-        except Exception as e:
-            self.add_log(f"[WARNING] 刷新日志缓冲区失败: {e}")
-
         # 设置停止事件
         self._stop_event.set()
-        self._log_file_stop_event.set()
 
         # ========== 等待日志处理线程退出（短超时，避免阻塞UI） ==========
         if hasattr(self, '_log_thread') and self._log_thread:
             if self._log_thread.is_alive():
                 self._log_thread.join(timeout=0.1)
             self._log_thread = None
-
-        # ========== 等待日志文件写入线程退出（短超时，避免阻塞UI） ==========
-        if hasattr(self, '_log_file_thread') and self._log_file_thread:
-            if self._log_file_thread.is_alive():
-                self._log_file_thread.join(timeout=0.1)
-            self._log_file_thread = None
 
         # 停止所有输出线程
         for thread in self._output_threads:
@@ -1499,18 +1356,6 @@ class AsyncTerminal:
             if hasattr(self, '_log_thread') and self._log_thread:
                 if self._log_thread.is_alive():
                     self._stop_event.set()
-
-            # 停止日志文件写入线程
-            if hasattr(self, '_log_file_thread') and self._log_file_thread:
-                if self._log_file_thread.is_alive():
-                    self._log_file_stop_event.set()
-
-            # 关闭文件句柄
-            if hasattr(self, '_log_file_handle') and self._log_file_handle:
-                try:
-                    self._log_file_handle.close()
-                except:
-                    pass
         except Exception:
             # 析构函数中不应该抛出异常
             pass
@@ -1678,23 +1523,12 @@ class AsyncTerminal:
             # 检查是否为 DEBUG 日志
             is_debug = '[DEBUG]' in text or '[debug]' in text
 
-            # 如果不是 DEBUG 模式且是 DEBUG 日志，则跳过显示（但仍然记录到文件）
+            # 如果不是 DEBUG 模式且是 DEBUG 日志，则跳过显示
             if is_debug and not self._debug_mode:
-                if self.enable_logging:
-                    processed_text = text[:self.LOG_MAX_LENGTH]
-                    processed_text = re.sub(r'(\r?\n){3,}', '\n\n', processed_text.strip())
-                    timestamp = datetime.datetime.now()
-                    self._log_file_queue.put((timestamp, processed_text))
                 return
 
             # 清理多余换行
             clean_text = re.sub(r'(\r?\n){3,}', '\n\n', text.strip())
-
-            # 日志文件记录
-            if self.enable_logging:
-                self._rotate_log_file_if_needed()
-                timestamp = datetime.datetime.now()
-                self._log_file_queue.put((timestamp, clean_text))
 
             # 长度限制
             is_detailed_error = ('详细错误' in text or 'traceback' in text.lower() or
@@ -1799,52 +1633,4 @@ class AsyncTerminal:
                 try:
                     self._schedule_batch_process()
                 except Exception:
-                    pass
-
-    def _write_log_entries_to_file(self, entries):
-        """将一批日志条目写入文件"""
-        if not self.enable_logging:
-            return
-
-        try:
-            with self._log_file_lock:
-                if self._log_file_handle is None:
-                    return
-
-                log_lines = []
-                for timestamp, text in entries:
-                    formatted_timestamp = timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-                    clean_text = re.sub(r'\x1b\[[0-9;]*m', '', text)
-                    log_lines.append(f"[{formatted_timestamp}] {clean_text}\n")
-
-                try:
-                    self._log_file_handle.writelines(log_lines)
-                    self._log_file_handle.flush()
-                except OSError as e:
-                    app_logger.error(f"写入日志文件时发生IO错误: {str(e)}")
-                    try:
-                        self._log_file_handle.close()
-                        # 检查重新打开是否成功
-                        if self._open_log_file() and self._log_file_handle is not None:
-                            self._log_file_handle.writelines(log_lines)
-                            self._log_file_handle.flush()
-                        else:
-                            app_logger.error("无法重新打开日志文件，跳过本次写入")
-                    except Exception as retry_error:
-                        app_logger.error(f"重试写入日志文件也失败: {str(retry_error)}")
-
-        except Exception as e:
-            app_logger.exception("写入日志文件失败")
-
-    def _flush_log_buffer(self):
-        """刷新日志缓冲区"""
-        timeout = time.time() + 5
-        while not self._log_file_queue.empty() and time.time() < timeout:
-            time.sleep(0.01)
-
-        with self._log_file_lock:
-            if self._log_file_handle:
-                try:
-                    self._log_file_handle.flush()
-                except:
                     pass
