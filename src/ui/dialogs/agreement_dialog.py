@@ -197,7 +197,7 @@ SillyTavernLauncher 免责声明与合规使用协议
 请仔细阅读以上协议内容，并在下方选择是否同意：
         """
 
-        # 倒计时文本（30秒强制阅读）
+        # 倒计时文本（60秒强制阅读）
         self._countdown_text = ft.Text(
             f"⏳ 请仔细阅读协议内容（{self._countdown}秒后可同意）",
             size=16,
@@ -240,7 +240,7 @@ SillyTavernLauncher 免责声明与合规使用协议
                     ft.Divider(height=15, color=ft.Colors.RED_200),
                     ft.Text(
                         agreement_content,
-                        size=12,
+                        size=14,
                         selectable=True,  # 允许用户选择文本
                         font_family="Microsoft YaHei"),
                 ], scroll=ft.ScrollMode.AUTO, spacing=10),
