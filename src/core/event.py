@@ -1501,16 +1501,6 @@ class UiEvent:
         except Exception as e:
             self.show_error_dialog("保存失败", f"保存代理设置失败: {str(e)}")
 
-    def log_changed(self, e):
-        """处理日志开关变化事件"""
-        log_enabled = e.control.value
-        self.config_manager.set("log", log_enabled)
-        # 更新终端的日志设置
-        self.terminal.update_log_setting(log_enabled)
-        # 保存配置
-        self.config_manager.save_config()
-        self.showMsg('日志设置已保存')
-
     def custom_args_changed(self, e):
         """处理自定义启动参数变化事件（带安全验证）"""
         custom_args = e.control.value
