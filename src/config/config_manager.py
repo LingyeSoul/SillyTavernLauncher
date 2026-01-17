@@ -39,6 +39,8 @@ class ConfigManager:
                 "use_sys_env": False,
                 "theme": "dark",
                 "first_run": True,
+                "agreement_accepted": False,  # 用户是否已同意使用协议
+                "agreement_version": "",  # 协议版本
                 "github": {
                     "mirror": "gh-proxy.org"
                 },
