@@ -246,8 +246,6 @@ class WelcomeDialog:
     def show(self):
         """显示欢迎对话框"""
         # 创建URL打开函数
-        async def open_tutorial(e):
-            await UrlLauncher().launch_url("https://www.yuque.com/yinsa-0wzmf/rcv7g3?")
 
         async def open_website(e):
             await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top")
@@ -313,10 +311,6 @@ class WelcomeDialog:
                 padding=20
             ),
             actions=[
-                ft.TextButton(
-                    "酒馆入门教程",
-                    on_click=open_tutorial
-                ),
                 ft.TextButton(
                     "启动器官网",
                     on_click=open_website
