@@ -302,9 +302,6 @@ class UniUI():
         async def open_bilibili(e):
             await UrlLauncher().launch_url("https://space.bilibili.com/298721157")
 
-        async def open_tutorial(e):
-            await UrlLauncher().launch_url("https://www.yuque.com/yinsa-0wzmf/rcv7g3?")
-
         async def open_donation(e):
             await UrlLauncher().launch_url("https://ifdian.net/order/create?user_id=8a03ea64ebc211ebad0e52540025c377")
 
@@ -333,13 +330,6 @@ class UniUI():
             "访问作者B站",
             icon=ft.Icons.OPEN_IN_BROWSER,
             on_click=open_bilibili,
-            style=self.BSytle,
-            height=40
-        ),
-        ft.Button(
-            "酒馆入门教程",
-            icon=ft.Icons.BOOK_ROUNDED,
-            on_click=open_tutorial,
             style=self.BSytle,
             height=40
         ),
