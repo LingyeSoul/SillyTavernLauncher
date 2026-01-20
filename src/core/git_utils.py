@@ -1,6 +1,50 @@
 import os
 import subprocess
 from features.system.env import Env
+from config.config_manager import ConfigManager
+
+
+def _get_git_command():
+    """
+    根据配置获取正确的git命令路径
+
+    Returns:
+        tuple: (git_cmd: str, needs_quotes: bool)
+        - git_cmd: git命令或完整路径
+        - needs_quotes: 是否需要引号包裹（系统环境不需要，内置环境需要）
+    """
+    config_manager = ConfigManager()
+    use_sys_env = config_manager.get("use_sys_env", False)
+
+    if use_sys_env:
+        # 使用系统环境，直接调用 git（不需要引号）
+        return "git", False
+    else:
+        # 使用内置环境，获取完整路径（需要引号包裹路径中的空格）
+        env = Env()
+        git_dir = env.get_git_path()
+        git_exe = os.path.join(git_dir, "git.exe")  # 添加可执行文件名
+        return git_exe, True
+
+
+def _format_git_cmd(git_cmd, needs_quotes, args):
+    """
+    格式化git命令字符串
+
+    Args:
+        git_cmd: git命令或路径
+        needs_quotes: 是否需要引号包裹
+        args: 命令参数
+
+    Returns:
+        str: 格式化后的完整命令
+    """
+    if needs_quotes:
+        # 内置环境：路径可能包含空格，需要引号
+        return f'"{git_cmd}" {args}'
+    else:
+        # 系统环境：直接使用git命令
+        return f'{git_cmd} {args}'
 
 def checkout_st_version(commit_hash, st_dir=None):
     """
@@ -26,12 +70,11 @@ def checkout_st_version(commit_hash, st_dir=None):
         return False, "SillyTavern目录不是Git仓库"
 
     try:
-        env = Env()
-        git_path = env.get_git_path()
+        git_cmd, needs_quotes = _get_git_command()
 
         # 步骤1：检查当前分支状态
         check_branch = subprocess.run(
-            f'"{git_path}git" rev-parse --abbrev-ref HEAD',
+            _format_git_cmd(git_cmd, needs_quotes, 'rev-parse --abbrev-ref HEAD'),
             shell=True,
             capture_output=True,
             text=True,
@@ -47,7 +90,7 @@ def checkout_st_version(commit_hash, st_dir=None):
 
             # 尝试切换到release分支
             checkout_release = subprocess.run(
-                f'"{git_path}git" checkout release',
+                _format_git_cmd(git_cmd, needs_quotes, 'checkout release'),
                 shell=True,
                 capture_output=True,
                 text=True,
@@ -59,7 +102,7 @@ def checkout_st_version(commit_hash, st_dir=None):
                 # 如果本地没有release分支，从远程创建
                 print("本地没有release分支，从远程创建...")
                 checkout_release = subprocess.run(
-                    f'"{git_path}git" checkout -b release origin/release',
+                    _format_git_cmd(git_cmd, needs_quotes, 'checkout -b release origin/release'),
                     shell=True,
                     capture_output=True,
                     text=True,
@@ -75,7 +118,7 @@ def checkout_st_version(commit_hash, st_dir=None):
             print(f"当前在 {current_branch} 分支，切换到release分支...")
 
             checkout_release = subprocess.run(
-                f'"{git_path}git" checkout release',
+                _format_git_cmd(git_cmd, needs_quotes, 'checkout release'),
                 shell=True,
                 capture_output=True,
                 text=True,
@@ -88,7 +131,7 @@ def checkout_st_version(commit_hash, st_dir=None):
 
         # 步骤4：检查工作区状态
         status_result = subprocess.run(
-            f'"{git_path}git" status --porcelain',
+            _format_git_cmd(git_cmd, needs_quotes, 'status --porcelain'),
             shell=True,
             capture_output=True,
             text=True,
@@ -108,7 +151,7 @@ def checkout_st_version(commit_hash, st_dir=None):
             ]
 
             if non_package_lock_changes:
-                stash_cmd = f'"{git_path}git" stash push -m "版本切换前保存{commit_hash[:7]}"'
+                stash_cmd = _format_git_cmd(git_cmd, needs_quotes, f'stash push -m "版本切换前保存{commit_hash[:7]}"')
                 stash_result = subprocess.run(
                     stash_cmd,
                     shell=True,
@@ -124,7 +167,7 @@ def checkout_st_version(commit_hash, st_dir=None):
             else:
                 # 只有package-lock.json被修改，恢复它
                 subprocess.run(
-                    f'"{git_path}git" checkout -- package-lock.json',
+                    _format_git_cmd(git_cmd, needs_quotes, 'checkout -- package-lock.json'),
                     shell=True,
                     capture_output=True,
                     text=True,
@@ -134,7 +177,7 @@ def checkout_st_version(commit_hash, st_dir=None):
 
         # 步骤6：使用git reset --hard切换到指定commit（保持在release分支上）
         print(f"在release分支上切换到commit {commit_hash[:7]}...")
-        reset_cmd = f'"{git_path}git" reset --hard {commit_hash}'
+        reset_cmd = _format_git_cmd(git_cmd, needs_quotes, f'reset --hard {commit_hash}')
 
         reset_result = subprocess.run(
             reset_cmd,
@@ -148,7 +191,7 @@ def checkout_st_version(commit_hash, st_dir=None):
         if reset_result.returncode == 0:
             # 验证当前状态
             verify_branch = subprocess.run(
-                f'"{git_path}git" rev-parse --abbrev-ref HEAD',
+                _format_git_cmd(git_cmd, needs_quotes, 'rev-parse --abbrev-ref HEAD'),
                 shell=True,
                 capture_output=True,
                 text=True,
@@ -190,12 +233,11 @@ def check_git_status(st_dir=None):
         st_dir = os.path.join(os.getcwd(), "SillyTavern")
 
     try:
-        env = Env()
-        git_path = env.get_git_path()
+        git_cmd, needs_quotes = _get_git_command()
 
         # 检查是否有未提交的更改
         result = subprocess.run(
-            f'"{git_path}git" status --porcelain',
+            _format_git_cmd(git_cmd, needs_quotes, 'status --porcelain'),
             shell=True,
             capture_output=True,
             text=True,
@@ -219,7 +261,7 @@ def check_git_status(st_dir=None):
                 # 只有package-lock.json被修改，自动恢复它
                 try:
                     subprocess.run(
-                        f'"{git_path}git" checkout -- package-lock.json',
+                        _format_git_cmd(git_cmd, needs_quotes, 'checkout -- package-lock.json'),
                         shell=True,
                         cwd=st_dir,
                         capture_output=True,
@@ -254,11 +296,10 @@ def get_current_commit(st_dir=None):
         st_dir = os.path.join(os.getcwd(), "SillyTavern")
 
     try:
-        env = Env()
-        git_path = env.get_git_path()
+        git_cmd, needs_quotes = _get_git_command()
 
         result = subprocess.run(
-            f'"{git_path}git" rev-parse HEAD',
+            _format_git_cmd(git_cmd, needs_quotes, 'rev-parse HEAD'),
             shell=True,
             capture_output=True,
             text=True,
@@ -297,12 +338,11 @@ def switch_git_remote_to_gitee(st_dir=None):
     
     try:
         # 切换远程地址为Gitee镜像
-        env = Env()
-        git_path = env.get_git_path()
-        
+        git_cmd, needs_quotes = _get_git_command()
+
         # 设置新的远程地址
-        command = f'\"{git_path}git\" remote set-url origin https://gitee.com/lingyesoul/SillyTavern.git'
-        
+        command = _format_git_cmd(git_cmd, needs_quotes, 'remote set-url origin https://gitee.com/lingyesoul/SillyTavern.git')
+
         result = subprocess.run(
             command,
             shell=True,
