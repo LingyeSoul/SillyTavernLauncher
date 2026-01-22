@@ -327,7 +327,7 @@ class WelcomeDialog:
         )
 
         # 保存按钮引用
-        self.ui_controls['action_button'] = self.dialog.actions[2]  # 操作按钮（验证答案/完成并关闭）
+        self.ui_controls['action_button'] = self.dialog.actions[1]  # 操作按钮（验证答案/完成并关闭）
 
         # 使用 Flet 的标准 API 显示对话框
         self.page.show_dialog(self.dialog)
