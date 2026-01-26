@@ -75,7 +75,7 @@ async def main(page: ft.Page):
             await UrlLauncher().launch_url("https://nodejs.org/zh-cn/download")
 
         async def open_launcher_download(e):
-            await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top/update.html")
+            await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top/update")
 
         dialog = ft.AlertDialog(
             title=ft.Text("系统环境检查失败"),
