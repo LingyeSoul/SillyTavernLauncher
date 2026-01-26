@@ -11,6 +11,7 @@ import aiohttp
 from version import VERSION
 import threading
 import re
+import html
 
 class VersionChecker:
     def __init__(self, page):
@@ -25,30 +26,335 @@ class VersionChecker:
         # 使用正确的 API 显示 SnackBar（适配 Flet 0.80.1）
         self.page.show_dialog(ft.SnackBar(ft.Text(v), show_close_icon=True, duration=3000))
 
+    async def fetch_changelog(self):
+        """
+        从 VitePress 页面获取更新日志
+
+        Returns:
+            str: Markdown 格式的更新日志，如果失败则返回 None
+        """
+        changelog_url = "https://sillytavern.lingyesoul.top/changelog.html"
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(changelog_url,
+                                       headers={'User-Agent': 'SillyTavernLauncher/1.0'},
+                                       timeout=aiohttp.ClientTimeout(total=15)) as response:
+                    if response.status == 200:
+                        html_content = await response.text()
+
+                        # 尝试从 VitePress 页面中提取原始 Markdown
+                        # VitePress 通常会在 <script> 标签中嵌入原始 Markdown
+                        # 查找模式: __VP_SITE_DATA__ 或类似的数据结构
+
+                        # 方法1: 查找 VitePress 的数据块
+                        markdown_match = re.search(r'__VP_SITE_DATA__\s*=\s*({.*?});', html_content, re.DOTALL)
+                        if markdown_match:
+                            try:
+                                import json as json_mod
+                                data = json_mod.loads(markdown_match.group(1))
+                                # 遍历数据查找 changelog 页面内容
+                                if isinstance(data, dict):
+                                    for page_path, page_data in data.items():
+                                        if isinstance(page_data, dict) and 'content' in page_data:
+                                            content = page_data.get('content', '')
+                                            if '更新日志' in content or 'changelog' in content.lower():
+                                                return content
+                            except:
+                                pass
+
+                        # 方法2: 如果上面失败，尝试查找 script 标签中的纯文本 Markdown
+                        # 某些 VitePress 配置可能直接在页面中包含 Markdown
+                        md_match = re.search(r'<script[^>]*type="text/markdown"[^>]*>(.*?)</script>', html_content, re.DOTALL)
+                        if md_match:
+                            markdown_text = md_match.group(1).strip()
+                            # HTML 解码
+                            markdown_text = html.unescape(markdown_text)
+                            return markdown_text
+
+                        # 方法3: 如果都找不到，尝试查找页面主体内容
+                        # 提取主要内容区域
+                        content_match = re.search(r'<div[^>]*class="content"[^>]*>(.*?)</div>', html_content, re.DOTALL)
+                        if content_match:
+                            content = content_match.group(1)
+                            # 移除 HTML 标签，提取纯文本
+                            content = re.sub(r'<[^>]+>', '\n', content)
+                            content = html.unescape(content)
+                            # 简单的 Markdown 格式化
+                            if '更新日志' in content or 'changelog' in content.lower():
+                                return self._format_text_as_markdown(content)
+
+                        app_logger.warning("无法从页面中提取更新日志")
+                        return None
+                    else:
+                        app_logger.error(f"获取更新日志失败，状态码: {response.status}")
+                        return None
+        except Exception as e:
+            app_logger.error(f"获取更新日志时出错: {e}")
+            return None
+
+    def _format_text_as_markdown(self, text):
+        """
+        将纯文本格式化为简单的 Markdown
+
+        Args:
+            text (str): 纯文本内容
+
+        Returns:
+            str: Markdown 格式的内容
+        """
+        lines = text.split('\n')
+        markdown_lines = []
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # 检测标题（全大写或特殊格式的行）
+            if line.isupper() or re.match(r'^[A-Z\s\-]+$', line):
+                level = line.count('-')
+                if level > 0:
+                    markdown_lines.append('#' * min(level, 3) + ' ' + line.replace('-', '').strip())
+                else:
+                    markdown_lines.append('## ' + line)
+            # 检测列表项（以数字或特殊字符开头）
+            elif re.match(r'^[\d\.\-\*]+\s', line):
+                markdown_lines.append(line)
+            else:
+                markdown_lines.append(line)
+
+        return '\n\n'.join(markdown_lines)
+
+    def _parse_changelog_to_components(self, markdown_text, max_entries=3):
+        """
+        将 Markdown 更新日志解析为 Flet UI 组件
+
+        Args:
+            markdown_text (str): Markdown 格式的更新日志
+            max_entries (int): 最多显示的版本数量
+
+        Returns:
+            list: Flet UI 组件列表
+        """
+        if not markdown_text:
+            return [ft.Text("暂无更新日志", color=ft.Colors.GREY_500)]
+
+        components = []
+        lines = markdown_text.split('\n')
+        current_version = None
+        current_section = None
+        current_items = []
+        version_count = 0
+
+        i = 0
+        while i < len(lines) and version_count < max_entries:
+            line = lines[i].strip()
+
+            # 检测版本标题（## vX.X.X (YYYY-MM-DD)）
+            version_match = re.match(r'^##\s+v?\d+\.\d+\.\d+\s*\((\d{4}-\d{2}-\d{2})\)', line)
+            if version_match:
+                # 保存上一个版本的内容
+                if current_version and current_items:
+                    components.append(self._create_version_block(current_version, current_section, current_items))
+                    version_count += 1
+
+                # 开始新版本
+                current_version = line.replace('##', '').strip()
+                current_section = None
+                current_items = []
+
+            # 检测章节标题（### ✨ 新增功能）
+            elif line.startswith('###'):
+                section_icon_map = {
+                    '✨': 'new',
+                    '🔧': 'improve',
+                    '🐛': 'fix',
+                    '📝': 'other',
+                    '⚠️': 'warning'
+                }
+
+                section_title = line.replace('###', '').strip()
+                current_section = section_title
+                current_items = []
+
+            # 检测列表项
+            elif line.startswith('-') or line.startswith('*') or re.match(r'^\d+\.', line):
+                item_text = line.lstrip('-*').lstrip('0123456789.').strip()
+                if item_text:
+                    current_items.append(item_text)
+
+            i += 1
+
+        # 添加最后一个版本
+        if current_version and current_items:
+            components.append(self._create_version_block(current_version, current_section, current_items))
+
+        if not components:
+            return [ft.Text("无法解析更新日志", color=ft.Colors.GREY_500)]
+
+        return components
+
+    def _create_version_block(self, version, section, items):
+        """
+        创建单个版本的 UI 块
+
+        Args:
+            version (str): 版本号和日期
+            section (str): 章节标题
+            items (list): 更新项列表
+
+        Returns:
+            ft.Container: 版本信息容器
+        """
+        # 解析版本号和日期
+        version_info = version.replace('v', '').strip()
+        version_match = re.match(r'([\d.]+)\s*\((\d{4}-\d{2}-\d{2})\)', version_info)
+
+        if version_match:
+            version_num = version_match.group(1)
+            date_str = version_match.group(2)
+        else:
+            version_num = version_info
+            date_str = ''
+
+        # 确定章节颜色
+        section_color_map = {
+            '✨': ft.Colors.BLUE_600,
+            '🔧': ft.Colors.ORANGE_600,
+            '🐛': ft.Colors.RED_600,
+            '📝': ft.Colors.GREY_600,
+            '⚠️': ft.Colors.AMBER_600
+        }
+
+        section_color = ft.Colors.GREY_700
+        for icon, color in section_color_map.items():
+            if icon in section:
+                section_color = color
+                break
+
+        # 构建版本块
+        content_controls = [
+            ft.Text(version_num, size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK),
+        ]
+
+        if date_str:
+            content_controls.append(ft.Text(f"发布日期: {date_str}", size=12, color=ft.Colors.GREY_600))
+
+        content_controls.append(ft.Divider(height=10, color=ft.Colors.GREY_300))
+
+        # 添加章节标题
+        if section:
+            clean_section = section
+            for icon in section_color_map.keys():
+                clean_section = clean_section.replace(icon, '').strip()
+
+            content_controls.append(
+                ft.Text(clean_section, size=14, weight=ft.FontWeight.W_500, color=section_color)
+            )
+
+        # 添加更新项
+        for item in items[:10]:  # 最多显示10项
+            # 清理 markdown 格式
+            clean_item = re.sub(r'\*\*([^*]+)\*\*', r'\1', item)  # 移除粗体标记
+            clean_item = clean_item.replace('`', '')  # 移除代码标记
+
+            content_controls.append(
+                ft.Text(
+                    f"• {clean_item}",
+                    size=12,
+                    color=ft.Colors.GREY_800,
+                    selectable=True
+                )
+            )
+
+        return ft.Container(
+            content=ft.Column(content_controls, tight=True),
+            padding=10,
+            border=ft.border.all(1, ft.Colors.GREY_300),
+            border_radius=5,
+            margin=ft.Margin.only(bottom=10)
+        )
+
     async def run_check(self):
         result = await self.check_for_updates()
+
         if result["has_error"]:
             self._showMsg(f"检查更新失败: {result['error_message']}")
         elif result["has_update"]:
-            # 创建URL打开函数
-            async def open_download_page(e):
-                await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top/update.html")
+            # 检查是否为测试版
+            if self.is_beta_version(result['latest_version']):
+                # 测试版，显示简单的更新对话框
+                async def open_download_page(e):
+                    await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top/update.html")
 
-            update_dialog = ft.AlertDialog(
-                title=ft.Text("发现新版本"),
-                content=ft.Column([
+                update_dialog = ft.AlertDialog(
+                    title=ft.Text("发现新版本（测试版）"),
+                    content=ft.Column([
+                        ft.Text(f"当前版本: {result['current_version']}", size=14),
+                        ft.Text(f"最新版本: {result['latest_version']}", size=14),
+                        ft.Text("这是一个测试版本，建议谨慎更新。", size=14, color=ft.Colors.AMBER_600),
+                    ], width=400, height=150),
+                    actions=[
+                        ft.TextButton("前往下载", on_click=open_download_page),
+                        ft.TextButton("稍后提醒", on_click=lambda e: self.page.pop_dialog()),
+                    ],
+                    actions_alignment=ft.MainAxisAlignment.END,
+                )
+                self.page.show_dialog(update_dialog)
+            else:
+                # 正式版，显示更新日志
+                async def open_download_page(e):
+                    await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top/update.html")
+
+                # 获取更新日志
+                changelog_components = []
+                changelog_markdown = await self.fetch_changelog()
+
+                if changelog_markdown:
+                    try:
+                        changelog_components = self._parse_changelog_to_components(changelog_markdown, max_entries=3)
+                    except Exception as e:
+                        app_logger.error(f"解析更新日志时出错: {e}")
+                        changelog_components = []
+
+                # 构建对话框内容
+                dialog_content = [
                     ft.Text(f"当前版本: {result['current_version']}", size=14),
                     ft.Text(f"最新版本: {result['latest_version']}", size=14),
-                    ft.Text("建议更新到最新版本以获得更好的体验和新功能。", size=14),
-                ], width=400, height=120),
-                actions=[
-                    ft.TextButton("前往下载", on_click=open_download_page),
-                    ft.TextButton("稍后提醒", on_click=lambda e: self.page.pop_dialog()),
-                ],
-                actions_alignment=ft.MainAxisAlignment.END,
-            )
-            # 使用 Flet 的标准 API 显示对话框
-            self.page.show_dialog(update_dialog)
+                    ft.Divider(height=20),
+                ]
+
+                if changelog_components:
+                    dialog_content.extend([
+                        ft.Text("更新日志:", size=16, weight=ft.FontWeight.BOLD),
+                        ft.Container(height=10),
+                    ])
+                    dialog_content.extend(changelog_components)
+                else:
+                    dialog_content.append(
+                        ft.Text("建议更新到最新版本以获得更好的体验和新功能。", size=14)
+                    )
+
+                # 创建可滚动的内容区域
+                content_column = ft.Column(
+                    dialog_content,
+                    width=600,
+                    height=400,
+                    scroll=ft.ScrollMode.AUTO,
+                    tight=True
+                )
+
+                update_dialog = ft.AlertDialog(
+                    title=ft.Text("发现新版本"),
+                    content=content_column,
+                    actions=[
+                        ft.TextButton("前往下载", on_click=open_download_page),
+                        ft.TextButton("稍后提醒", on_click=lambda e: self.page.pop_dialog()),
+                    ],
+                    actions_alignment=ft.MainAxisAlignment.END,
+                )
+                self.page.show_dialog(update_dialog)
         else:
             self._showMsg("当前已是最新版本")
     
