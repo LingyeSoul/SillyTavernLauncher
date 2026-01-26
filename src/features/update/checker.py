@@ -8,14 +8,14 @@ from flet import UrlLauncher
 import ssl
 import asyncio
 import aiohttp
-from version import VERSION
+from version import VERSION, RELEASES_VERSION
 import threading
 import re
-import html
 
 class VersionChecker:
     def __init__(self, page):
         self.config_manager = ConfigManager()
+        # 使用本地 VERSION 作为当前版本，与远程 RELEASES_VERSION 进行比较
         self.current_version = VERSION
         self.page = page
         # 禁用SSL证书验证（仅在需要时使用）
@@ -33,7 +33,7 @@ class VersionChecker:
         Returns:
             str: Markdown 格式的更新日志，如果失败则返回 None
         """
-        changelog_url = "https://sillytavern.lingyesoul.top/changelog.html"
+        changelog_url = "https://sillytavern.lingyesoul.top/changelog"
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -43,46 +43,31 @@ class VersionChecker:
                     if response.status == 200:
                         html_content = await response.text()
 
-                        # 尝试从 VitePress 页面中提取原始 Markdown
-                        # VitePress 通常会在 <script> 标签中嵌入原始 Markdown
-                        # 查找模式: __VP_SITE_DATA__ 或类似的数据结构
-
-                        # 方法1: 查找 VitePress 的数据块
-                        markdown_match = re.search(r'__VP_SITE_DATA__\s*=\s*({.*?});', html_content, re.DOTALL)
-                        if markdown_match:
-                            try:
-                                import json as json_mod
-                                data = json_mod.loads(markdown_match.group(1))
-                                # 遍历数据查找 changelog 页面内容
-                                if isinstance(data, dict):
-                                    for page_path, page_data in data.items():
-                                        if isinstance(page_data, dict) and 'content' in page_data:
-                                            content = page_data.get('content', '')
-                                            if '更新日志' in content or 'changelog' in content.lower():
-                                                return content
-                            except:
-                                pass
-
-                        # 方法2: 如果上面失败，尝试查找 script 标签中的纯文本 Markdown
-                        # 某些 VitePress 配置可能直接在页面中包含 Markdown
-                        md_match = re.search(r'<script[^>]*type="text/markdown"[^>]*>(.*?)</script>', html_content, re.DOTALL)
-                        if md_match:
-                            markdown_text = md_match.group(1).strip()
-                            # HTML 解码
-                            markdown_text = html.unescape(markdown_text)
-                            return markdown_text
-
-                        # 方法3: 如果都找不到，尝试查找页面主体内容
-                        # 提取主要内容区域
-                        content_match = re.search(r'<div[^>]*class="content"[^>]*>(.*?)</div>', html_content, re.DOTALL)
-                        if content_match:
-                            content = content_match.group(1)
-                            # 移除 HTML 标签，提取纯文本
-                            content = re.sub(r'<[^>]+>', '\n', content)
-                            content = html.unescape(content)
-                            # 简单的 Markdown 格式化
-                            if '更新日志' in content or 'changelog' in content.lower():
-                                return self._format_text_as_markdown(content)
+                        # 从 VitePress 渲染的 HTML 中提取内容并转换为 Markdown
+                        # 查找主内容区域 (vp-doc class)
+                        vp_doc_start = html_content.find('class="vp-doc')
+                        if vp_doc_start != -1:
+                            app_logger.info("找到 vp-doc 容器")
+                            # 回溯到 <div 标签开始
+                            div_start = html_content.rfind('<div', 0, vp_doc_start)
+                            # 找到 </main> 作为结束位置
+                            main_end = html_content.find('</main>', div_start)
+                            if main_end != -1:
+                                app_logger.info("找到 </main> 标签")
+                                # 提取 vp-doc 的内容（跳过开始的 <div> 标签）
+                                first_gt = html_content.find('>', div_start) + 1
+                                extracted_html = html_content[first_gt:main_end]
+                                app_logger.info(f"提取的 HTML 长度: {len(extracted_html)}")
+                                # 将 HTML 转换为 Markdown
+                                markdown_text = self._html_to_markdown(extracted_html)
+                                app_logger.info(f"转换后的 Markdown 长度: {len(markdown_text) if markdown_text else 0}")
+                                if markdown_text:
+                                    app_logger.info(f"Markdown 前100字符: {markdown_text[:100]}")
+                                    return markdown_text
+                            else:
+                                app_logger.warning("未找到 </main> 标签")
+                        else:
+                            app_logger.warning("未找到 vp-doc 容器")
 
                         app_logger.warning("无法从页面中提取更新日志")
                         return None
@@ -126,38 +111,201 @@ class VersionChecker:
 
         return '\n\n'.join(markdown_lines)
 
-    def _parse_changelog_to_components(self, markdown_text, max_entries=3):
+    def _html_to_markdown(self, html_content):
+        """
+        将 VitePress 渲染的 HTML 转换为 Markdown
+
+        Args:
+            html_content (str): HTML 内容
+
+        Returns:
+            str: Markdown 格式的内容
+        """
+        import html as html_module
+
+        # HTML 解码
+        html_content = html_module.unescape(html_content)
+
+        # 移除所有 script 和 style 标签
+        html_content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+        html_content = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+
+        # 移除 header-anchor 链接
+        html_content = re.sub(r'<a class="header-anchor"[^>]*>.*?</a>', '', html_content, flags=re.DOTALL)
+
+        # 在每个开始标签前添加换行（除了闭合标签）
+        html_content = re.sub(r'<(?!/)([a-z0-9]+)', r'\n<\1', html_content, flags=re.IGNORECASE)
+
+        # 移除所有闭合标签，但保留内容
+        html_content = re.sub(r'</[a-z0-9]+>', '', html_content, flags=re.IGNORECASE)
+
+        markdown_lines = []
+        lines = html_content.split('\n')
+        i = 0
+
+        while i < len(lines):
+            line = lines[i].strip()
+            if not line:
+                i += 1
+                continue
+
+            # 处理 h1 标题
+            if line.startswith('<h1'):
+                text = re.sub(r'<h1[^>]*>', '', line)
+                text = re.sub(r'<[^>]+>', '', text).strip()
+                if text:
+                    markdown_lines.append(f'# {text}')
+                i += 1
+
+            # 处理 h2 标题（版本标题）
+            elif line.startswith('<h2'):
+                text = re.sub(r'<h2[^>]*>', '', line)
+                text = re.sub(r'<[^>]+>', '', text).strip()
+                if text:
+                    markdown_lines.append(f'## {text}')
+                i += 1
+
+            # 处理 h3 标题（章节标题）
+            elif line.startswith('<h3'):
+                text = re.sub(r'<h3[^>]*>', '', line)
+                text = re.sub(r'<[^>]+>', '', text).strip()
+                if text:
+                    markdown_lines.append(f'### {text}')
+                i += 1
+
+            # 处理 <p> 标签
+            elif line.startswith('<p>'):
+                text = re.sub(r'<[^>]+>', '', line).strip()
+                if text:
+                    # 检查是否包含 strong 标签
+                    if '<strong>' in line or '<b>' in line:
+                        # 提取 strong 内容
+                        strong_match = re.search(r'<(strong|b)>(.*?)</\1>', line)
+                        if strong_match:
+                            bold_text = strong_match.group(2).strip()
+                            markdown_lines.append(f'- **{bold_text}**')
+                        else:
+                            markdown_lines.append(text)
+                    else:
+                        markdown_lines.append(text)
+                i += 1
+
+            # 处理列表项（收集后续的 code 标签）
+            elif line.startswith('<li>'):
+                # 提取当前行的文本
+                text = re.sub(r'<li>', '', line).strip()
+                list_parts = [text]
+
+                # 查找后续的 <code> 标签（属于同一个列表项）
+                j = i + 1
+                while j < len(lines):
+                    next_line = lines[j].strip()
+                    if next_line.startswith('<code>'):
+                        # 提取 code 内容
+                        code_match = re.search(r'<code>(.*?)</code>', next_line)
+                        if code_match:
+                            code_text = code_match.group(1)
+                            list_parts.append(code_text)
+                        j += 1
+                    elif next_line.startswith('<') and not next_line.startswith('<code'):
+                        # 遇到其他标签，停止收集
+                        break
+                    else:
+                        # 普通文本，也添加到列表项
+                        if next_line:
+                            list_parts.append(next_line)
+                        j += 1
+
+                # 合并所有内容为一行，用空格分隔
+                combined_text = ' - '.join(list_parts)
+                markdown_lines.append(f'- {combined_text}')
+                i = j  # 跳到已处理行的下一行
+
+            # 处理 hr 分隔线
+            elif line.startswith('<hr'):
+                markdown_lines.append('---')
+                i += 1
+
+            # 处理 <ul> 和 <ol> 标签（跳过）
+            elif line.startswith('<ul>') or line.startswith('<ol>') or line.startswith('</ul>') or line.startswith('</ol>'):
+                i += 1
+
+            # 处理普通文本行
+            elif not line.startswith('<'):
+                text = re.sub(r'<[^>]+>', '', line).strip()
+                if text:
+                    markdown_lines.append(text)
+                i += 1
+
+            # 其他情况，跳过
+            else:
+                i += 1
+
+        return '\n\n'.join(markdown_lines)
+
+    def _parse_changelog_to_components(self, markdown_text, local_version, remote_version):
         """
         将 Markdown 更新日志解析为 Flet UI 组件
 
+        只显示本地版本和远程版本之间的版本日志
+
         Args:
             markdown_text (str): Markdown 格式的更新日志
-            max_entries (int): 最多显示的版本数量
+            local_version (str): 本地版本号
+            remote_version (str): 远程版本号
 
         Returns:
             list: Flet UI 组件列表
         """
         if not markdown_text:
-            return [ft.Text("暂无更新日志", color=ft.Colors.GREY_500)]
+            return [ft.Text("暂无更新日志")]
 
-        components = []
+        # 版本比较辅助函数
+        def compare_version_nums(v1, v2):
+            """比较两个版本号，返回 1(v1>v2), -1(v1<v2), 0(相等)"""
+            v1_parts = [int(x) for x in v1.replace('v', '').split('.') if x.isdigit()]
+            v2_parts = [int(x) for x in v2.replace('v', '').split('.') if x.isdigit()]
+
+            for i in range(max(len(v1_parts), len(v2_parts))):
+                v1_num = v1_parts[i] if i < len(v1_parts) else 0
+                v2_num = v2_parts[i] if i < len(v2_parts) else 0
+
+                if v1_num > v2_num:
+                    return 1
+                elif v1_num < v2_num:
+                    return -1
+            return 0
+
+        # 解析本地和远程版本号
+        local_clean = local_version.replace('v', '').strip()
+        remote_clean = remote_version.replace('v', '').strip()
+
+        app_logger.info(f"解析更新日志 - 本地版本: {local_clean}, 远程版本: {remote_clean}")
+
+        # 第一步：解析所有版本的更新日志
+        all_versions = []
         lines = markdown_text.split('\n')
         current_version = None
         current_section = None
         current_items = []
-        version_count = 0
 
         i = 0
-        while i < len(lines) and version_count < max_entries:
+        while i < len(lines):
             line = lines[i].strip()
 
             # 检测版本标题（## vX.X.X (YYYY-MM-DD)）
-            version_match = re.match(r'^##\s+v?\d+\.\d+\.\d+\s*\((\d{4}-\d{2}-\d{2})\)', line)
+            version_match = re.match(r'^##\s+v?(\d+\.\d+\.\d+)', line)
             if version_match:
+                version_num = version_match.group(1)
+                app_logger.info(f"解析到版本: {version_num}")
+
                 # 保存上一个版本的内容
                 if current_version and current_items:
-                    components.append(self._create_version_block(current_version, current_section, current_items))
-                    version_count += 1
+                    all_versions.append({
+                        'version': current_version,
+                        'section': current_section,
+                        'items': current_items.copy()
+                    })
 
                 # 开始新版本
                 current_version = line.replace('##', '').strip()
@@ -179,16 +327,67 @@ class VersionChecker:
                 current_items = []
 
             # 检测列表项
-            elif line.startswith('-') or line.startswith('*') or re.match(r'^\d+\.', line):
-                item_text = line.lstrip('-*').lstrip('0123456789.').strip()
-                if item_text:
+            elif line.startswith('-') or line.startswith('*'):
+                # 跳过分隔线（只由 -、* 或 _ 组成的行）
+                if re.match(r'^[\-\*_]{3,}\s*$', line):
+                    pass
+                else:
+                    # 移除 - 或 * 前缀
+                    item_text = re.sub(r'^[\-\*]\s+', '', line).strip()
+                    # 过滤无意义的列表项（空、只有符号、或只有连接符）
+                    if item_text and not re.match(r'^[\-\s]+$', item_text):
+                        current_items.append(item_text)
+            # 处理数字开头的列表项（但不去除数字，因为可能是内容的一部分）
+            elif re.match(r'^\d+\.', line):
+                item_text = line.strip()
+                # 过滤无意义的列表项
+                if item_text and not re.match(r'^[\d\.\s]+$', item_text):
                     current_items.append(item_text)
 
             i += 1
 
         # 添加最后一个版本
         if current_version and current_items:
-            components.append(self._create_version_block(current_version, current_section, current_items))
+            all_versions.append({
+                'version': current_version,
+                'section': current_section,
+                'items': current_items.copy()
+            })
+
+        app_logger.info(f"共解析到 {len(all_versions)} 个版本")
+
+        # 第二步：根据本地和远程版本进行过滤
+        filtered_versions = []
+        for ver_data in all_versions:
+            # 从版本字符串中提取版本号
+            version_match = re.search(r'(\d+\.\d+\.\d+)', ver_data['version'])
+            if version_match:
+                version_num = version_match.group(1)
+
+                # 检查版本是否在本地和远程之间
+                # 版本应该大于本地版本，且小于等于远程版本
+                should_include = (
+                    compare_version_nums(version_num, local_clean) > 0 and
+                    compare_version_nums(version_num, remote_clean) <= 0
+                )
+
+                app_logger.info(f"版本 {version_num}: 是否包含 = {should_include} (>{local_clean} and <={remote_clean})")
+
+                if should_include:
+                    filtered_versions.append(ver_data)
+
+        app_logger.info(f"过滤后剩余 {len(filtered_versions)} 个版本")
+
+        # 第三步：将过滤后的版本转换为 UI 组件
+        components = []
+        for ver_data in filtered_versions:
+            components.append(self._create_version_block(
+                ver_data['version'],
+                ver_data['section'],
+                ver_data['items']
+            ))
+
+        app_logger.info(f"最终生成 {len(components)} 个版本块")
 
         if not components:
             return [ft.Text("无法解析更新日志", color=ft.Colors.GREY_500)]
@@ -235,22 +434,19 @@ class VersionChecker:
 
         # 构建版本块
         content_controls = [
-            ft.Text(version_num, size=18, weight=ft.FontWeight.BOLD, color=ft.Colors.BLACK),
+            ft.Text(version_num, size=18, weight=ft.FontWeight.BOLD),
         ]
 
         if date_str:
-            content_controls.append(ft.Text(f"发布日期: {date_str}", size=12, color=ft.Colors.GREY_600))
+            content_controls.append(ft.Text(f"发布日期: {date_str}", size=12))
 
         content_controls.append(ft.Divider(height=10, color=ft.Colors.GREY_300))
 
         # 添加章节标题
         if section:
-            clean_section = section
-            for icon in section_color_map.keys():
-                clean_section = clean_section.replace(icon, '').strip()
-
+            # 保留原始 section（包含 emoji），只用于颜色判断
             content_controls.append(
-                ft.Text(clean_section, size=14, weight=ft.FontWeight.W_500, color=section_color)
+                ft.Text(section, size=14, weight=ft.FontWeight.W_500, color=section_color)
             )
 
         # 添加更新项
@@ -263,7 +459,6 @@ class VersionChecker:
                 ft.Text(
                     f"• {clean_item}",
                     size=12,
-                    color=ft.Colors.GREY_800,
                     selectable=True
                 )
             )
@@ -286,7 +481,7 @@ class VersionChecker:
             if self.is_beta_version(result['latest_version']):
                 # 测试版，显示简单的更新对话框
                 async def open_download_page(e):
-                    await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top/update.html")
+                    await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top/update")
 
                 update_dialog = ft.AlertDialog(
                     title=ft.Text("发现新版本（测试版）"),
@@ -303,52 +498,23 @@ class VersionChecker:
                 )
                 self.page.show_dialog(update_dialog)
             else:
-                # 正式版，显示更新日志
+                # 正式版，显示简单的更新对话框
                 async def open_download_page(e):
-                    await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top/update.html")
+                    await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top/update")
 
-                # 获取更新日志
-                changelog_components = []
-                changelog_markdown = await self.fetch_changelog()
-
-                if changelog_markdown:
-                    try:
-                        changelog_components = self._parse_changelog_to_components(changelog_markdown, max_entries=3)
-                    except Exception as e:
-                        app_logger.error(f"解析更新日志时出错: {e}")
-                        changelog_components = []
-
-                # 构建对话框内容
-                dialog_content = [
-                    ft.Text(f"当前版本: {result['current_version']}", size=14),
-                    ft.Text(f"最新版本: {result['latest_version']}", size=14),
-                    ft.Divider(height=20),
-                ]
-
-                if changelog_components:
-                    dialog_content.extend([
-                        ft.Text("更新日志:", size=16, weight=ft.FontWeight.BOLD),
-                        ft.Container(height=10),
-                    ])
-                    dialog_content.extend(changelog_components)
-                else:
-                    dialog_content.append(
-                        ft.Text("建议更新到最新版本以获得更好的体验和新功能。", size=14)
-                    )
-
-                # 创建可滚动的内容区域
-                content_column = ft.Column(
-                    dialog_content,
-                    width=600,
-                    height=400,
-                    scroll=ft.ScrollMode.AUTO,
-                    tight=True
-                )
+                async def open_changelog(e):
+                    await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top/changelog")
 
                 update_dialog = ft.AlertDialog(
                     title=ft.Text("发现新版本"),
-                    content=content_column,
+                    content=ft.Column([
+                        ft.Text(f"当前版本: {result['current_version']}", size=14),
+                        ft.Text(f"最新版本: {result['latest_version']}", size=14),
+                        ft.Divider(height=20),
+                        ft.Text("建议更新到最新版本以获得更好的体验和新功能。", size=14),
+                    ], width=400, height=150),
                     actions=[
+                        ft.TextButton("查看更新日志", on_click=open_changelog),
                         ft.TextButton("前往下载", on_click=open_download_page),
                         ft.TextButton("稍后提醒", on_click=lambda e: self.page.pop_dialog()),
                     ],
@@ -383,35 +549,34 @@ class VersionChecker:
 
     async def get_latest_release_version_from_raw(self):
         """
-        通过GitHub RAW链接获取最新版本号
-        
+        通过GitHub RAW链接获取远程的RELEASES_VERSION（正式发布版本号）
+
         Returns:
-            str: 最新版本号，如果出错则返回None
+            str: 远程RELEASES_VERSION版本号，如果出错则返回None
         """
         mirror = self.get_github_mirror()
-        
+
         # 构建RAW URL
         if mirror == "github":
             raw_url = "https://raw.githubusercontent.com/LingyeSoul/SillyTavernLauncher/refs/heads/main/src/version.py"
         else:
             # 使用镜像站
             raw_url = "https://gitee.com/lingyesoul/SillyTavernLauncher/raw/main/src/version.py"
-        
+
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(raw_url, headers={'User-Agent': 'SillyTavernLauncher/1.0'}, timeout=aiohttp.ClientTimeout(total=10)) as response:
                     if response.status == 200:
                         content = await response.text()
-                        # 解析内容提取版本号
+                        # 解析内容提取远程的 RELEASES_VERSION（正式发布版本号）
                         for line in content.split('\n'):
-                            if line.startswith('VERSION ='):
+                            if line.startswith('RELEASES_VERSION ='):
                                 # 提取版本号值
                                 version = line.split('=')[1].strip().strip("'\"")
                                 return version
                     return None
-                
+
         except aiohttp.ClientError as e:
-            app_logger.error(f"网络错误: {e}")
             app_logger.error(f"网络错误: {e}")
             return None
         except Exception as e:
@@ -619,40 +784,40 @@ class VersionChecker:
     async def check_for_updates(self):
         """
         检查是否有更新版本
-        
+
         Returns:
             dict: 包含检查结果的字典
         """
         latest_version = await self.get_latest_release_version_from_raw()
-        
+
         if latest_version is None:
             # 尝试使用API方式获取
             latest_version = await self.get_latest_release_version()
-            
+
         if latest_version is None:
             return {
                 "has_error": True,
                 "error_message": "无法获取最新版本信息，请检查网络连接或稍后重试",
-                "current_version": self.current_version,
+                "current_version": VERSION,  # 显示当前运行的实际版本
                 "latest_version": None,
                 "has_update": False
             }
-        
+
         try:
             comparison = self.compare_versions(self.current_version, latest_version)
         except Exception as e:
             return {
                 "has_error": True,
                 "error_message": f"版本比较时出错: {str(e)}",
-                "current_version": self.current_version,
+                "current_version": VERSION,  # 显示当前运行的实际版本
                 "latest_version": latest_version,
                 "has_update": False
             }
-        
+
         return {
             "has_error": False,
             "error_message": None,
-            "current_version": self.current_version,
+            "current_version": VERSION,  # 显示当前运行的实际版本
             "latest_version": latest_version,
             "has_update": comparison < 0
         }

@@ -1,2 +1,2 @@
-VERSION = 'v1.3.3测试版1'
+VERSION = 'v1.3.3'
 RELEASES_VERSION = 'v1.3.2'
