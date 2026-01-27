@@ -1607,9 +1607,8 @@ class UiEvent:
                 # 添加ANSI颜色支持
                 env['FORCE_COLOR'] = '1'
 
-                # 禁用Python和Node.js的输出缓冲，确保实时输出
+                # 禁用输出缓冲，确保实时输出
                 env['PYTHONUNBUFFERED'] = '1'
-                env['NODE_OPTIONS'] = '--no-warnings'  # 禁用警告，减少输出干扰
             else:
                 env = os.environ.copy()
 

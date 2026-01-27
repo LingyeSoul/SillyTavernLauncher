@@ -923,6 +923,76 @@ class AsyncTerminal:
 
             return None
 
+    async def _consume_oversized_chunk(self, reader, consumed_bytes, is_first_chunk):
+        """
+        消费超长行的数据块（辅助方法）
+
+        Args:
+            reader: StreamReader 对象
+            consumed_bytes: 需要消费的字节数
+            is_first_chunk: 是否是第一个溢出的块（需要保存）
+
+        Returns:
+            bytes: 如果是第一个块，返回保存的数据；否则返回空 bytes
+        """
+        chunk = await reader.readexactly(consumed_bytes)
+
+        if is_first_chunk:
+            # 第一个溢出块需要保存
+            if self._debug_mode:
+                self.add_log(f"[DEBUG] 检测到超长行 (缓冲区 {consumed_bytes} 字节)，继续读取...")
+            return chunk
+        else:
+            # 后续块直接丢弃
+            if self._debug_mode:
+                self.add_log(f"[DEBUG] 继续丢弃超长行部分 ({len(chunk)} 字节)")
+            return b''
+
+    async def _safe_readline(self, reader):
+        """
+        安全地读取一行，处理超过 64KB 限制的超长行
+
+        使用 readuntil() + LimitOverrunError 处理，参考：
+        https://stackoverflow.com/questions/78089594/python-reading-long-lines-with-asyncio-streamreader-readline
+
+        Returns:
+            bytes: 读取的行（包含换行符），如果到达流结束则返回空 bytes
+        """
+        import asyncio
+
+        line_parts = []
+        is_discarding = False  # 标记是否需要丢弃后续部分（已超过单次读取限制）
+
+        while True:
+            try:
+                # 尝试读取直到换行符
+                chunk = await reader.readuntil(b'\n')
+
+                if not is_discarding:
+                    # 正常情况：直接返回完整行
+                    return chunk
+                else:
+                    # 已经在丢弃模式，这行太长被截断了
+                    # 继续丢弃直到找到换行符
+                    return line_parts[0] if line_parts else chunk
+
+            except asyncio.LimitOverrunError as e:
+                # 缓冲区溢出：行长度超过了 StreamReader 的限制
+                if not is_discarding:
+                    # 第一次检测到溢出，保存已读取的部分
+                    first_chunk = await self._consume_oversized_chunk(reader, e.consumed, True)
+                    line_parts.append(first_chunk)
+                    is_discarding = True
+                else:
+                    # 已经在丢弃模式，消费数据直到找到换行符
+                    await self._consume_oversized_chunk(reader, e.consumed, False)
+
+            except asyncio.IncompleteReadError as e:
+                # 流结束
+                if e.partial:
+                    return e.partial
+                return b''
+
     async def _read_stream_output(self, stream, is_stderr=False):
         """
         异步读取进程输出（重构版：使用 StreamReader，简化逻辑）
@@ -932,11 +1002,11 @@ class AsyncTerminal:
             is_stderr: 是否为错误流（用于调试标识）
 
         重构说明：
-        - 使用 asyncio StreamReader 的 readline() 方法，更简单可靠
+        - 使用 asyncio StreamReader 的方法，更简单可靠
         - 移除复杂的缓冲区管理和自适应逻辑
         - 确保流在结束时被正确关闭
         - 减少内存泄漏风险
-        - 处理超长行导致的 ValueError: Separator is found, but chunk is longer than limit
+        - 使用 _safe_readline() 处理超长行（>64KB）问题
         """
         import asyncio
 
@@ -946,17 +1016,15 @@ class AsyncTerminal:
             self.add_log(f"[DEBUG] 开始读取 {stream_type} 流")
 
         try:
-            # 使用 readline() 逐行读取，自动处理缓冲
-            while True:
+            # 使用 safe_readline() 逐行读取，自动处理超长行
+            while not stream.at_eof():
                 try:
-                    # 读取一行（自动处理换行符和缓冲）
-                    line = await asyncio.wait_for(stream.readline(), timeout=0.1)
+                    # 读取一行（自动处理超长行和缓冲）
+                    line = await asyncio.wait_for(self._safe_readline(stream), timeout=0.1)
 
                     if not line:
                         # 空行表示流结束
-                        if stream.at_eof():
-                            break
-                        continue
+                        break
 
                     # 解码并清理
                     try:
@@ -964,33 +1032,16 @@ class AsyncTerminal:
                         if decoded_line:  # 只输出非空行
                             self.add_log(decoded_line)
                     except Exception as decode_error:
+                        # 始终记录解码错误（不仅是调试模式）
+                        app_logger.warning(f"解码错误在 {stream_type}: {decode_error}")
                         if self._debug_mode:
-                            self.add_log(f"[DEBUG] 解码错误: {decode_error}")
+                            self.add_log(f"[DEBUG] 解码失败: {decode_error}")
 
                 except asyncio.TimeoutError:
                     # 超时不是错误，继续等待
                     if stream.at_eof():
                         break
                     continue
-
-                except ValueError as line_error:
-                    # 处理超长行错误: "Separator is found, but chunk is longer than limit"
-                    # 当输出行超过 StreamReader 的默认限制（64KB）时触发
-                    if "chunk is longer than limit" in str(line_error):
-                        # 使用 read() 读取固定大小的块来处理超长行
-                        try:
-                            chunk = await asyncio.wait_for(stream.read(8192), timeout=0.1)
-                            if chunk:
-                                decoded_chunk = chunk.decode('utf-8', errors='replace')
-                                self.add_log(decoded_chunk.rstrip('\r\n'))
-                            elif stream.at_eof():
-                                break
-                        except asyncio.TimeoutError:
-                            if stream.at_eof():
-                                break
-                    else:
-                        # 其他 ValueError，向上抛出
-                        raise
 
         except asyncio.CancelledError:
             # 任务被取消，正常退出
@@ -1048,8 +1099,14 @@ class AsyncTerminal:
         terminal_weak_ref = weakref.ref(self)
 
         def on_task_done(task):
-            """任务完成回调 - 使用弱引用避免循环引用"""
-            import time
+            """任务完成回调 - 零阻塞优化版
+
+            优化说明：
+            - 移除所有 time.sleep() 调用，避免阻塞事件循环
+            - 直接检查进程 returncode，不主动等待
+            - 依赖自然回调链来检测进程结束
+            - 性能提升：消除最多 500ms 的阻塞时间
+            """
             try:
                 # 通过弱引用获取对象
                 term_ref = terminal_weak_ref() if terminal_weak_ref else None
@@ -1069,38 +1126,18 @@ class AsyncTerminal:
                 if term_ref._debug_mode and before_count != after_count:
                     term_ref.add_log(f"[DEBUG] 任务清理: {before_count} -> {after_count}")
 
-                # 如果进程存在，等待一小段时间让它有机会更新 returncode
-                if proc_ref and proc_ref.returncode is None:
-                    # 最多等待 0.5 秒，检查进程是否结束
-                    for _ in range(10):
-                        time.sleep(0.05)
-                        if proc_ref.returncode is not None:
-                            break
-
-                # 如果进程已结束，移除进程引用
-                # 注意：StreamReader 会自动关闭，无需手动关闭
+                # ========== 核心逻辑：直接检查进程状态，不等待 ==========
                 if proc_ref and proc_ref.returncode is not None:
+                    # 进程已结束，移除进程引用
                     if term_ref._debug_mode:
                         term_ref.add_log(f"[DEBUG] 进程已结束 (PID={proc_ref.pid}, returncode={proc_ref.returncode})")
-
-                    # 移除进程引用（添加重试机制）
-                    max_retries = 3
-                    for attempt in range(max_retries):
-                        removed = term_ref.remove_process(proc_ref.pid)
-                        if removed:
-                            if term_ref._debug_mode:
-                                term_ref.add_log(f"[DEBUG] 已移除进程 PID={proc_ref.pid}")
-                            break
-                        elif attempt < max_retries - 1:
-                            time.sleep(0.1)
-                        else:
-                            if term_ref._debug_mode:
-                                term_ref.add_log(f"[WARNING] 未能移除进程 PID={proc_ref.pid}")
+                    term_ref.remove_process(proc_ref.pid)
                 elif term_ref._debug_mode and proc_ref:
+                    # 进程仍在运行（returncode = None）
                     term_ref.add_log(f"[DEBUG] 进程仍在运行 (PID={proc_ref.pid})")
 
             except Exception as e:
-                # 记录回调中的错误（不再静默忽略）
+                # 记录回调中的错误
                 import traceback
                 term_ref = terminal_weak_ref() if terminal_weak_ref else None
                 if term_ref:
