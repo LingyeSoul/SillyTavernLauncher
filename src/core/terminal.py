@@ -1,5 +1,4 @@
 import flet as ft
-import datetime
 import re
 import threading
 import queue
@@ -84,7 +83,6 @@ class AsyncTerminal:
             padding=10
         )
         # 初始化启动时间戳
-        self.launch_timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
         # 读取配置以确定是否启用局域网访问
         if page.platform == ft.PagePlatform.WINDOWS:
@@ -94,7 +92,7 @@ class AsyncTerminal:
                 try:
                     from network import get_local_ip
                 except ImportError:
-                    from src.network import get_local_ip
+                    from core.network import get_local_ip
 
                 if local_enabled:
                     local_ip = get_local_ip()
@@ -136,25 +134,13 @@ class AsyncTerminal:
         self._stop_event = threading.Event()
         self._max_log_entries = 1500
 
-        # UI更新防抖
-        self._update_pending = False
-        self._update_lock = threading.Lock()
-        self._update_timer = None
-        self._last_ui_update = time.time()
-        self._is_shutting_down = False
-
         # ========== 新增：异步任务和进程管理锁 ==========
         self._output_tasks_lock = threading.Lock()  # 保护 _output_tasks 列表
         self._active_processes_lock = threading.Lock()  # 保护 active_processes 列表
-        self._ui_update_fail_count = 0
-        self._page_ready = False
-        self._last_refresh_time = 0
-        self._refresh_cooldown = 0.05
 
         # ========== 新增：线程引用管理 ==========
         self._log_thread = None
         self._cleanup_thread = None
-        self._threads_lock = threading.Lock()  # 保护线程列表
 
         # ========== 新增：定时器跟踪（防止内存泄漏） ==========
         self._active_timers = []  # 跟踪所有活动的定时器
@@ -166,7 +152,6 @@ class AsyncTerminal:
         # 启动日志处理循环
         self._start_log_processing_loop()
 
-    # ============ 日志处理循环 ============
 
     def _start_log_processing_loop(self):
         """启动日志处理循环"""
@@ -183,51 +168,6 @@ class AsyncTerminal:
         # 在单独的线程中运行日志处理循环（保持为 daemon，避免阻塞程序退出）
         self._log_thread = threading.Thread(target=log_processing_worker, daemon=True)
         self._log_thread.start()
-
-    def _verify_process_running(self, pid):
-        """使用 tasklist 验证进程是否仍在运行"""
-        import subprocess
-        try:
-            result = subprocess.run(
-                ['tasklist', '/FI', f'PID eq {pid}', '/FO', 'CSV'],
-                capture_output=True,
-                text=True,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                encoding='gbk',
-                errors='ignore'
-            )
-
-            self.add_log(f"[DEBUG] 验证 PID={pid}: tasklist 返回码={result.returncode}")
-            if result.stdout:
-                self.add_log(f"[DEBUG] tasklist 输出: {result.stdout[:200]}")
-
-            is_running = str(pid) in result.stdout and result.returncode == 0
-            self.add_log(f"[DEBUG] PID={pid} 是否运行: {is_running}")
-            return is_running
-        except Exception as e:
-            self.add_log(f"[DEBUG] 验证 PID={pid} 时出错: {str(e)}")
-            return False
-
-    def _kill_process_by_pid(self, pid, use_tree=True):
-        """使用 taskkill 强制杀死指定 PID 的进程"""
-        import subprocess
-        try:
-            cmd = ['taskkill', '/F', '/PID', str(pid)]
-            if use_tree:
-                cmd.append('/T')
-
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-                text=True,
-                encoding='gbk',
-                errors='ignore'
-            )
-
-            return result.returncode in [0, 1]
-        except Exception:
-            return False
 
     # ============ 批处理方法（使用旧版本实现）============
 
@@ -1397,18 +1337,6 @@ class AsyncTerminal:
             # 析构函数中不应该抛出异常
             pass
 
-    def __enter__(self):
-        """支持上下文管理器协议"""
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """退出上下文时自动清理资源"""
-        try:
-            self.stop_processes()
-            self.cleanup_all_resources(aggressive=True)
-        except Exception as e:
-            app_logger.exception("清理资源时出错")
-        return False  # 不抑制异常
 
     def get_resource_stats(self):
         """获取资源统计信息"""
@@ -1443,23 +1371,6 @@ class AsyncTerminal:
         if self.view.page is None:
             return False
         return True
-
-    def safe_update_page(self):
-        """安全地更新页面"""
-        if not self.is_page_valid():
-            return False
-
-        try:
-            self.page.update()
-            return True
-        except RuntimeError as e:
-            if "Event loop is closed" in str(e) or "window is closed" in str(e):
-                self.page = None
-                return False
-        except AssertionError:
-            # Flet 控件树问题
-            return False
-        return False
 
     def cleanup_ui_controls(self):
         """清理 UI 控件和事件回调"""
@@ -1662,12 +1573,3 @@ class AsyncTerminal:
         except Exception as e:
             app_logger.exception("日志处理未知错误")
 
-    def set_page_ready(self, ready=True):
-        """设置页面就绪标志"""
-        self._page_ready = ready
-        if ready:
-            if not self._log_queue.empty():
-                try:
-                    self._schedule_batch_process()
-                except Exception:
-                    pass
