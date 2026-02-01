@@ -514,11 +514,6 @@ class UniUI():
             )
         )
 
-        # 修复：标记页面已就绪，确保终端可以安全更新 UI
-        # 这必须在 page.add() 之后调用，因为此时控件才被添加到页面树
-        if hasattr(self, 'terminal'):
-            self.terminal.set_page_ready(True)
-
     # 视图映射表 - 遵循 Flet NavigationRail 最佳实践
     # 将索引映射到视图属性和显示名称
     _VIEW_MAP = {
