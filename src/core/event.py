@@ -1216,7 +1216,12 @@ class UiEvent:
     def listen_changed(self,e):
         self.stCfg.listen = e.control.value
         if self.stCfg.listen:
-            self.stCfg.create_whitelist()
+            if not self.stCfg.create_whitelist():
+                self.show_error_dialog("白名单创建失败", "无法创建白名单文件，请检查日志")
+                self.stCfg.listen = False
+                e.control.value = False
+                e.control.update()
+                return
         self.stCfg.save_config()
         self.showMsg('配置文件已保存')
 
@@ -1827,7 +1832,10 @@ class UiEvent:
 
             # 创建 stcfg 实例并调用 create_whitelist
             config = stcfg()
-            config.create_whitelist()
+            if not config.create_whitelist():
+                self.terminal.add_log("白名单重置失败: 无法创建白名单文件")
+                self.page.show_dialog(ft.SnackBar(ft.Text("白名单重置失败，请检查日志")))
+                return
 
             self.terminal.add_log("白名单已重置完成")
             self.page.show_dialog(ft.SnackBar(ft.Text("白名单已重置完成")))

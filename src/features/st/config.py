@@ -107,6 +107,14 @@ class stcfg:
             app_logger.warning(f"无法从IP {local_ip} 提取网段")
             return False
 
+        # 缓存 IP 部分，避免重复计算
+        ip_parts = local_ip.split('.')
+        # 验证IP格式,确保至少有4个部分
+        if len(ip_parts) < 4:
+            app_logger.warning(f"IP格式无效,期望4个部分但得到{len(ip_parts)}个: {local_ip}")
+            return False
+        broader_subnet = f"{ip_parts[0]}.{ip_parts[1]}.*.*"
+
         # 检查白名单中是否已包含正确的网段
         subnet_exists = False
         whitelist_lines = []
@@ -116,7 +124,7 @@ class stcfg:
                 continue
             whitelist_lines.append(line)
             # 检查是否已包含当前网段（支持 192.168.*.* 和 192.168.1.* 格式）
-            if line == current_subnet or line == f"{local_ip.split('.')[0]}.{local_ip.split('.')[1]}.*.*":
+            if line == current_subnet or line == broader_subnet:
                 subnet_exists = True
 
         # 如果网段已存在，无需更新
@@ -124,12 +132,22 @@ class stcfg:
             return False
 
         # 构建新的白名单内容
-        # 移除旧的通配符网段（如 192.168.*.*），保留本地回环地址
+        # 只移除与当前网段冲突的旧通配符网段，保留其他用户配置
         new_whitelist_lines = []
         for line in whitelist_lines:
-            # 保留 127.0.0.1 和具体的IP地址
-            if line == "127.0.0.1" or ('*' not in line and '.' in line):
+            # 保留 127.0.0.1
+            if line == "127.0.0.1":
                 new_whitelist_lines.append(line)
+            # 保留具体IP地址（不含通配符）
+            elif '*' not in line and '.' in line:
+                new_whitelist_lines.append(line)
+            # 保留不冲突的通配符网段（如 10.*.*.*，如果当前是 192.168.1.*）
+            elif '*' in line:
+                line_prefix = line.split('.')[0] if '.' in line else ''
+                # 验证第一部分是否为有效数字
+                if line_prefix and line_prefix.isdigit() and line_prefix != ip_parts[0]:
+                    # 第一段不同，不冲突
+                    new_whitelist_lines.append(line)
 
         # 添加当前网段和本地回环地址
         if current_subnet not in new_whitelist_lines:
@@ -155,11 +173,13 @@ class stcfg:
         创建或更新白名单文件
         如果白名单不存在，则创建并使用当前设备的网段
         如果白名单存在但网段不匹配，则自动更新
+
+        Returns:
+            bool: 操作是否成功
         """
         # 先尝试检查并更新现有白名单
         if os.path.exists(self.whitelist_path):
-            self._check_and_update_whitelist_subnet()
-            return
+            return self._check_and_update_whitelist_subnet()
 
         # 白名单不存在，创建新的
         try:
@@ -184,5 +204,7 @@ class stcfg:
                     # 无法获取本地IP，使用默认值
                     f.write("192.168.*.*\n127.0.0.1\n")
                     app_logger.warning("无法获取本地IP，白名单使用默认值")
+            return True
         except Exception as e:
             app_logger.error(f"白名单文件创建失败: {str(e)}")
+            return False
