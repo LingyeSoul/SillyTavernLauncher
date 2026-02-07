@@ -25,8 +25,8 @@ class UniUI():
         self.config = self.config_manager.config
         self.stcfg = stcfg()
 
-        # 初始化终端和事件处理
-        self.terminal = AsyncTerminal(page)
+        # 初始化终端和事件处理（传递局域网访问配置）
+        self.terminal = AsyncTerminal(page, local_enabled=self.stcfg.listen)
         self.ui_event = UiEvent(self.page, self.terminal, self)
 
         # 延迟初始化的组件（使用懒加载属性）

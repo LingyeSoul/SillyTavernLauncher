@@ -48,7 +48,7 @@ class DataSyncUI:
         # 首次启动对话框相关属性
         self._first_server_dialog = None
         self._dialog_countdown_timer = None
-        self._dialog_countdown = 60  # 60秒倒计时
+        self._dialog_countdown = 30 # 30倒计时
         self._dialog_countdown_active = False
 
         # 内部日志缓冲区（在UI创建前存储日志）
@@ -757,7 +757,7 @@ class DataSyncUI:
                         update_countdown()
 
             self._dialog_countdown_active = True
-            self._dialog_countdown = 60  # 重置为60秒
+            self._dialog_countdown = 30 # 重置为30秒
             countdown_thread = threading.Thread(target=countdown_worker, daemon=True)
             countdown_thread.start()
 
