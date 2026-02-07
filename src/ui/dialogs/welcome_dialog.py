@@ -245,7 +245,12 @@ class WelcomeDialog:
         def open_website(e):
             """同步包装函数，使用run_task执行异步操作"""
             async def _open_url():
-                await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top")
+                try:
+                    await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top")
+                except Exception as ex:
+                    # 静默处理URL打开失败，不影响用户体验
+                    from utils.logger import app_logger
+                    app_logger.warning(f"打开网站失败: {str(ex)}")
             self.page.run_task(_open_url)
 
         # 随机抽取5题并按ID排序
