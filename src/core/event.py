@@ -1815,6 +1815,28 @@ class UiEvent:
             self.terminal.add_log(f"启动命令行失败: {str(ex)}")
             self.show_error_dialog("启动失败", f"启动命令行失败: {str(ex)}")
 
+    def reset_whitelist(self, e):
+        """
+        重置白名单文件，使用当前设备的实际网段
+        """
+        from features.st.config import stcfg
+        from utils.logger import app_logger
+
+        try:
+            self.terminal.add_log("正在重置白名单...")
+
+            # 创建 stcfg 实例并调用 create_whitelist
+            config = stcfg()
+            config.create_whitelist()
+
+            self.terminal.add_log("白名单已重置完成")
+            self.page.show_dialog(ft.SnackBar(ft.Text("白名单已重置完成")))
+
+        except Exception as ex:
+            self.terminal.add_log(f"重置白名单失败: {str(ex)}")
+            app_logger.error(f"重置白名单失败: {str(ex)}")
+            self.show_error_dialog("重置失败", f"重置白名单失败: {str(ex)}")
+
     # ==================== SillyTavern版本切换相关方法 ====================
 
     def refresh_version_list(self, e):

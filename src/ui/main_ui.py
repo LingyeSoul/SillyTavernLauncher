@@ -185,32 +185,48 @@ class UniUI():
                     ft.Text("在打开托盘的状态下，启动启动器时，会自动隐藏窗口并静默启动酒馆", size=14, color=ft.Colors.BLUE_400),
                     ft.Divider(),
                     ft.Text("辅助功能", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Row(
+                    ft.Column(
                         controls=[
-                            ft.Button(
-                                "检查系统环境",
-                                icon=ft.Icons.SETTINGS,
-                                style=self.BSytle,
-                                on_click=self.ui_event.sys_env_check,
-                                height=40
+                            ft.Row(
+                                controls=[
+                                    ft.Button(
+                                        "检查系统环境",
+                                        icon=ft.Icons.SETTINGS,
+                                        style=self.BSytle,
+                                        on_click=self.ui_event.sys_env_check,
+                                        height=40
+                                    ),
+                                    ft.Button(
+                                        "检查内置环境",
+                                        icon=ft.Icons.SETTINGS,
+                                        style=self.BSytle,
+                                        on_click=self.ui_event.in_env_check,
+                                        height=40
+                                    ),
+                                    ft.Button(
+                                        "启动命令行",
+                                        icon=ft.Icons.TERMINAL,
+                                        style=self.BSytle,
+                                        on_click=self.ui_event.start_cmd,
+                                        height=40
+                                    )
+                                ],
+                                spacing=5
                             ),
-                            ft.Button(
-                                "检查内置环境",
-                                icon=ft.Icons.SETTINGS,
-                                style=self.BSytle,
-                                on_click=self.ui_event.in_env_check,
-                                height=40
-                            ),
-                            ft.Button(
-                                "启动命令行",
-                                icon=ft.Icons.SETTINGS,
-                                style=self.BSytle,
-                                on_click=self.ui_event.start_cmd,
-                                height=40
+                            ft.Row(
+                                controls=[
+                                    ft.Button(
+                                        "重置白名单",
+                                        icon=ft.Icons.REFRESH,
+                                        style=self.BSytle,
+                                        on_click=self.ui_event.reset_whitelist,
+                                        height=40
+                                    )
+                                ],
+                                spacing=5
                             )
                         ],
-                        spacing=5,
-                        scroll=ft.ScrollMode.AUTO
+                        spacing=5
                     ),
                 ], spacing=15, expand=True, scroll=ft.ScrollMode.AUTO)
             ], spacing=15, expand=True)
