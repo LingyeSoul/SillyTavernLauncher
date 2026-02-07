@@ -207,7 +207,9 @@ class WelcomeDialog:
                 explanation.visible = False
                 correct_count += 1
             else:
-                feedback.value = "✗ 回答错误"
+                # 显示正确答案
+                correct_answer_text = "正确" if q_data['correct_answer'] else "错误"
+                feedback.value = f"✗ 回答错误，正确答案是：{correct_answer_text}"
                 feedback.color = ft.Colors.RED_600
                 explanation.visible = True
 
@@ -215,16 +217,9 @@ class WelcomeDialog:
 
         # 判断是否全部正确
         if correct_count == len(self.selected_questions):
-            self.state['all_correct'] = True
-            self.ui_controls['error_text'].value = "恭喜！您已全部回答正确！"
-            self.ui_controls['error_text'].color = ft.Colors.GREEN_600
-
-            # 更改按钮为"完成并关闭"
-            self.ui_controls['action_button'].text = "完成并关闭"
-            self.ui_controls['action_button'].icon = ft.Icons.DONE
-            self.ui_controls['action_button'].bgcolor = ft.Colors.GREEN_600
+            self._close_dialog(e)
         else:
-            self.ui_controls['error_text'].value = f"有 {len(self.selected_questions) - correct_count} 题错误，请查看上方解析后重新作答"
+            self.ui_controls['error_text'].value = f"有 {len(self.selected_questions) - correct_count} 题错误，请查看上方解析（包含正确答案）后重新作答"
             self.ui_controls['error_text'].color = ft.Colors.ORANGE_600
 
         self.ui_controls['error_text'].visible = True
@@ -245,10 +240,13 @@ class WelcomeDialog:
 
     def show(self):
         """显示欢迎对话框"""
-        # 创建URL打开函数
+        # 创建URL打开函数（修复：使用同步包装函数避免UI卡死）
 
-        async def open_website(e):
-            await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top")
+        def open_website(e):
+            """同步包装函数，使用run_task执行异步操作"""
+            async def _open_url():
+                await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top")
+            self.page.run_task(_open_url)
 
         # 随机抽取5题并按ID排序
         self.selected_questions = random.sample(self.QUESTION_BANK, 5)

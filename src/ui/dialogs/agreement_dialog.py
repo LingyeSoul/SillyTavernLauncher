@@ -27,7 +27,7 @@ class AgreementDialog:
         self.dialog = None
 
         # 倒计时相关属性
-        self._countdown = 60  # 60秒倒计时
+        self._countdown = 30 # 30倒计时
         self._countdown_active = False
         self._countdown_timer = None
         self._countdown_text = None  # 倒计时文本控件引用
@@ -109,7 +109,7 @@ class AgreementDialog:
                     self._update_countdown()
 
         self._countdown_active = True
-        self._countdown = 60  # 重置为60秒
+        self._countdown = 30 # 重置为30
         countdown_thread = threading.Thread(target=countdown_worker, daemon=True)
         countdown_thread.start()
 
@@ -197,7 +197,7 @@ SillyTavernLauncher 免责声明与合规使用协议
 请仔细阅读以上协议内容，并在下方选择是否同意：
         """
 
-        # 倒计时文本（60秒强制阅读）
+        # 倒计时文本（30强制阅读）
         self._countdown_text = ft.Text(
             f"⏳ 请仔细阅读协议内容（{self._countdown}秒后可同意）",
             size=16,

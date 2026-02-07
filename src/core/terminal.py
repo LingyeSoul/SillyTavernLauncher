@@ -88,12 +88,7 @@ class AsyncTerminal:
         if page.platform == ft.PagePlatform.WINDOWS:
             # 只在启用局域网访问时获取并显示IP
             try:
-                # 尝试导入 network 模块（兼容主程序和测试器）
-                try:
-                    from network import get_local_ip
-                except ImportError:
-                    from core.network import get_local_ip
-
+                from core.network import get_local_ip
                 if local_enabled:
                     local_ip = get_local_ip()
                     title_text = f"局域网IP：{local_ip}"
