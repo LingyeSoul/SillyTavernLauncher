@@ -1,5 +1,5 @@
 aiohttp==3.12.4
-flet==0.80.2
+flet==0.80.5
 packaging==25.0
 pystray==0.19.5
 ruamel.yaml

@@ -13,8 +13,8 @@ from config.config_manager import ConfigManager
 from core.terminal import AsyncTerminal
 
 
-class UniUI():
-    def __init__(self,page,ver,version_checker):
+class UniUI:
+    def __init__(self, page, ver, version_checker):
         self.page = page
         self.version_checker = version_checker
         self.version = ver
@@ -36,7 +36,10 @@ class UniUI():
         self._sysenv_lock = threading.Lock()
 
         # UI样式和字段初始化
-        self.BSytle = ft.ButtonStyle(icon_size=25, text_style=ft.TextStyle(size=20, font_family="Microsoft YaHei"))
+        self.BSytle = ft.ButtonStyle(
+            icon_size=25,
+            text_style=ft.TextStyle(size=20, font_family="Microsoft YaHei"),
+        )
         self.port_field = ft.TextField(
             label="监听端口",
             width=610,
@@ -72,170 +75,292 @@ class UniUI():
 
     def getSettingView(self):
         if self.platform == "Windows":
-            return ft.Column([
-                ft.Text("设置", size=24, weight=ft.FontWeight.BOLD),
-                ft.Divider(),
-                ft.Column([
-                    ft.Text("GitHub镜像源选择", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Text("推荐使用镜像站获得更好的下载速度", size=14, color=ft.Colors.GREY_600),
-                    ft.DropdownM2(
-                        options=[
-                            ft.dropdown.Option("github", "官方源 (github.com) - 可能较慢"),
-                            ft.dropdown.Option("gh-proxy.org", "镜像站点1 (gh-proxy.org)"),
-                            ft.dropdown.Option("ghfile.geekertao.top", "镜像站点2 (ghfile.geekertao.top)"),
-                            ft.dropdown.Option("gh.dpik.top", "镜像站点3 (gh.dpik.top)"),
-                            ft.dropdown.Option("github.dpik.top", "镜像站点4 (github.dpik.top)"),
-                            ft.dropdown.Option("github.acmsz.top", "镜像站点5 (github.acmsz.top)"),
-                            ft.dropdown.Option("git.yylx.win", "镜像站点6 (git.yylx.win)"),
-                        ],
-                        value=self.config_manager.get("github.mirror"),
-                        on_change=self.ui_event.update_mirror_setting
-                    ),
-                    ft.Text("当不使用官方源时，将使用镜像源加速下载", size=14, color=ft.Colors.BLUE_400),
+            return ft.Column(
+                [
+                    ft.Text("设置", size=24, weight=ft.FontWeight.BOLD),
                     ft.Divider(),
-                    ft.Text("环境设置", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Text("懒人包请勿修改，此处供已安装Git和Nodejs的用户修改", size=14, color=ft.Colors.GREY_600),
-                    ft.Row(
-                        controls=[
-                            ft.Switch(
-                                label="使用系统环境",
-                                value=self.config_manager.get("use_sys_env", False),
-                                on_change=self.ui_event.env_changed,
-                            ),
-                            ft.Switch(
-                                label="启用修改Git配置文件",
-                                value=self.config_manager.get("patchgit", False),
-                                on_change=self.ui_event.patchgit_changed,
-                            )
-                        ],
-                        spacing=5,
-                        scroll=ft.ScrollMode.AUTO
-                    ),
-                    ft.Text("懒人包请勿修改，修改后重启生效 | 开启后修改系统环境的Git配置文件", size=14, color=ft.Colors.BLUE_400),
-                    ft.Divider(),
-                    ft.Text("酒馆设置", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Text("调整酒馆设置，重启酒馆生效", size=14, color=ft.Colors.GREY_600),
-                    ft.Switch(
-                        label="启用局域网访问",
-                        value=self.stcfg.listen,
-                        on_change=self.ui_event.listen_changed,
-                    ),
-                    ft.Text("开启后自动生成whitelist.txt(如有，则不会生成)，放行192.168.*.*，关闭后不会删除", size=14, color=ft.Colors.BLUE_400),
-                    ft.Row([
-                        self.port_field,
-                        ft.IconButton(
-                            icon=ft.Icons.SAVE,
-                            tooltip="保存端口设置",
-                            on_click=lambda e: self.ui_event.save_port(self.port_field.value)
-                        )
-                    ]),
-                    ft.Text("监听端口一般情况下不需要修改，请勿乱动", size=14, color=ft.Colors.BLUE_400),
-                    ft.Switch(
-                        label="自动设置请求代理",
-                        value=self.config_manager.get("auto_proxy", False),
-                        on_change=self.ui_event.auto_proxy_changed,
-                    ),
-                    ft.Text("开启后酒馆的请求会走启动器自动识别的系统代理", size=14, color=ft.Colors.BLUE_400),
-                    ft.Row([
-                        ft.TextField(
-                            label="自定义启动参数",
-                            width=610,
-                            value=self.config_manager.get("custom_args", ""),
-                            hint_text="在此输入自定义启动参数，将添加到启动命令中，如果你不清楚，请留空！",
-                            on_change=self.ui_event.custom_args_changed,
-                        ),
-                        ft.IconButton(
-                            icon=ft.Icons.SAVE,
-                            tooltip="保存自定义启动参数",
-                            on_click=lambda e: self.ui_event.save_custom_args(self.config_manager.get("custom_args", ""))
-                        )
-                    ]),
-                    ft.Text("自定义启动参数将添加到启动命令末尾", size=14, color=ft.Colors.BLUE_400),
-                    ft.Switch(
-                        label="使用优化参数",
-                        value=self.config_manager.get("use_optimize_args", False),
-                        on_change=self.ui_event.optimize_args_changed,
-                    ),
-                    ft.Text("开启后将在启动命令中添加 --max-old-space-size=4096 参数（在自定义启动参数前）", size=14, color=ft.Colors.BLUE_400),
-                    ft.Divider(),
-                    ft.Text("启动器功能设置", size=18, weight=ft.FontWeight.BOLD),
-                    ft.Switch(
-                        label="自动检查启动器更新",
-                        value=self.config_manager.get("checkupdate", True),
-                        on_change=self.ui_event.checkupdate_changed,
-                    ),
-                    ft.Text("开启后在每次启动启动器时会自动检查更新并提示(启动器并不会自动安装更新，请手动下载并更新)", size=14, color=ft.Colors.BLUE_400),
-                    ft.Switch(
-                        label="自动检查酒馆更新",
-                        value=self.config_manager.get("stcheckupdate", True),
-                        on_change=self.ui_event.stcheckupdate_changed,
-                    ),
-                    ft.Text("开启后在每次启动酒馆时先进行更新操作再启动酒馆", size=14, color=ft.Colors.BLUE_400),
-                    ft.Switch(
-                        label="启用系统托盘",
-                        value=self.config_manager.get("tray", True),
-                        on_change=self.ui_event.tray_changed,
-                    ),
-                    ft.Text("开启后将在系统托盘中显示图标，可快速退出程序", size=14, color=ft.Colors.BLUE_400),
-                    ft.Switch(
-                        label="启用自动启动",
-                        value=self.config_manager.get("autostart", False),
-                        on_change=self.ui_event.autostart_changed,
-                    ),
-                    ft.Text("在打开托盘的状态下，启动启动器时，会自动隐藏窗口并静默启动酒馆", size=14, color=ft.Colors.BLUE_400),
-                    ft.Divider(),
-                    ft.Text("辅助功能", size=18, weight=ft.FontWeight.BOLD),
                     ft.Column(
-                        controls=[
-                            ft.Row(
-                                controls=[
-                                    ft.Button(
-                                        "检查系统环境",
-                                        icon=ft.Icons.SETTINGS,
-                                        style=self.BSytle,
-                                        on_click=self.ui_event.sys_env_check,
-                                        height=40
+                        [
+                            ft.Text(
+                                "GitHub镜像源选择", size=18, weight=ft.FontWeight.BOLD
+                            ),
+                            ft.Text(
+                                "推荐使用镜像站获得更好的下载速度",
+                                size=14,
+                                color=ft.Colors.GREY_600,
+                            ),
+                            ft.DropdownM2(
+                                options=[
+                                    ft.dropdown.Option(
+                                        "github", "官方源 (github.com) - 可能较慢"
                                     ),
-                                    ft.Button(
-                                        "检查内置环境",
-                                        icon=ft.Icons.SETTINGS,
-                                        style=self.BSytle,
-                                        on_click=self.ui_event.in_env_check,
-                                        height=40
+                                    ft.dropdown.Option(
+                                        "gh-proxy.org", "镜像站点1 (gh-proxy.org)"
                                     ),
-                                    ft.Button(
-                                        "启动命令行",
-                                        icon=ft.Icons.TERMINAL,
-                                        style=self.BSytle,
-                                        on_click=self.ui_event.start_cmd,
-                                        height=40
-                                    )
+                                    ft.dropdown.Option(
+                                        "ghfile.geekertao.top",
+                                        "镜像站点2 (ghfile.geekertao.top)",
+                                    ),
+                                    ft.dropdown.Option(
+                                        "gh.dpik.top", "镜像站点3 (gh.dpik.top)"
+                                    ),
+                                    ft.dropdown.Option(
+                                        "github.dpik.top", "镜像站点4 (github.dpik.top)"
+                                    ),
+                                    ft.dropdown.Option(
+                                        "github.acmsz.top",
+                                        "镜像站点5 (github.acmsz.top)",
+                                    ),
+                                    ft.dropdown.Option(
+                                        "git.yylx.win", "镜像站点6 (git.yylx.win)"
+                                    ),
                                 ],
-                                spacing=5
+                                value=self.config_manager.get("github.mirror"),
+                                on_change=self.ui_event.update_mirror_setting,
+                            ),
+                            ft.Text(
+                                "当不使用官方源时，将使用镜像源加速下载",
+                                size=14,
+                                color=ft.Colors.BLUE_400,
+                            ),
+                            ft.Divider(),
+                            ft.Text("环境设置", size=18, weight=ft.FontWeight.BOLD),
+                            ft.Text(
+                                "懒人包请勿修改，此处供已安装Git和Nodejs的用户修改",
+                                size=14,
+                                color=ft.Colors.GREY_600,
                             ),
                             ft.Row(
                                 controls=[
-                                    ft.Button(
-                                        "重置白名单",
-                                        icon=ft.Icons.REFRESH,
-                                        style=self.BSytle,
-                                        on_click=self.ui_event.reset_whitelist,
-                                        height=40
-                                    )
+                                    ft.Switch(
+                                        label="使用系统环境",
+                                        value=self.config_manager.get(
+                                            "use_sys_env", False
+                                        ),
+                                        on_change=self.ui_event.env_changed,
+                                    ),
+                                    ft.Switch(
+                                        label="启用修改Git配置文件",
+                                        value=self.config_manager.get(
+                                            "patchgit", False
+                                        ),
+                                        on_change=self.ui_event.patchgit_changed,
+                                    ),
                                 ],
-                                spacing=5
-                            )
+                                spacing=5,
+                                scroll=ft.ScrollMode.AUTO,
+                            ),
+                            ft.Text(
+                                "懒人包请勿修改，修改后重启生效 | 开启后修改系统环境的Git配置文件",
+                                size=14,
+                                color=ft.Colors.BLUE_400,
+                            ),
+                            ft.Divider(),
+                            ft.Text("酒馆设置", size=18, weight=ft.FontWeight.BOLD),
+                            ft.Text(
+                                "调整酒馆设置，重启酒馆生效",
+                                size=14,
+                                color=ft.Colors.GREY_600,
+                            ),
+                            ft.Switch(
+                                label="启用局域网访问",
+                                value=self.stcfg.listen,
+                                on_change=self.ui_event.listen_changed,
+                            ),
+                            ft.Text(
+                                "开启后自动生成whitelist.txt(如有，则不会生成)，放行192.168.*.*，关闭后不会删除",
+                                size=14,
+                                color=ft.Colors.BLUE_400,
+                            ),
+                            ft.Row(
+                                [
+                                    self.port_field,
+                                    ft.IconButton(
+                                        icon=ft.Icons.SAVE,
+                                        tooltip="保存端口设置",
+                                        on_click=lambda e: self.ui_event.save_port(
+                                            self.port_field.value
+                                        ),
+                                    ),
+                                ]
+                            ),
+                            ft.Text(
+                                "监听端口一般情况下不需要修改，请勿乱动",
+                                size=14,
+                                color=ft.Colors.BLUE_400,
+                            ),
+                            ft.Switch(
+                                label="自动设置请求代理",
+                                value=self.config_manager.get("auto_proxy", False),
+                                on_change=self.ui_event.auto_proxy_changed,
+                            ),
+                            ft.Text(
+                                "开启后酒馆的请求会走启动器自动识别的系统代理",
+                                size=14,
+                                color=ft.Colors.BLUE_400,
+                            ),
+                            ft.Row(
+                                [
+                                    ft.TextField(
+                                        label="自定义启动参数",
+                                        width=610,
+                                        value=self.config_manager.get(
+                                            "custom_args", ""
+                                        ),
+                                        hint_text="在此输入自定义启动参数，将添加到启动命令中，如果你不清楚，请留空！",
+                                        on_change=self.ui_event.custom_args_changed,
+                                    ),
+                                    ft.IconButton(
+                                        icon=ft.Icons.SAVE,
+                                        tooltip="保存自定义启动参数",
+                                        on_click=lambda e: self.ui_event.save_custom_args(
+                                            self.config_manager.get("custom_args", "")
+                                        ),
+                                    ),
+                                ]
+                            ),
+                            ft.Text(
+                                "自定义启动参数将添加到启动命令末尾",
+                                size=14,
+                                color=ft.Colors.BLUE_400,
+                            ),
+                            ft.Switch(
+                                label="使用优化参数",
+                                value=self.config_manager.get(
+                                    "use_optimize_args", False
+                                ),
+                                on_change=self.ui_event.optimize_args_changed,
+                            ),
+                            ft.Text(
+                                "开启后将在启动命令中添加 --max-old-space-size=4096 参数（在自定义启动参数前）",
+                                size=14,
+                                color=ft.Colors.BLUE_400,
+                            ),
+                            ft.Row(
+                                [
+                                    ft.Switch(
+                                        label="启用主机白名单",
+                                        value=self.stcfg.host_whitelist_enabled,
+                                        on_change=self.ui_event.host_whitelist_changed,
+                                        expand=True,
+                                    ),
+                                    ft.IconButton(
+                                        icon=ft.Icons.EDIT_OUTLINED,
+                                        tooltip="编辑白名单",
+                                        on_click=self.ui_event.edit_host_whitelist,
+                                    ),
+                                ],
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            ),
+                            ft.Text(
+                                "启用主机白名单后，仅允许白名单中的主机访问 SillyTavern。建议开启以增强安全性",
+                                size=14,
+                                color=ft.Colors.BLUE_400,
+                            ),
+                            ft.Divider(),
+                            ft.Text(
+                                "启动器功能设置", size=18, weight=ft.FontWeight.BOLD
+                            ),
+                            ft.Switch(
+                                label="自动检查启动器更新",
+                                value=self.config_manager.get("checkupdate", True),
+                                on_change=self.ui_event.checkupdate_changed,
+                            ),
+                            ft.Text(
+                                "开启后在每次启动启动器时会自动检查更新并提示(启动器并不会自动安装更新，请手动下载并更新)",
+                                size=14,
+                                color=ft.Colors.BLUE_400,
+                            ),
+                            ft.Switch(
+                                label="自动检查酒馆更新",
+                                value=self.config_manager.get("stcheckupdate", True),
+                                on_change=self.ui_event.stcheckupdate_changed,
+                            ),
+                            ft.Text(
+                                "开启后在每次启动酒馆时先进行更新操作再启动酒馆",
+                                size=14,
+                                color=ft.Colors.BLUE_400,
+                            ),
+                            ft.Switch(
+                                label="启用系统托盘",
+                                value=self.config_manager.get("tray", True),
+                                on_change=self.ui_event.tray_changed,
+                            ),
+                            ft.Text(
+                                "开启后将在系统托盘中显示图标，可快速退出程序",
+                                size=14,
+                                color=ft.Colors.BLUE_400,
+                            ),
+                            ft.Switch(
+                                label="启用自动启动",
+                                value=self.config_manager.get("autostart", False),
+                                on_change=self.ui_event.autostart_changed,
+                            ),
+                            ft.Text(
+                                "在打开托盘的状态下，启动启动器时，会自动隐藏窗口并静默启动酒馆",
+                                size=14,
+                                color=ft.Colors.BLUE_400,
+                            ),
+                            ft.Divider(),
+                            ft.Text("辅助功能", size=18, weight=ft.FontWeight.BOLD),
+                            ft.Column(
+                                controls=[
+                                    ft.Row(
+                                        controls=[
+                                            ft.Button(
+                                                "检查系统环境",
+                                                icon=ft.Icons.SETTINGS,
+                                                style=self.BSytle,
+                                                on_click=self.ui_event.sys_env_check,
+                                                height=40,
+                                            ),
+                                            ft.Button(
+                                                "检查内置环境",
+                                                icon=ft.Icons.SETTINGS,
+                                                style=self.BSytle,
+                                                on_click=self.ui_event.in_env_check,
+                                                height=40,
+                                            ),
+                                            ft.Button(
+                                                "启动命令行",
+                                                icon=ft.Icons.TERMINAL,
+                                                style=self.BSytle,
+                                                on_click=self.ui_event.start_cmd,
+                                                height=40,
+                                            ),
+                                        ],
+                                        spacing=5,
+                                    ),
+                                    ft.Row(
+                                        controls=[
+                                            ft.Button(
+                                                "重置白名单",
+                                                icon=ft.Icons.REFRESH,
+                                                style=self.BSytle,
+                                                on_click=self.ui_event.reset_whitelist,
+                                                height=40,
+                                            )
+                                        ],
+                                        spacing=5,
+                                    ),
+                                ],
+                                spacing=5,
+                            ),
                         ],
-                        spacing=5
+                        spacing=15,
+                        expand=True,
+                        scroll=ft.ScrollMode.AUTO,
                     ),
-                ], spacing=15, expand=True, scroll=ft.ScrollMode.AUTO)
-            ], spacing=15, expand=True)
-        
+                ],
+                spacing=15,
+                expand=True,
+            )
+
     def getTerminalView(self):
         if self.platform == "Windows":
             # 修复：创建固定的终端页面布局，按钮行固定在底部
             # 这样终端视图可以更换，但按钮行保持不动
-            if not hasattr(self, '_terminal_page_container'):
+            if not hasattr(self, "_terminal_page_container"):
                 # 创建按钮行（只创建一次）
                 self._terminal_button_row = ft.Row(
                     [
@@ -252,7 +377,9 @@ class UniUI():
                             icon=ft.Icons.PLAY_ARROW,
                             tooltip="启动SillyTavern",
                             style=self.BSytle,
-                            on_click=self.ui_event.check_and_start_sillytavern if self.config_manager.get('stcheckupdate', True) else self.ui_event.start_sillytavern,
+                            on_click=self.ui_event.check_and_start_sillytavern
+                            if self.config_manager.get("stcheckupdate", True)
+                            else self.ui_event.start_sillytavern,
                             height=50,
                         ),
                         ft.Button(
@@ -296,20 +423,21 @@ class UniUI():
                 )
 
             return self._terminal_page_container
-        
-
 
     def getAboutView(self):
         # 创建版本检查函数
         def check_for_updates(e):
             import threading
+
             update_thread = threading.Thread(target=self.version_checker.run_check_sync)
             update_thread.daemon = True
             update_thread.start()
 
         # 创建URL打开函数
         async def open_github(e):
-            await UrlLauncher().launch_url("https://github.com/LingyeSoul/SillyTavernLauncher")
+            await UrlLauncher().launch_url(
+                "https://github.com/LingyeSoul/SillyTavernLauncher"
+            )
 
         async def open_website(e):
             await UrlLauncher().launch_url("https://sillytavern.lingyesoul.top")
@@ -318,52 +446,58 @@ class UniUI():
             await UrlLauncher().launch_url("https://space.bilibili.com/298721157")
 
         async def open_donation(e):
-            await UrlLauncher().launch_url("https://ifdian.net/order/create?user_id=8a03ea64ebc211ebad0e52540025c377")
+            await UrlLauncher().launch_url(
+                "https://ifdian.net/order/create?user_id=8a03ea64ebc211ebad0e52540025c377"
+            )
 
         if self.platform == "Windows":
-            return ft.Column([
-        ft.Text("关于", size=24, weight=ft.FontWeight.BOLD),
-        ft.Divider(),
-        ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
-        ft.Text(value=f"版本: {self.version}", size=16),
-        ft.Text("作者: 泠夜Soul", size=16),
-        ft.Button(
-            "访问GitHub仓库",
-            icon=ft.Icons.OPEN_IN_BROWSER,
-            on_click=open_github,
-            style=self.BSytle,
-            height=40
-        ),
-        ft.Button(
-            "访问启动器官网",
-            icon=ft.Icons.OPEN_IN_BROWSER,
-            on_click=open_website,
-            style=self.BSytle,
-            height=40
-        ),
-        ft.Button(
-            "访问作者B站",
-            icon=ft.Icons.OPEN_IN_BROWSER,
-            on_click=open_bilibili,
-            style=self.BSytle,
-            height=40
-        ),
-        ft.Button(
-            "打赏作者",
-            icon=ft.Icons.ATTACH_MONEY,
-            on_click=open_donation,
-            style=self.BSytle,
-            height=40
-        ),
-        ft.Button(
-            "检查更新",
-            icon=ft.Icons.UPDATE,
-            on_click=check_for_updates,
-            style=self.BSytle,
-            height=40
-        ),
-    ], spacing=15, expand=True)
-    
+            return ft.Column(
+                [
+                    ft.Text("关于", size=24, weight=ft.FontWeight.BOLD),
+                    ft.Divider(),
+                    ft.Text("SillyTavernLauncher", size=20, weight=ft.FontWeight.BOLD),
+                    ft.Text(value=f"版本: {self.version}", size=16),
+                    ft.Text("作者: 泠夜Soul", size=16),
+                    ft.Button(
+                        "访问GitHub仓库",
+                        icon=ft.Icons.OPEN_IN_BROWSER,
+                        on_click=open_github,
+                        style=self.BSytle,
+                        height=40,
+                    ),
+                    ft.Button(
+                        "访问启动器官网",
+                        icon=ft.Icons.OPEN_IN_BROWSER,
+                        on_click=open_website,
+                        style=self.BSytle,
+                        height=40,
+                    ),
+                    ft.Button(
+                        "访问作者B站",
+                        icon=ft.Icons.OPEN_IN_BROWSER,
+                        on_click=open_bilibili,
+                        style=self.BSytle,
+                        height=40,
+                    ),
+                    ft.Button(
+                        "打赏作者",
+                        icon=ft.Icons.ATTACH_MONEY,
+                        on_click=open_donation,
+                        style=self.BSytle,
+                        height=40,
+                    ),
+                    ft.Button(
+                        "检查更新",
+                        icon=ft.Icons.UPDATE,
+                        on_click=check_for_updates,
+                        style=self.BSytle,
+                        height=40,
+                    ),
+                ],
+                spacing=15,
+                expand=True,
+            )
+
     def setMainView(self, page):
         if self.platform == "Windows":
             # 创建简化的初始UI - 非阻塞
@@ -371,7 +505,10 @@ class UniUI():
 
             # 异步加载复杂视图
             import threading
-            threading.Thread(target=self._load_views_async, args=(page,), daemon=True).start()
+
+            threading.Thread(
+                target=self._load_views_async, args=(page,), daemon=True
+            ).start()
 
     def _create_minimal_ui(self, page):
         """创建最小化初始UI - 优先加载主题和Appbar控制"""
@@ -401,10 +538,12 @@ class UniUI():
                     page.update()
                 except Exception as inner_e:
                     import traceback
+
                     print(f"最小化窗口失败: {str(inner_e)}")
                     app_logger.error("错误详情: {traceback.format_exc()}")
             except Exception as e:
                 import traceback
+
                 print(f"最小化窗口失败: {str(e)}")
                 app_logger.error("错误详情: {traceback.format_exc()}")
 
@@ -413,7 +552,9 @@ class UniUI():
             if e.data == "close":
                 # 检查是否启用了托盘功能且托盘还在运行
                 use_tray = self.config_manager.get("tray", True)
-                tray_exists = hasattr(self.ui_event, 'tray') and self.ui_event.tray is not None
+                tray_exists = (
+                    hasattr(self.ui_event, "tray") and self.ui_event.tray is not None
+                )
 
                 if use_tray and tray_exists:
                     # 启用托盘且托盘存在时，只隐藏窗口
@@ -431,20 +572,27 @@ class UniUI():
 
                     # 2. 再执行清理和退出（同步执行）
                     self.ui_event.exit_app(e)
+
         page.window.prevent_close = True
         page.window.on_event = window_event
 
         # 优先设置Appbar
         page.appbar = ft.AppBar(
-            #leading=ft.Icon(ft.Icons.PALETTE),
+            # leading=ft.Icon(ft.Icons.PALETTE),
             leading_width=40,
             title=ft.WindowDragArea(content=ft.Text("SillyTavernLauncher"), width=800),
             center_title=False,
             bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
             actions=[
                 ft.IconButton(ft.Icons.MINIMIZE, on_click=minisize, icon_size=30),
-                ft.IconButton(icon=themeIcon, on_click=self.ui_event.switch_theme, icon_size=30),
-                ft.IconButton(ft.Icons.CANCEL_OUTLINED, on_click=self.ui_event.exit_app, icon_size=30),
+                ft.IconButton(
+                    icon=themeIcon, on_click=self.ui_event.switch_theme, icon_size=30
+                ),
+                ft.IconButton(
+                    ft.Icons.CANCEL_OUTLINED,
+                    on_click=self.ui_event.exit_app,
+                    icon_size=30,
+                ),
             ],
         )
 
@@ -477,30 +625,30 @@ class UniUI():
                     # 改进: 为选中/未选中状态使用不同的图标样式
                     icon=ft.Icons.TERMINAL_OUTLINED,
                     selected_icon=ft.Icons.TERMINAL,
-                    label="终端"
+                    label="终端",
                 ),
                 ft.NavigationRailDestination(
                     icon=ft.Icons.HISTORY_TOGGLE_OFF_OUTLINED,
                     selected_icon=ft.Icons.HISTORY,
-                    label="版本"
+                    label="版本",
                 ),
                 ft.NavigationRailDestination(
                     icon=ft.Icons.SYNC_DISABLED,
                     selected_icon=ft.Icons.SYNC,
-                    label="同步"
+                    label="同步",
                 ),
                 ft.NavigationRailDestination(
                     icon=ft.Icons.SETTINGS_OUTLINED,
                     selected_icon=ft.Icons.SETTINGS,
-                    label="设置"
+                    label="设置",
                 ),
                 ft.NavigationRailDestination(
                     icon=ft.Icons.INFO_OUTLINE,
                     selected_icon=ft.Icons.INFO,
-                    label="关于"
+                    label="关于",
                 ),
             ],
-            on_change=_on_rail_change
+            on_change=_on_rail_change,
         )
 
         # 初始只显示终端视图
@@ -519,25 +667,21 @@ class UniUI():
         # 添加到页面
         page.add(
             ft.Row(
-                [
-                    rail,
-                    ft.VerticalDivider(width=1),
-                    content
-                ],
+                [rail, ft.VerticalDivider(width=1), content],
                 expand=True,
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                vertical_alignment=ft.CrossAxisAlignment.STRETCH
+                vertical_alignment=ft.CrossAxisAlignment.STRETCH,
             )
         )
 
     # 视图映射表 - 遵循 Flet NavigationRail 最佳实践
     # 将索引映射到视图属性和显示名称
     _VIEW_MAP = {
-        0: ('_terminal_page', '终端'),
-        1: ('version_view', '版本'),
-        2: ('sync_view', '同步'),
-        3: ('settings_view', '设置'),
-        4: ('about_view', '关于'),
+        0: ("_terminal_page", "终端"),
+        1: ("version_view", "版本"),
+        2: ("sync_view", "同步"),
+        3: ("settings_view", "设置"),
+        4: ("about_view", "关于"),
     }
 
     def _handle_view_change(self, index):
@@ -565,17 +709,21 @@ class UniUI():
 
     def _are_views_ready(self):
         """检查所有视图是否已加载完成"""
-        return hasattr(self, '_views_loaded') and self._views_loaded
+        return hasattr(self, "_views_loaded") and self._views_loaded
 
     def _show_loading_indicator(self):
-        """显示加载指示器 """
+        """显示加载指示器"""
         loading_view = ft.Container(
-            content=ft.Column([
-                ft.Text("正在加载...", size=16, weight=ft.FontWeight.BOLD),
-                ft.ProgressBar(visible=True, width=200)
-            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
+            content=ft.Column(
+                [
+                    ft.Text("正在加载...", size=16, weight=ft.FontWeight.BOLD),
+                    ft.ProgressBar(visible=True, width=200),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=10,
+            ),
             height=400,
-            alignment=ft.alignment.Alignment(0, 0)
+            alignment=ft.alignment.Alignment(0, 0),
         )
         self._content.content = loading_view
         self._page.update()
@@ -601,7 +749,7 @@ class UniUI():
         return None
 
     def _display_view(self, view):
-        """显示指定视图 
+        """显示指定视图
 
         直接替换 content_area.content，无需使用 controls.clear()/append()
 
@@ -612,20 +760,26 @@ class UniUI():
         self._page.update()
 
     def _show_unavailable_view(self, index):
-        """显示视图不可用提示 
+        """显示视图不可用提示
 
         Args:
             index: 视图索引
         """
-        _, view_name = self._VIEW_MAP.get(index, ('', '未知'))
+        _, view_name = self._VIEW_MAP.get(index, ("", "未知"))
         unavailable_view = ft.Container(
-            content=ft.Column([
-                ft.Icon(ft.Icons.ERROR_OUTLINE, size=48, color=ft.Colors.ORANGE),
-                ft.Text(f"{view_name}视图不可用", size=16, weight=ft.FontWeight.BOLD),
-                ft.Text("请稍后重试", size=13, color=ft.Colors.GREY_600)
-            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
+            content=ft.Column(
+                [
+                    ft.Icon(ft.Icons.ERROR_OUTLINE, size=48, color=ft.Colors.ORANGE),
+                    ft.Text(
+                        f"{view_name}视图不可用", size=16, weight=ft.FontWeight.BOLD
+                    ),
+                    ft.Text("请稍后重试", size=13, color=ft.Colors.GREY_600),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=10,
+            ),
             height=400,
-            alignment=ft.alignment.Alignment(0, 0)
+            alignment=ft.alignment.Alignment(0, 0),
         )
         self._content.content = unavailable_view
         self._page.update()
@@ -637,7 +791,10 @@ class UniUI():
             try:
                 from ui.components.sync_ui import DataSyncUI
                 import os
-                data_dir = os.path.join(os.getcwd(), "SillyTavern", "data", "default-user")
+
+                data_dir = os.path.join(
+                    os.getcwd(), "SillyTavern", "data", "default-user"
+                )
                 # 不传入 terminal，使用独立的简单日志组件
                 self.sync_ui = DataSyncUI(data_dir, self.config_manager)
                 self.sync_view = self.sync_ui.create_ui(page)
@@ -645,7 +802,7 @@ class UniUI():
                 print(f"同步功能初始化失败，将显示简化界面: {e}")
                 # 创建简化的同步界面
                 self.sync_view = self._create_simple_sync_view()
-            
+
             # 延迟创建设置视图（最复杂）
             self.settings_view = self.getSettingView()
 
@@ -660,7 +817,10 @@ class UniUI():
                     self.version_view = self._create_simple_version_view()
                 else:
                     from features.st.ui.version_ui import create_version_switch_view
-                    self.version_view = create_version_switch_view(page, self.terminal, self.ui_event)
+
+                    self.version_view = create_version_switch_view(
+                        page, self.terminal, self.ui_event
+                    )
             except Exception as e:
                 error_msg = str(e)
                 # 如果是页面已销毁的错误，静默处理
@@ -669,18 +829,24 @@ class UniUI():
                     self.version_view = self._create_simple_version_view()
                 else:
                     print(f"版本切换视图初始化失败: {e}")
-                    self.version_view = ft.Column([
-                        ft.Text("版本管理", size=24, weight=ft.FontWeight.BOLD),
-                        ft.Divider(),
-                        ft.Text("版本切换功能初始化失败", color=ft.Colors.RED),
-                        ft.Text(f"错误: {str(e)}", size=12, color=ft.Colors.GREY_600)
-                    ], spacing=15)
+                    self.version_view = ft.Column(
+                        [
+                            ft.Text("版本管理", size=24, weight=ft.FontWeight.BOLD),
+                            ft.Divider(),
+                            ft.Text("版本切换功能初始化失败", color=ft.Colors.RED),
+                            ft.Text(
+                                f"错误: {str(e)}", size=12, color=ft.Colors.GREY_600
+                            ),
+                        ],
+                        spacing=15,
+                    )
 
             # 标记加载完成
             self._views_loaded = True
 
             # 如果当前正在显示加载界面，切换到对应视图
-            if page and hasattr(self, '_rail'):
+            if page and hasattr(self, "_rail"):
+
                 def update_ui():
                     try:
                         # 获取当前选中的索引
@@ -697,26 +863,33 @@ class UniUI():
         except Exception as e:
             print(f"异步加载视图失败: {e}")
             import traceback
+
             traceback.print_exc()
+
             # 如果加载失败，确保UI仍然可用
             def show_error():
                 if page:
                     error_content = ft.Container(
-                        content=ft.Column([
-                            ft.Text("加载部分界面失败", size=16, color=ft.Colors.RED_500),
-                            ft.Text(str(e), size=14),
-                            ft.Text("请重启应用或联系开发者", size=14),
-                            ft.Button(
-                                "重试",
-                                on_click=lambda _: threading.Thread(
-                                    target=self._load_views_async,
-                                    args=(page,),
-                                    daemon=True
-                                ).start()
-                            )
-                        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                        content=ft.Column(
+                            [
+                                ft.Text(
+                                    "加载部分界面失败", size=16, color=ft.Colors.RED_500
+                                ),
+                                ft.Text(str(e), size=14),
+                                ft.Text("请重启应用或联系开发者", size=14),
+                                ft.Button(
+                                    "重试",
+                                    on_click=lambda _: threading.Thread(
+                                        target=self._load_views_async,
+                                        args=(page,),
+                                        daemon=True,
+                                    ).start(),
+                                ),
+                            ],
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        ),
                         height=400,
-                        alignment=ft.alignment.Alignment(0, 0)
+                        alignment=ft.alignment.Alignment(0, 0),
                     )
                     self._content.content = error_content
                     page.update()
@@ -726,33 +899,56 @@ class UniUI():
 
     def _create_simple_sync_view(self):
         """Create a simplified sync view when full sync initialization fails"""
-        return ft.Column([
-            ft.Text("数据同步", size=24, weight=ft.FontWeight.BOLD),
-            ft.Divider(),
-            ft.Container(
-                ft.Column([
-                    ft.Icon(ft.Icons.SYNC_PROBLEM, size=48, color=ft.Colors.ORANGE_400),
-                    ft.Text("同步功能初始化失败", size=16, weight=ft.FontWeight.BOLD, color=ft.Colors.ORANGE_600),
-                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=15),
-                padding=20,
-                border_radius=10,
-            )
-        ], scroll=ft.ScrollMode.AUTO, expand=True, spacing=15)
+        return ft.Column(
+            [
+                ft.Text("数据同步", size=24, weight=ft.FontWeight.BOLD),
+                ft.Divider(),
+                ft.Container(
+                    ft.Column(
+                        [
+                            ft.Icon(
+                                ft.Icons.SYNC_PROBLEM,
+                                size=48,
+                                color=ft.Colors.ORANGE_400,
+                            ),
+                            ft.Text(
+                                "同步功能初始化失败",
+                                size=16,
+                                weight=ft.FontWeight.BOLD,
+                                color=ft.Colors.ORANGE_600,
+                            ),
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=15,
+                    ),
+                    padding=20,
+                    border_radius=10,
+                ),
+            ],
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
+            spacing=15,
+        )
 
     def _create_simple_version_view(self):
         """Create a simplified version view when page is destroyed"""
-        return ft.Column([
-            ft.Text("版本管理", size=24, weight=ft.FontWeight.BOLD),
-            ft.Divider(),
-            ft.Text("版本管理功能", size=14, color=ft.Colors.GREY_600),
-        ], scroll=ft.ScrollMode.AUTO, expand=True, spacing=15)
+        return ft.Column(
+            [
+                ft.Text("版本管理", size=24, weight=ft.FontWeight.BOLD),
+                ft.Divider(),
+                ft.Text("版本管理功能", size=14, color=ft.Colors.GREY_600),
+            ],
+            scroll=ft.ScrollMode.AUTO,
+            expand=True,
+            spacing=15,
+        )
 
     def is_page_valid(self):
         """检查页面引用是否仍然有效"""
         if self.page is None:
             return False
         # 检查页面是否已被销毁
-        if hasattr(self.page, 'window') and self.page.window is None:
+        if hasattr(self.page, "window") and self.page.window is None:
             return False
         return True
 
@@ -782,7 +978,7 @@ class UniUI():
             print("[UniUI] 开始清理资源...")
 
             # 1. 显式断开 NavigationRail 的事件处理器（防止循环引用）
-            if hasattr(self, '_rail') and self._rail is not None:
+            if hasattr(self, "_rail") and self._rail is not None:
                 try:
                     self._rail.on_change = None
                 except Exception:
@@ -790,26 +986,29 @@ class UniUI():
                 self._rail = None
 
             # 2. 显式断开按钮行的事件处理器
-            if hasattr(self, '_terminal_button_row') and self._terminal_button_row is not None:
+            if (
+                hasattr(self, "_terminal_button_row")
+                and self._terminal_button_row is not None
+            ):
                 try:
                     for control in self._terminal_button_row.controls[:]:
-                        if hasattr(control, 'on_click'):
+                        if hasattr(control, "on_click"):
                             control.on_click = None
                 except Exception:
                     pass
                 self._terminal_button_row = None
 
             # 3. 清理 ui_event（必须先清理，打破循环引用）
-            if hasattr(self, 'ui_event') and self.ui_event is not None:
+            if hasattr(self, "ui_event") and self.ui_event is not None:
                 try:
-                    if hasattr(self.ui_event, 'cleanup'):
+                    if hasattr(self.ui_event, "cleanup"):
                         self.ui_event.cleanup()
                 except Exception:
                     pass
                 self.ui_event = None
 
             # 4. 清理 terminal（添加异常处理，避免解释器关闭时的线程错误）
-            if hasattr(self, 'terminal') and self.terminal is not None:
+            if hasattr(self, "terminal") and self.terminal is not None:
                 try:
                     self.terminal.cleanup_all_resources(aggressive=True)
                     self.terminal.stop_periodic_cleanup()
@@ -821,7 +1020,7 @@ class UniUI():
                 self.terminal = None
 
             # 5. 清理 sync_ui
-            if hasattr(self, 'sync_ui') and self.sync_ui is not None:
+            if hasattr(self, "sync_ui") and self.sync_ui is not None:
                 try:
                     self.sync_ui.destroy()
                 except Exception:
@@ -829,17 +1028,17 @@ class UniUI():
                 self.sync_ui = None
 
             # 6. 清理 content 和 page 引用
-            if hasattr(self, '_content') and self._content is not None:
+            if hasattr(self, "_content") and self._content is not None:
                 try:
                     self._content.content = None
                 except Exception:
                     pass
                 self._content = None
 
-            if hasattr(self, 'page') and self.page is not None:
+            if hasattr(self, "page") and self.page is not None:
                 try:
                     # 尝试清理 Flet 页面上的所有控件
-                    if hasattr(self.page, 'clean'):
+                    if hasattr(self.page, "clean"):
                         self.page.clean()
                 except Exception:
                     pass
@@ -847,21 +1046,22 @@ class UniUI():
 
             # 7. 清理视图引用
             self._views_loaded = False
-            if hasattr(self, '_terminal_page'):
+            if hasattr(self, "_terminal_page"):
                 self._terminal_page = None
-            if hasattr(self, '_terminal_page_container'):
+            if hasattr(self, "_terminal_page_container"):
                 self._terminal_page_container = None
-            if hasattr(self, 'version_view'):
+            if hasattr(self, "version_view"):
                 self.version_view = None
-            if hasattr(self, 'sync_view'):
+            if hasattr(self, "sync_view"):
                 self.sync_view = None
-            if hasattr(self, 'settings_view'):
+            if hasattr(self, "settings_view"):
                 self.settings_view = None
-            if hasattr(self, 'about_view'):
+            if hasattr(self, "about_view"):
                 self.about_view = None
 
             # 8. 强制垃圾回收
             import gc
+
             gc.collect()
 
             print("[UniUI] 资源清理完成")
@@ -877,4 +1077,4 @@ class UniUI():
         try:
             self.cleanup()
         except Exception:
-            pass    
+            pass
