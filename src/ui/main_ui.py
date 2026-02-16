@@ -162,13 +162,24 @@ class UniUI:
                                 size=14,
                                 color=ft.Colors.GREY_600,
                             ),
-                            ft.Switch(
-                                label="启用局域网访问",
-                                value=self.stcfg.listen,
-                                on_change=self.ui_event.listen_changed,
+                            ft.Row(
+                                [
+                                    ft.Switch(
+                                        label="启用局域网访问",
+                                        value=self.stcfg.listen,
+                                        on_change=self.ui_event.listen_changed,
+                                        expand=True,
+                                    ),
+                                    ft.IconButton(
+                                        icon=ft.Icons.EDIT_OUTLINED,
+                                        tooltip="编辑IP白名单",
+                                        on_click=self.ui_event.edit_ip_whitelist,
+                                    ),
+                                ],
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                             ),
                             ft.Text(
-                                "开启后自动生成whitelist.txt(如有，则不会生成)，放行192.168.*.*，关闭后不会删除",
+                                "开启后允许局域网设备访问，可在config.yaml中配置IP白名单",
                                 size=14,
                                 color=ft.Colors.BLUE_400,
                             ),

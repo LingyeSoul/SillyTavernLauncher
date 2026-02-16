@@ -1513,6 +1513,20 @@ class UiEvent:
 
         show_host_whitelist_dialog(self.page, self.stCfg, on_save)
 
+    def edit_ip_whitelist(self, e):
+        from ui.dialogs.ip_whitelist_dialog import show_ip_whitelist_dialog
+
+        def on_save(mode, forwarded, ips):
+            self.stCfg.whitelist_mode = mode
+            self.stCfg.enable_forwarded_whitelist = forwarded
+            self.stCfg.whitelist_ips = ips
+            self.stCfg.save_config()
+            self.showMsg(
+                f"IP白名单配置已更新：过滤{'开启' if mode else '关闭'}, IP数: {len(ips)}"
+            )
+
+        show_ip_whitelist_dialog(self.page, self.stCfg, on_save)
+
     def env_changed(self, e):
         use_sys_env = e.control.value
         self.config_manager.set("use_sys_env", use_sys_env)
