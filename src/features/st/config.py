@@ -21,6 +21,7 @@ class stcfg:
         self.whitelist_mode = True
         self.enable_forwarded_whitelist = True
         self.whitelist_ips = ["::1", "127.0.0.1"]
+        self.unified_whitelist = False
 
         self.yaml = YAML()
         self.yaml.preserve_quotes = True
@@ -51,6 +52,7 @@ class stcfg:
                 self.whitelist_ips = self.config_data.get(
                     "whitelist", ["::1", "127.0.0.1"]
                 )
+                self.unified_whitelist = self.config_data.get("unifiedWhitelist", False)
 
             self._migrate_whitelist_from_txt()
 
@@ -77,6 +79,7 @@ class stcfg:
                 self.enable_forwarded_whitelist
             )
             self.config_data["whitelist"] = self.whitelist_ips
+            self.config_data["unifiedWhitelist"] = self.unified_whitelist
 
             with open(self.config_path, "w", encoding="utf-8") as file:
                 self.yaml.dump(self.config_data, file)
@@ -230,3 +233,61 @@ class stcfg:
         except Exception as e:
             app_logger.error(f"白名单更新失败: {str(e)}")
             return False
+
+    def sync_whitelists(self, source: str = "ip"):
+        """
+        同步白名单内容
+
+        Args:
+            source: 同步源，"ip" 表示从 IP 白名单同步到 Host 白名单，
+                   "host" 表示从 Host 白名单同步到 IP 白名单
+
+        当 unified_whitelist 为 True 时，自动同步两个白名单
+        """
+        import re
+
+        def is_valid_ip_or_pattern(entry: str) -> bool:
+            if not entry:
+                return False
+            if entry == "localhost":
+                return False
+            ipv4_pattern = r"^(\d{1,3}\.){3}\d{1,3}(\.\*)?$"
+            ipv6_pattern = r"^[0-9a-fA-F:]+::?[0-9a-fA-F:]*$|^\[[0-9a-fA-F:]+\]$|^[0-9a-fA-F:]+::\*$"
+            ipv4_cidr = r"^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$"
+            ipv6_cidr = r"^[0-9a-fA-F:]+/\d{1,3}$"
+            wildcard = r"^(\d{1,3}\.){0,3}\*$|^(\d{1,3}\.){0,2}\*\.\*$"
+            return bool(
+                re.match(ipv4_pattern, entry)
+                or re.match(ipv6_pattern, entry)
+                or re.match(ipv4_cidr, entry)
+                or re.match(ipv6_cidr, entry)
+                or re.match(wildcard, entry)
+            )
+
+        if source == "ip":
+            new_hosts = []
+            if "localhost" in self.host_whitelist_hosts:
+                new_hosts.append("localhost")
+            for ip in self.whitelist_ips:
+                if ":" in ip and not ip.startswith("["):
+                    new_hosts.append(f"[{ip}]")
+                else:
+                    new_hosts.append(ip)
+            self.host_whitelist_hosts = new_hosts
+        else:
+            new_ips = []
+            for host in self.host_whitelist_hosts:
+                if host == "localhost":
+                    continue
+                if host.startswith("[") and host.endswith("]"):
+                    inner = host[1:-1]
+                    if is_valid_ip_or_pattern(inner):
+                        new_ips.append(inner)
+                elif is_valid_ip_or_pattern(host):
+                    new_ips.append(host)
+            self.whitelist_ips = new_ips
+
+        self.save_config()
+        app_logger.info(
+            f"白名单已同步: {source} -> {'host' if source == 'ip' else 'ip'}"
+        )

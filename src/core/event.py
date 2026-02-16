@@ -1498,13 +1498,25 @@ class UiEvent:
         status = "开启" if self.stCfg.host_whitelist_enabled else "关闭"
         self.showMsg(f"主机白名单已{status}")
 
+    def unified_whitelist_changed(self, e):
+        self.stCfg.unified_whitelist = e.control.value
+        if self.stCfg.unified_whitelist:
+            self.stCfg.sync_whitelists("ip")
+            self.showMsg("已启用统一白名单，IP 白名单已同步到主机白名单")
+        else:
+            self.stCfg.save_config()
+            self.showMsg("已关闭统一白名单")
+
     def edit_host_whitelist(self, e):
         from ui.dialogs.host_whitelist_dialog import show_host_whitelist_dialog
 
         def on_save(scan, hosts):
             self.stCfg.host_whitelist_scan = scan
             self.stCfg.host_whitelist_hosts = hosts
-            self.stCfg.save_config()
+            if self.stCfg.unified_whitelist:
+                self.stCfg.sync_whitelists("host")
+            else:
+                self.stCfg.save_config()
             enabled = self.stCfg.host_whitelist_enabled
             status = "开启" if enabled else "关闭"
             self.showMsg(
@@ -1520,7 +1532,10 @@ class UiEvent:
             self.stCfg.whitelist_mode = mode
             self.stCfg.enable_forwarded_whitelist = forwarded
             self.stCfg.whitelist_ips = ips
-            self.stCfg.save_config()
+            if self.stCfg.unified_whitelist:
+                self.stCfg.sync_whitelists("ip")
+            else:
+                self.stCfg.save_config()
             self.showMsg(
                 f"IP白名单配置已更新：过滤{'开启' if mode else '关闭'}, IP数: {len(ips)}"
             )
