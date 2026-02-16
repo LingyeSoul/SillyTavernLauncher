@@ -268,6 +268,16 @@ class UniUI:
                                 size=14,
                                 color=ft.Colors.BLUE_400,
                             ),
+                            ft.Switch(
+                                label="使用同一白名单",
+                                value=self.stcfg.unified_whitelist,
+                                on_change=self.ui_event.unified_whitelist_changed,
+                            ),
+                            ft.Text(
+                                "开启后，IP 白名单和主机白名单将使用相同内容，修改其中一个会自动同步到另一个",
+                                size=14,
+                                color=ft.Colors.BLUE_400,
+                            ),
                             ft.Divider(),
                             ft.Text(
                                 "启动器功能设置", size=18, weight=ft.FontWeight.BOLD
