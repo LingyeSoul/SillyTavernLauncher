@@ -215,6 +215,28 @@ def checkout_st_version(commit_hash, st_dir=None):
                 f"获取远程提交失败（继续尝试）: {fetch_result.stderr.strip() if fetch_result.stderr else '未知错误'}"
             )
 
+        # 步骤6.5：验证commit是否存在，如果不存在尝试获取完整历史
+        print(f"验证commit {commit_hash[:7]}是否存在...")
+        verify_cmd = _format_git_cmd(
+            git_cmd, needs_quotes, f"cat-file -t {commit_hash}"
+        )
+        verify_result = subprocess.run(
+            verify_cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=st_dir,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+
+        if verify_result.returncode != 0:
+            # commit不存在，返回错误提示
+            return (
+                False,
+                f"切换失败: 该版本({commit_hash[:7]})在远程仓库中不存在。\n"
+                f"建议: 尝试更新到最新版本后再试。",
+            )
+
         # 步骤7：使用git reset --hard切换到指定commit（保持在release分支上）
         print(f"在release分支上切换到commit {commit_hash[:7]}...")
         reset_cmd = _format_git_cmd(
