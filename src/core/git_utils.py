@@ -2,6 +2,7 @@ import os
 import subprocess
 from features.system.env import Env
 from config.config_manager import ConfigManager
+from utils.logger import app_logger
 
 
 def _get_git_command():
@@ -428,3 +429,212 @@ def switch_git_remote_to_gitee(st_dir=None):
 
     except Exception as e:
         return False, f"切换过程中发生错误: {str(e)}"
+
+
+
+def cleanup_git_state(st_dir=None):
+    """
+    清理Git仓库的未完成状态（merge、rebase等）
+    
+    检测并清理以下状态：
+    - MERGE_HEAD（合并冲突状态）
+    - rebase-apply（旧版rebase状态）
+    - rebase-merge（新版rebase状态）
+    - CHERRY_PICK_HEAD（cherry-pick状态）
+    - REVERT_HEAD（revert状态）
+    
+    执行清理命令：
+    - git merge --abort
+    - git rebase --abort
+    - git reset --hard HEAD
+    
+    Args:
+        st_dir (str): SillyTavern目录路径，默认为当前目录下的SillyTavern文件夹
+    
+    Returns:
+        tuple: (success: bool, message: str)
+    """
+    if st_dir is None:
+        st_dir = os.path.join(os.getcwd(), "SillyTavern")
+    
+    # 检查目录是否存在
+    if not os.path.exists(st_dir):
+        return True, "SillyTavern目录不存在，无需清理"
+    
+    # 检查是否是Git仓库
+    git_dir = os.path.join(st_dir, ".git")
+    if not os.path.exists(git_dir):
+        return True, "不是Git仓库，无需清理"
+    
+    try:
+        git_cmd, needs_quotes = _get_git_command()
+        
+        # 检测未完成状态的标志文件
+        merge_head = os.path.join(st_dir, ".git", "MERGE_HEAD")
+        rebase_apply = os.path.join(st_dir, ".git", "rebase-apply")
+        rebase_merge = os.path.join(st_dir, ".git", "rebase-merge")
+        cherry_pick_head = os.path.join(st_dir, ".git", "CHERRY_PICK_HEAD")
+        revert_head = os.path.join(st_dir, ".git", "REVERT_HEAD")
+        
+        needs_cleanup = (
+            os.path.exists(merge_head) or
+            os.path.exists(rebase_apply) or
+            os.path.exists(rebase_merge) or
+            os.path.exists(cherry_pick_head) or
+            os.path.exists(revert_head)
+        )
+        
+        if not needs_cleanup:
+            return True, "Git状态干净，无需清理"
+        
+        print("检测到Git未完成状态，开始清理...")
+        
+        # 清理步骤1：中止合并操作
+        if os.path.exists(merge_head):
+            print("检测到未完成的合并操作，执行 merge --abort...")
+            merge_abort_result = subprocess.run(
+                _format_git_cmd(git_cmd, needs_quotes, "merge --abort"),
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=st_dir,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            if merge_abort_result.returncode == 0:
+                print("✓ 合并操作已中止")
+            else:
+                print(f"⚠ 中止合并失败: {merge_abort_result.stderr.strip() if merge_abort_result.stderr else '未知错误'}")
+        
+        # 清理步骤2：中止rebase操作
+        rebase_dir = None
+        if os.path.exists(rebase_merge):
+            rebase_dir = rebase_merge
+        elif os.path.exists(rebase_apply):
+            rebase_dir = rebase_apply
+        
+        if rebase_dir:
+            print(f"检测到未完成的rebase操作，执行 rebase --abort...")
+            rebase_abort_result = subprocess.run(
+                _format_git_cmd(git_cmd, needs_quotes, "rebase --abort"),
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=st_dir,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            if rebase_abort_result.returncode == 0:
+                print("✓ Rebase操作已中止")
+            else:
+                print(f"⚠ 中止rebase失败: {rebase_abort_result.stderr.strip() if rebase_abort_result.stderr else '未知错误'}")
+        
+        # 清理步骤3：中止cherry-pick操作
+        if os.path.exists(cherry_pick_head):
+            print("检测到未完成的cherry-pick操作，执行 cherry-pick --abort...")
+            cherry_abort_result = subprocess.run(
+                _format_git_cmd(git_cmd, needs_quotes, "cherry-pick --abort"),
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=st_dir,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            if cherry_abort_result.returncode == 0:
+                print("✓ Cherry-pick操作已中止")
+            else:
+                print(f"⚠ 中止cherry-pick失败: {cherry_abort_result.stderr.strip() if cherry_abort_result.stderr else '未知错误'}")
+        
+        # 清理步骤4：中止revert操作
+        if os.path.exists(revert_head):
+            print("检测到未完成的revert操作，执行 revert --abort...")
+            revert_abort_result = subprocess.run(
+                _format_git_cmd(git_cmd, needs_quotes, "revert --abort"),
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=st_dir,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            if revert_abort_result.returncode == 0:
+                print("✓ Revert操作已中止")
+            else:
+                print(f"⚠ 中止revert失败: {revert_abort_result.stderr.strip() if revert_abort_result.stderr else '未知错误'}")
+        
+        # 清理步骤5：清理工作区索引（reset --hard HEAD）
+        print("清理工作区索引...")
+        reset_result = subprocess.run(
+            _format_git_cmd(git_cmd, needs_quotes, "reset --hard HEAD"),
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=st_dir,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        
+        if reset_result.returncode == 0:
+            print("✓ 工作区已清理")
+        else:
+            print(f"⚠ 清理工作区失败: {reset_result.stderr.strip() if reset_result.stderr else '未知错误'}")
+        
+        # 清理步骤6：清理可能存在的未提交更改
+        print("检查并清理未提交的更改...")
+        status_result = subprocess.run(
+            _format_git_cmd(git_cmd, needs_quotes, "status --porcelain"),
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=st_dir,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        
+        if status_result.stdout.strip():
+            # 过滤掉package-lock.json的更改（由于使用镜像NPM源导致）
+            modified_lines = status_result.stdout.strip().split("\n")
+            non_package_lock_changes = [
+                line
+                for line in modified_lines
+                if line.strip() and "package-lock.json" not in line
+            ]
+            
+            if non_package_lock_changes:
+                print(f"⚠ 检测到{len(non_package_lock_changes)}个未提交的更改，使用reset --hard清理")
+                reset_clean_result = subprocess.run(
+                    _format_git_cmd(git_cmd, needs_quotes, "reset --hard HEAD"),
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=st_dir,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                if reset_clean_result.returncode == 0:
+                    print("✓ 未提交的更改已清理")
+            else:
+                # 只有package-lock.json被修改，恢复它
+                subprocess.run(
+                    _format_git_cmd(git_cmd, needs_quotes, "checkout -- package-lock.json"),
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=st_dir,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+                print("✓ package-lock.json已恢复")
+        
+        # 清理步骤7：验证清理结果（检查标志文件是否已移除）
+        remaining_flags = []
+        for flag_path in [merge_head, rebase_apply, rebase_merge, cherry_pick_head, revert_head]:
+            if os.path.exists(flag_path):
+                remaining_flags.append(os.path.basename(flag_path))
+        
+        if remaining_flags:
+            error_msg = f"清理失败，仍存在的状态文件: {', '.join(remaining_flags)}"
+            app_logger.error(error_msg)
+            return False, error_msg
+        
+        app_logger.info("Git状态清理验证通过")
+        
+        return True, "Git状态清理成功"
+        
+    except Exception as e:
+        error_msg = f"清理Git状态时出错: {str(e)}"
+        app_logger.error(error_msg)
+        return False, error_msg

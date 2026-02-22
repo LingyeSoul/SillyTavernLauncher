@@ -352,18 +352,6 @@ class UniUI:
                                         ],
                                         spacing=5,
                                     ),
-                                    ft.Row(
-                                        controls=[
-                                            ft.Button(
-                                                "重置白名单",
-                                                icon=ft.Icons.REFRESH,
-                                                style=self.BSytle,
-                                                on_click=self.ui_event.reset_whitelist,
-                                                height=40,
-                                            )
-                                        ],
-                                        spacing=5,
-                                    ),
                                 ],
                                 spacing=5,
                             ),
