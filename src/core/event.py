@@ -945,6 +945,18 @@ class UiEvent:
             if self.env.checkST():
                 self.terminal.add_log("正在更新SillyTavern...")
                 if git_path:
+                    # 步骤0：清理Git未完成状态（merge、rebase等）
+                    self.terminal.add_log("清理Git状态...")
+                    try:
+                        from core.git_utils import cleanup_git_state
+                        success, message = cleanup_git_state(self.env.st_dir)
+                        if not success:
+                            self.terminal.add_log(f"警告: {message}")
+                        else:
+                            self.terminal.add_log(message)
+                    except Exception as ex:
+                        self.terminal.add_log(f"清理Git状态时出错: {str(ex)}")
+                    
                     # 检查并恢复detached HEAD状态
                     self.terminal.add_log("检查Git状态...")
                     try:
@@ -1170,6 +1182,18 @@ class UiEvent:
             if self.env.checkST():
                 self.terminal.add_log("正在更新SillyTavern...")
                 if git_path:
+                    # 步骤0：清理Git未完成状态（merge、rebase等）
+                    self.terminal.add_log("清理Git状态...")
+                    try:
+                        from core.git_utils import cleanup_git_state
+                        success, message = cleanup_git_state(self.env.st_dir)
+                        if not success:
+                            self.terminal.add_log(f"警告: {message}")
+                        else:
+                            self.terminal.add_log(message)
+                    except Exception as ex:
+                        self.terminal.add_log(f"清理Git状态时出错: {str(ex)}")
+                    
                     # 检查并恢复detached HEAD状态
                     self.terminal.add_log("检查Git状态...")
                     try:
@@ -2122,33 +2146,6 @@ class UiEvent:
         except Exception as ex:
             self.terminal.add_log(f"启动命令行失败: {str(ex)}")
             self.show_error_dialog("启动失败", f"启动命令行失败: {str(ex)}")
-
-    def reset_whitelist(self, e):
-        """
-        重置白名单文件，使用当前设备的实际网段
-        """
-        from features.st.config import stcfg
-        from utils.logger import app_logger
-
-        try:
-            self.terminal.add_log("正在重置白名单...")
-
-            # 创建 stcfg 实例并调用 create_whitelist
-            config = stcfg()
-            if not config.create_whitelist():
-                self.terminal.add_log("白名单重置失败: 无法创建白名单文件")
-                self.page.show_dialog(
-                    ft.SnackBar(ft.Text("白名单重置失败，请检查日志"))
-                )
-                return
-
-            self.terminal.add_log("白名单已重置完成")
-            self.page.show_dialog(ft.SnackBar(ft.Text("白名单已重置完成")))
-
-        except Exception as ex:
-            self.terminal.add_log(f"重置白名单失败: {str(ex)}")
-            app_logger.error(f"重置白名单失败: {str(ex)}")
-            self.show_error_dialog("重置失败", f"重置白名单失败: {str(ex)}")
 
     # ==================== SillyTavern版本切换相关方法 ====================
 
