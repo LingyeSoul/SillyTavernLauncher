@@ -297,7 +297,7 @@ def create_version_switch_view(page, terminal, ui_event):
         error_text,
 
         # 版本列表标题
-        ft.Text("可选版本（点击切换）", size=14),
+        ft.Text("可选版本（升级请在终端页面使用更新按钮进行！！！）", size=14),
 
         # 版本列表
         versions_list,
