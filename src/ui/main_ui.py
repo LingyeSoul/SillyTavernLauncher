@@ -647,6 +647,11 @@ class UniUI:
                     label="同步",
                 ),
                 ft.NavigationRailDestination(
+                    icon=ft.Icons.EXTENSION_OUTLINED,
+                    selected_icon=ft.Icons.EXTENSION,
+                    label="扩展",
+                ),
+                ft.NavigationRailDestination(
                     icon=ft.Icons.SETTINGS_OUTLINED,
                     selected_icon=ft.Icons.SETTINGS,
                     label="设置",
@@ -689,8 +694,9 @@ class UniUI:
         0: ("_terminal_page", "终端"),
         1: ("version_view", "版本"),
         2: ("sync_view", "同步"),
-        3: ("settings_view", "设置"),
-        4: ("about_view", "关于"),
+        3: ("extension_view", "扩展"),
+        4: ("settings_view", "设置"),
+        5: ("about_view", "关于"),
     }
 
     def _handle_view_change(self, index):
@@ -814,6 +820,25 @@ class UniUI:
 
             # 延迟创建设置视图（最复杂）
             self.settings_view = self.getSettingView()
+
+            # 延迟创建扩展管理视图
+            try:
+                from features.extensions.extension_page import create_extension_page
+
+                self.extension_view = create_extension_page(
+                    page, self.terminal, self.ui_event
+                )
+            except Exception as e:
+                print(f"扩展管理视图初始化失败: {e}")
+                self.extension_view = ft.Column(
+                    [
+                        ft.Text("扩展管理", size=24, weight=ft.FontWeight.BOLD),
+                        ft.Divider(),
+                        ft.Text("扩展管理功能初始化失败", color=ft.Colors.RED),
+                        ft.Text(f"错误: {str(e)}", size=12, color=ft.Colors.GREY_600),
+                    ],
+                    spacing=15,
+                )
 
             # 延迟创建关于视图
             self.about_view = self.getAboutView()
@@ -1067,6 +1092,8 @@ class UniUI:
                 self.settings_view = None
             if hasattr(self, "about_view"):
                 self.about_view = None
+            if hasattr(self, "extension_view"):
+                self.extension_view = None
 
             # 8. 强制垃圾回收
             import gc
