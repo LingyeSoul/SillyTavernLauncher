@@ -4,10 +4,11 @@
 提供 SillyTavern 扩展的管理页面，包括：
 - 全局插件和用户插件的列表展示
 - Git 安装、ZIP 安装
-- 插件转换、删除、重命名
+- 插件转换、删除
 """
 
 import threading
+from functools import partial
 
 import flet as ft
 
@@ -72,7 +73,7 @@ def create_extension_card(ext_info: ExtensionInfo, on_action, page: ft.Page):
             f"⚠ {ext_info.error_msg}", size=11, color=ft.Colors.ORANGE_600
         )
 
-    # 操作按钮
+    # 操作按钮（已删除复制按钮）
     action_buttons = ft.Row(
         [
             ft.IconButton(
@@ -84,21 +85,6 @@ def create_extension_card(ext_info: ExtensionInfo, on_action, page: ft.Page):
                     else "全局插件"
                 ),
                 on_click=lambda e: on_action("move", ext_info),
-            ),
-            ft.IconButton(
-                icon=ft.Icons.COPY,
-                tooltip="复制到"
-                + (
-                    "用户插件"
-                    if ext_info.ext_type == ExtensionType.GLOBAL
-                    else "全局插件"
-                ),
-                on_click=lambda e: on_action("duplicate", ext_info),
-            ),
-            ft.IconButton(
-                icon=ft.Icons.EDIT,
-                tooltip="重命名",
-                on_click=lambda e: on_action("rename", ext_info),
             ),
             ft.IconButton(
                 icon=ft.Icons.DELETE,
@@ -185,7 +171,13 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
         except:
             pass
 
+    async def close_dialog_async():
+        """异步关闭当前对话框"""
+        close_dialog()
 
+    async def show_snackbar_async(message: str, color=ft.Colors.BLUE_600):
+        """异步显示提示条"""
+        show_snackbar(message, color)
     def refresh_lists():
         """刷新扩展列表"""
         log("正在刷新扩展列表...")
@@ -244,15 +236,11 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
         log(f"已加载 {len(global_exts)} 个全局插件, {len(user_exts)} 个用户插件")
 
     def on_extension_action(action: str, ext_info: ExtensionInfo):
-        """处理扩展操作"""
+        """处理扩展操作（已删除duplicate操作）"""
         if action == "delete":
             show_delete_confirm_dialog(ext_info)
         elif action == "move":
             move_extension(ext_info)
-        elif action == "duplicate":
-            duplicate_extension(ext_info)
-        elif action == "rename":
-            show_rename_dialog(ext_info)
 
     def show_delete_confirm_dialog(ext_info: ExtensionInfo):
         """显示删除确认对话框"""
@@ -307,65 +295,9 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
         else:
             show_snackbar(message, ft.Colors.RED_600)
 
-    def duplicate_extension(ext_info: ExtensionInfo):
-        """复制扩展到另一类型"""
-        target_type = (
-            ExtensionType.USER
-            if ext_info.ext_type == ExtensionType.GLOBAL
-            else ExtensionType.GLOBAL
-        )
-
-        success, message = ext_manager.duplicate_extension(ext_info, target_type)
-        if success:
-            show_snackbar(message, ft.Colors.GREEN_600)
-            refresh_lists()
-        else:
-            show_snackbar(message, ft.Colors.RED_600)
-
-    def show_rename_dialog(ext_info: ExtensionInfo):
-        """显示重命名对话框"""
-        name_field = ft.TextField(
-            label="新名称",
-            value=ext_info.name,
-            hint_text="只能包含字母、数字、下划线和短横线",
-        )
-
-        def on_confirm(e):
-            new_name = name_field.value.strip()
-            if not new_name:
-                show_snackbar("名称不能为空", ft.Colors.RED_600)
-                return
-
-            close_dialog()
-            success, message = ext_manager.rename_extension(ext_info, new_name)
-            if success:
-                show_snackbar(message, ft.Colors.GREEN_600)
-                refresh_lists()
-            else:
-                show_snackbar(message, ft.Colors.RED_600)
-
-        def on_cancel(e):
-            close_dialog()
-
-        dialog = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("重命名扩展"),
-            content=ft.Column(
-                [ft.Text(f"当前名称: {ext_info.name}"), ft.Divider(), name_field],
-                tight=True,
-                spacing=10,
-            ),
-            actions=[
-                ft.TextButton("取消", on_click=on_cancel),
-                ft.ElevatedButton("确认", on_click=on_confirm),
-            ],
-            actions_alignment=ft.MainAxisAlignment.END,
-        )
-
-        show_dialog(dialog)
 
     def show_git_install_dialog():
-        """显示Git安装对话框"""
+        """显示Git安装对话框（带取消功能）"""
         url_field = ft.TextField(
             label="Git 仓库地址",
             prefix_icon=ft.Icons.LINK,
@@ -404,9 +336,16 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
 
             close_dialog()
 
-            # 创建进度对话框
+            # 创建进度对话框（带取消按钮）
             progress_bar = ft.ProgressBar(width=400, value=0)
             status_text = ft.Text("准备下载...", size=14)
+            cancel_flag = {"cancelled": False}
+
+            def on_cancel_install(e):
+                cancel_flag["cancelled"] = True
+                status_text.value = "正在取消..."
+                page.update()
+
             progress_dialog = ft.AlertDialog(
                 modal=True,
                 title=ft.Text("正在安装扩展"),
@@ -420,97 +359,95 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
                     tight=True,
                     spacing=10,
                 ),
+                actions=[
+                    ft.TextButton("取消", on_click=on_cancel_install),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
             )
             show_dialog(progress_dialog)
 
             # 在后台线程中执行安装
             def install():
+                async def update_progress_async(status: str, progress: float):
+                    if cancel_flag["cancelled"]:
+                        return False
+                    status_text.value = status
+                    progress_bar.value = progress
+                    page.update()
+                    return True
+
                 def update_progress(status: str, progress: float):
-                    def update_ui():
-                        status_text.value = status
-                        progress_bar.value = progress
-                        page.update()
-                    page.run(update_ui)
-
-                update_progress("正在克隆仓库...", 0.3)
-                success, message = ext_manager.install_from_git(
-                    url, ext_type, custom_name
-                )
-                update_progress("安装完成" if success else "安装失败", 1.0)
-
-                def show_result():
-                    close_dialog()
-                    color = ft.Colors.GREEN_600 if success else ft.Colors.RED_600
-                    show_snackbar(message, color)
-                    if success:
-                        refresh_lists()
-
-                page.run(show_result)
-
-            threading.Thread(target=install, daemon=True).start()
+                    if cancel_flag["cancelled"]:
+                        return False
+                    # 使用 run_task 在主线程更新 UI
+                    page.run_task(update_progress_async, status, progress)
+                    return True
             def install():
                 def update_progress(status: str, progress: float):
-                    def update_ui():
+                    if cancel_flag["cancelled"]:
+                        return False
+
+                    async def update_ui():
                         status_text.value = status
                         progress_bar.value = progress
                         page.update()
+
                     page.run_task(update_ui)
+                    return True
 
-                update_progress("正在克隆仓库...", 0.3)
+                # 检查是否已取消
+                if not update_progress("正在克隆仓库...", 0.3):
+                    page.run_task(close_dialog_async)
+                    page.run_task(partial(show_snackbar_async, "安装已取消", ft.Colors.ORANGE_600))
+                    return
+
                 success, message = ext_manager.install_from_git(
                     url, ext_type, custom_name
                 )
+
+                # 检查是否已取消（安装完成后）
+                if cancel_flag["cancelled"]:
+                    page.run_task(close_dialog_async)
+                    page.run_task(partial(show_snackbar_async, "安装已取消", ft.Colors.ORANGE_600))
+                    return
+
                 update_progress("安装完成" if success else "安装失败", 1.0)
 
-                def show_result():
+                async def show_result_async():
                     close_dialog()
                     color = ft.Colors.GREEN_600 if success else ft.Colors.RED_600
                     show_snackbar(message, color)
                     if success:
                         refresh_lists()
 
-                page.run_task(lambda: show_result())
+                page.run_task(show_result_async)
+                if not update_progress("正在克隆仓库...", 0.3):
+                    page.run_task(close_dialog_async)
+                    page.run_task(partial(show_snackbar_async, "安装已取消", ft.Colors.ORANGE_600))
+                    return
 
-            threading.Thread(target=install, daemon=True).start()
-            url = url_field.value.strip()
-            if not url:
-                show_snackbar("请输入 Git 仓库地址", ft.Colors.RED_600)
-                return
-
-            # 验证URL格式
-            if not (
-                url.startswith("http://")
-                or url.startswith("https://")
-                or url.startswith("git@")
-            ):
-                show_snackbar("无效的 Git 仓库地址", ft.Colors.RED_600)
-                return
-
-            ext_type = (
-                ExtensionType.GLOBAL
-                if type_dropdown.value == "global"
-                else ExtensionType.USER
-            )
-            custom_name = None
-
-            close_dialog()
-
-            # 在后台线程中执行安装
-            def install():
                 success, message = ext_manager.install_from_git(
                     url, ext_type, custom_name
                 )
 
-                def update_ui():
+                # 检查是否已取消（安装完成后）
+                if cancel_flag["cancelled"]:
+                    page.run_task(close_dialog_async)
+                    page.run_task(partial(show_snackbar_async, "安装已取消", ft.Colors.ORANGE_600))
+                    return
+
+                update_progress("安装完成" if success else "安装失败", 1.0)
+
+                async def show_result():
+                    close_dialog()
                     color = ft.Colors.GREEN_600 if success else ft.Colors.RED_600
                     show_snackbar(message, color)
                     if success:
                         refresh_lists()
 
-                page.run_task(lambda: update_ui())
+                page.run_task(show_result)
 
             threading.Thread(target=install, daemon=True).start()
-            show_snackbar("正在安装，请稍候...", ft.Colors.BLUE_600)
 
         def on_cancel(e):
             close_dialog()
@@ -537,28 +474,34 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
         show_dialog(dialog)
 
     def show_zip_install_dialog():
-        """显示ZIP安装对话框"""
+        """显示ZIP安装对话框（带取消功能）"""
+        # 创建文件选择器（Service）
+        file_picker = ft.FilePicker()
         path_field = ft.TextField(
             label="ZIP 文件路径",
-            hint_text="请输入 ZIP 文件的完整路径",
+            hint_text="请选择 ZIP 文件",
             prefix_icon=ft.Icons.FOLDER,
+            read_only=True,
         )
-
-        type_dropdown = ft.Dropdown(
-            label="安装到",
-            value="global",
-            options=[
-                ft.dropdown.Option("global", "全局插件"),
-                ft.dropdown.Option("user", "用户插件"),
-            ],
-        )
-
+        
+        async def on_pick_file_click(e):
+            """点击选择文件按钮"""
+            files = await file_picker.pick_files(
+                allow_multiple=False,
+                file_type=ft.FilePickerFileType.CUSTOM,
+                allowed_extensions=["zip"],
+            )
+            if files:
+                # 获取选择的第一个文件
+                selected_file = files[0]
+                path_field.value = selected_file.path
+                page.update()
         def on_confirm(e):
             zip_path = path_field.value.strip()
             if not zip_path:
-                show_snackbar("请输入 ZIP 文件路径", ft.Colors.RED_600)
+                show_snackbar("请选择 ZIP 文件", ft.Colors.RED_600)
                 return
-
+            
             ext_type = (
                 ExtensionType.GLOBAL
                 if type_dropdown.value == "global"
@@ -568,9 +511,16 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
 
             close_dialog()
 
-            # 创建进度对话框
+            # 创建进度对话框（带取消按钮）
             progress_bar = ft.ProgressBar(width=400, value=0)
             status_text = ft.Text("准备解压...", size=14)
+            cancel_flag = {"cancelled": False}
+
+            def on_cancel_install(e):
+                cancel_flag["cancelled"] = True
+                status_text.value = "正在取消..."
+                page.update()
+
             progress_dialog = ft.AlertDialog(
                 modal=True,
                 title=ft.Text("正在安装扩展"),
@@ -584,89 +534,82 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
                     tight=True,
                     spacing=10,
                 ),
+                actions=[
+                    ft.TextButton("取消", on_click=on_cancel_install),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
             )
             show_dialog(progress_dialog)
 
-            # 在后台线程中执行安装
             def install():
+                async def update_progress_async(status: str, progress: float):
+                    if cancel_flag["cancelled"]:
+                        return False
+                    status_text.value = status
+                    progress_bar.value = progress
+                    page.update()
+                    return True
+                
                 def update_progress(status: str, progress: float):
-                    def update_ui():
-                        status_text.value = status
-                        progress_bar.value = progress
-                        page.update()
-                    page.run(update_ui)
-
-                update_progress("正在解压文件...", 0.3)
+                    if cancel_flag["cancelled"]:
+                        return False
+                    page.run_task(update_progress_async, status, progress)
+                    return True
+                
+                # 检查是否已取消
+                if not update_progress("正在解压文件...", 0.3):
+                    page.run_task(close_dialog_async)
+                    page.run_task(partial(show_snackbar_async, "安装已取消", ft.Colors.ORANGE_600))
+                    return
+                
                 success, message = ext_manager.install_from_zip(
                     zip_path, ext_type, custom_name
                 )
+                
+                # 检查是否已取消（安装完成后）
+                if cancel_flag["cancelled"]:
+                    page.run_task(close_dialog_async)
+                    page.run_task(partial(show_snackbar_async, "安装已取消", ft.Colors.ORANGE_600))
+                    return
+                
                 update_progress("安装完成" if success else "安装失败", 1.0)
-
-                def show_result():
+                
+                async def show_result_async():
                     close_dialog()
                     color = ft.Colors.GREEN_600 if success else ft.Colors.RED_600
                     show_snackbar(message, color)
                     if success:
                         refresh_lists()
-
-                page.run(show_result)
-
+                
+                page.run_task(show_result_async)
+            
             threading.Thread(target=install, daemon=True).start()
-            def install():
-                def update_progress(status: str, progress: float):
-                    def update_ui():
-                        status_text.value = status
-                        progress_bar.value = progress
-                        page.update()
-                    page.run_task(update_ui)
 
-                update_progress("正在解压文件...", 0.3)
-                success, message = ext_manager.install_from_zip(
-                    zip_path, ext_type, custom_name
-                )
-                update_progress("安装完成" if success else "安装失败", 1.0)
-
-                def show_result():
-                    close_dialog()
-                    color = ft.Colors.GREEN_600 if success else ft.Colors.RED_600
-                    show_snackbar(message, color)
-                    if success:
-                        refresh_lists()
-
-                page.run_task(lambda: show_result())
-
-            threading.Thread(target=install, daemon=True).start()
-            zip_path = path_field.value.strip()
-            if not zip_path:
-                show_snackbar("请输入 ZIP 文件路径", ft.Colors.RED_600)
-                return
-
-            ext_type = (
-                ExtensionType.GLOBAL
-                if type_dropdown.value == "global"
-                else ExtensionType.USER
-            )
-            custom_name = None
-
+        def on_cancel(e):
             close_dialog()
 
-            # 在后台线程中执行安装
-            def install():
-                success, message = ext_manager.install_from_zip(
-                    zip_path, ext_type, custom_name
-                )
-
-                def update_ui():
-                    color = ft.Colors.GREEN_600 if success else ft.Colors.RED_600
-                    show_snackbar(message, color)
-                    if success:
-                        refresh_lists()
-
-                page.run_task(lambda: update_ui())
-
-            threading.Thread(target=install, daemon=True).start()
-            show_snackbar("正在安装，请稍候...", ft.Colors.BLUE_600)
-
+        # 文件选择行
+        file_pick_row = ft.Row(
+            [
+                path_field,
+                ft.IconButton(
+                    icon=ft.Icons.FOLDER_OPEN,
+                    tooltip="选择文件",
+                    on_click=on_pick_file_click,
+                ),
+            ],
+            spacing=5,
+        )
+        
+        type_dropdown = ft.Dropdown(
+            label="安装到",
+            value="global",
+            options=[
+                ft.dropdown.Option("global", "全局插件"),
+                ft.dropdown.Option("user", "用户插件"),
+            ],
+        )
+        
         def on_cancel(e):
             close_dialog()
 
@@ -675,8 +618,8 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
             title=ft.Text("从 ZIP 安装扩展"),
             content=ft.Column(
                 [
-                    ft.Text("请输入 ZIP 文件的完整路径"),
-                    path_field,
+                    ft.Text("请选择 ZIP 文件或输入文件路径"),
+                    file_pick_row,
                     type_dropdown,
                 ],
                 tight=True,
@@ -727,6 +670,7 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
                 "全局插件对所有用户生效，路径: SillyTavern/public/scripts/extensions/third-party",
                 size=12,
                 color=ft.Colors.GREY_600,
+                italic=True,
             ),
             ft.Divider(),
             global_list,
@@ -740,6 +684,8 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
             ft.Text(
                 "用户插件仅对当前用户生效，路径: SillyTavern/data/default-user/extensions",
                 size=12,
+                color=ft.Colors.GREY_600,
+                italic=True,
             ),
             ft.Divider(),
             user_list,
