@@ -1,5 +1,6 @@
 aiohttp==3.12.4
-flet==0.80.5
+flet==0.82.2
+flet-desktop==0.82.2
 packaging==25.0
 pystray==0.19.5
 ruamel.yaml
