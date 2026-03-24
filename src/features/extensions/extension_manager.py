@@ -116,8 +116,23 @@ class ExtensionManager:
         """获取用户扩展目录路径"""
         return os.path.join(self._get_base_path(), self.USER_EXT_DIR)
 
+    def _check_st_installed(self) -> bool:
+        """检查 SillyTavern 是否已安装（支持内置环境和系统环境模式）"""
+        st_dir = os.path.join(self._get_base_path(), "SillyTavern")
+        if not os.path.exists(st_dir):
+            return False
+        if not os.path.isfile(os.path.join(st_dir, "package.json")):
+            return False
+        if not os.path.isfile(os.path.join(st_dir, "server.js")):
+            return False
+        return True
+
     def _ensure_dir_exists(self, path: str):
-        """确保目录存在"""
+        """确保目录存在（仅在 SillyTavern 已安装时创建）"""
+        # 检查 SillyTavern 是否已安装
+        if not self._check_st_installed():
+            self._log("SillyTavern 未安装，无法创建扩展目录")
+            return
         if not os.path.exists(path):
             os.makedirs(path, exist_ok=True)
             self._log(f"创建目录: {path}")
@@ -239,9 +254,10 @@ class ExtensionManager:
                 def on_rm_error(func, path, exc_info):
                     """处理删除只读文件的错误"""
                     import stat
+
                     os.chmod(path, stat.S_IWRITE)
                     func(path)
-                
+
                 shutil.rmtree(ext_info.path, onerror=on_rm_error)
                 self._log(f"已删除扩展: {ext_info.name}")
                 return True, f"成功删除扩展: {ext_info.name}"
