@@ -280,10 +280,7 @@ def checkout_st_version(commit_hash, st_dir=None):
             return False, f"切换失败: {error_msg}"
 
     except Exception as e:
-        print(f"切换过程中发生异常: {str(e)}")
-        import traceback
-
-        traceback.print_exc()
+        app_logger.error(f"切换过程中发生异常: {str(e)}", exc_info=True)
         return False, f"切换过程中发生错误: {str(e)}"
 
 
@@ -388,11 +385,12 @@ def get_current_commit(st_dir=None):
         return False, None, f"获取commit时出错: {str(e)}"
 
 
-def switch_git_remote_to_gitee(st_dir=None):
+def switch_git_remote(mirror_type="github", st_dir=None):
     """
-    将已克隆的SillyTavern仓库的远程地址切换为Gitee镜像地址
+    将已克隆的SillyTavern仓库的远程地址切换为指定的镜像地址
 
     Args:
+        mirror_type (str): 镜像类型，支持 "github", "gh-proxy.org", "gh.llkk.cc"
         st_dir (str): SillyTavern目录路径，默认为当前目录下的SillyTavern文件夹
     """
     if st_dir is None:
@@ -408,14 +406,14 @@ def switch_git_remote_to_gitee(st_dir=None):
         return False, "SillyTavern目录不是Git仓库"
 
     try:
-        # 切换远程地址为Gitee镜像
+        # 所有镜像源都使用GitHub原始仓库地址
+        remote_url = "https://github.com/SillyTavern/SillyTavern.git"
         git_cmd, needs_quotes = _get_git_command()
 
-        # 设置新的远程地址
         command = _format_git_cmd(
             git_cmd,
             needs_quotes,
-            "remote set-url origin https://gitee.com/lingyesoul/SillyTavern.git",
+            f'remote set-url origin {remote_url}',
         )
 
         result = subprocess.run(
@@ -423,7 +421,12 @@ def switch_git_remote_to_gitee(st_dir=None):
         )
 
         if result.returncode == 0:
-            return True, "成功切换到Gitee镜像仓库"
+            mirror_name = {
+                "github": "GitHub官方源",
+                "gh-proxy.org": "gh-proxy.org镜像",
+                "gh.llkk.cc": "gh.llkk.cc镜像",
+            }.get(mirror_type, mirror_type)
+            return True, f"已将远程地址设置为GitHub仓库（通过{mirror_name}加速）"
         else:
             return False, f"切换失败: {result.stderr}"
 
@@ -638,3 +641,269 @@ def cleanup_git_state(st_dir=None):
         error_msg = f"清理Git状态时出错: {str(e)}"
         app_logger.error(error_msg)
         return False, error_msg
+
+
+def get_st_tags(st_dir=None):
+    """
+    获取SillyTavern的所有Git tag列表（用于版本管理）
+
+    Args:
+        st_dir (str): SillyTavern目录路径，默认为当前目录下的SillyTavern文件夹
+
+    Returns:
+        tuple: (success: bool, tags_data: dict or None, message: str)
+        tags_data格式:
+        {
+            'versions': {
+                '1.16.0': {'commit': 'abc123...', 'date': '2026-02-14T17:46:49+02:00', 'tag_name': '1.16.0'},
+                ...
+            },
+            'latest': '1.16.0'
+        }
+    """
+    import re
+
+    if st_dir is None:
+        st_dir = os.path.join(os.getcwd(), "SillyTavern")
+
+    # 检查目录是否存在
+    if not os.path.exists(st_dir):
+        return False, None, "SillyTavern目录不存在"
+
+    # 检查是否是Git仓库
+    git_dir = os.path.join(st_dir, ".git")
+    if not os.path.exists(git_dir):
+        return False, None, "SillyTavern目录不是Git仓库"
+
+    try:
+        git_cmd, needs_quotes = _get_git_command()
+
+        # 步骤1: 获取本地tag列表
+        list_tags_result = subprocess.run(
+            _format_git_cmd(git_cmd, needs_quotes, "tag -l"),
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=st_dir,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+
+        if list_tags_result.returncode != 0:
+            return False, None, f"获取tag列表失败: {list_tags_result.stderr.strip()}"
+
+        all_tags = [tag.strip() for tag in list_tags_result.stdout.strip().split('\n') if tag.strip()]
+
+        # 步骤3: 过滤只保留语义化版本格式的tag (v{x.y.z} 或 {x.y.z})，且版本 >= 1.13.0
+        version_tag_pattern = re.compile(r'^[vV]?(\d+)\.(\d+)\.(\d+)(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$')
+
+        def normalize_version(tag_name):
+            """规范化版本字符串，去除v前缀"""
+            if tag_name.startswith('v') or tag_name.startswith('V'):
+                return tag_name[1:]
+            return tag_name
+
+        def version_gte_1_13_0(version_str):
+            """检查版本是否 >= 1.13.0"""
+            try:
+                parts = version_str.split('.')
+                major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+                # 1.13.0 = (1, 13, 0)
+                if major > 1:
+                    return True
+                if major == 1:
+                    if minor > 13:
+                        return True
+                    if minor == 13:
+                        return patch >= 0
+                    return False
+                return False
+            except (ValueError, IndexError):
+                return False
+
+        versions = {}
+        valid_tags = []
+
+        for tag in all_tags:
+            version_str = normalize_version(tag)
+            if version_tag_pattern.match(version_str) and version_gte_1_13_0(version_str):
+                valid_tags.append((tag, version_str))
+
+        # 步骤4: 获取每个有效tag的commit和日期信息
+        for tag_name, version_str in valid_tags:
+            # 使用 git show 获取 tag 的 commit hash 和日期
+            # %H = 完整commit hash, %aI = ISO 8601 格式的作者日期
+            # 注意: Windows CMD 不支持单引号，需要使用双引号或转义
+            show_result = subprocess.run(
+                _format_git_cmd(git_cmd, needs_quotes, f'show {tag_name} --format="%H|%aI" -s'),
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=st_dir,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+
+            if show_result.returncode == 0:
+                output = show_result.stdout.strip()
+                # 解析输出（去掉首尾引号）
+                output = output.strip("'\"")
+                parts = output.split('|')
+                if len(parts) == 2:
+                    commit_hash = parts[0]
+                    date_str = parts[1]
+                    versions[version_str] = {
+                        'commit': commit_hash,
+                        'date': date_str,
+                        'tag_name': tag_name  # 保存原始tag名称
+                    }
+
+        # 步骤5: 确定最新版本（使用语义化版本排序）
+        try:
+            from packaging import version as pkg_version
+            sorted_versions = sorted(
+                versions.keys(),
+                key=lambda v: pkg_version.parse(v),
+                reverse=True
+            )
+            latest_version = sorted_versions[0] if sorted_versions else ''
+        except ImportError:
+            # 如果没有 packaging 模块，使用简单字符串排序
+            sorted_versions = sorted(versions.keys(), reverse=True)
+            latest_version = sorted_versions[0] if sorted_versions else ''
+
+        tags_data = {
+            'versions': versions,
+            'latest': latest_version
+        }
+
+        print(f"成功获取 {len(versions)} 个版本标签")
+        return True, tags_data, f"成功获取 {len(versions)} 个版本"
+
+    except Exception as e:
+        error_msg = f"获取tag列表时出错: {str(e)}"
+        app_logger.error(error_msg)
+        import traceback
+        traceback.print_exc()
+        return False, None, error_msg
+
+
+def checkout_st_tag(tag_name, st_dir=None):
+    """
+    切换SillyTavern到指定tag
+
+    Args:
+        tag_name (str): 目标tag名称
+        st_dir (str): SillyTavern目录路径，默认为当前目录下的SillyTavern文件夹
+
+    Returns:
+        tuple: (success: bool, message: str)
+    """
+    if st_dir is None:
+        st_dir = os.path.join(os.getcwd(), "SillyTavern")
+
+    # 检查目录是否存在
+    if not os.path.exists(st_dir):
+        return False, "SillyTavern目录不存在"
+
+    # 检查是否是Git仓库
+    git_dir = os.path.join(st_dir, ".git")
+    if not os.path.exists(git_dir):
+        return False, "SillyTavern目录不是Git仓库"
+
+    try:
+        git_cmd, needs_quotes = _get_git_command()
+
+        # 步骤1: 检查tag是否存在于本地
+        verify_result = subprocess.run(
+            _format_git_cmd(git_cmd, needs_quotes, f"rev-parse {tag_name}"),
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=st_dir,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+
+        if verify_result.returncode != 0:
+            return (
+                False,
+                f"切换失败: Tag {tag_name} 不存在。\n"
+                f"请先使用更新功能获取最新版本。"
+            )
+
+        # 步骤2: 检查工作区状态
+        status_result = subprocess.run(
+            _format_git_cmd(git_cmd, needs_quotes, "status --porcelain"),
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=st_dir,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+
+        # 步骤3: 如果有未提交的更改，先保存（排除package-lock.json）
+        if status_result.stdout.strip():
+            print("检测到未提交的更改，使用stash保存...")
+
+            modified_lines = status_result.stdout.strip().split("\n")
+            non_package_lock_changes = [
+                line for line in modified_lines
+                if line.strip() and "package-lock.json" not in line
+            ]
+
+            if non_package_lock_changes:
+                stash_cmd = _format_git_cmd(
+                    git_cmd,
+                    needs_quotes,
+                    f'stash push -m "版本切换前保存{tag_name}"',
+                )
+                stash_result = subprocess.run(
+                    stash_cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=st_dir,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+
+                if stash_result.returncode != 0:
+                    return (
+                        False,
+                        f"保存本地更改失败: {stash_result.stderr.strip() if stash_result.stderr else '未知错误'}",
+                    )
+                print("本地更改已暂存")
+            else:
+                # 只有package-lock.json被修改，恢复它
+                subprocess.run(
+                    _format_git_cmd(
+                        git_cmd, needs_quotes, "checkout -- package-lock.json"
+                    ),
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=st_dir,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+
+        # 步骤4: 使用 git checkout 切换到指定 tag
+        print(f"正在切换到 tag {tag_name}...")
+        checkout_cmd = _format_git_cmd(git_cmd, needs_quotes, f"checkout {tag_name}")
+
+        checkout_result = subprocess.run(
+            checkout_cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=st_dir,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+
+        if checkout_result.returncode == 0:
+            return True, f"成功切换到 tag {tag_name}"
+        else:
+            error_msg = (
+                checkout_result.stderr.strip() if checkout_result.stderr else "未知错误"
+            )
+            return False, f"切换失败: {error_msg}"
+
+    except Exception as e:
+        app_logger.error(f"切换过程中发生异常: {str(e)}", exc_info=True)
+        return False, f"切换过程中发生错误: {str(e)}"

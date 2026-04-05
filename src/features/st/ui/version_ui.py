@@ -171,6 +171,12 @@ def create_version_switch_view(page, terminal, ui_event):
         ft.ProgressBar(visible=True, width=200)
     ], horizontal_alignment=ft.CrossAxisAlignment.CENTER)
 
+    # 异步锁，防止重复加载
+    is_loading = [False]
+
+    # 存储异步任务
+    _fetch_task = [None]
+
     # 错误提示
     error_text = ft.Text("", size=13, color=ft.Colors.RED, visible=False)
 
@@ -190,56 +196,75 @@ def create_version_switch_view(page, terminal, ui_event):
             current_commit_text.value = result['error']
         page.update()
 
-    # 加载版本列表
+    # 加载版本列表（异步）
     def load_versions():
+        # 防止重复加载
+        if is_loading[0]:
+            return
+        is_loading[0] = True
+
         # 显示加载中
         versions_list.controls.clear()
         versions_list.controls.append(loading_indicator)
         error_text.visible = False
         page.update()
 
-        # 获取版本列表
-        result = manager.run_fetch_async()
+        async def fetch_and_update():
+            """异步获取并更新UI"""
+            import asyncio
+            try:
+                # 在协程中执行耗时操作
+                result = await asyncio.to_thread(manager.fetch_st_versions)
+            except Exception as e:
+                result = {
+                    'success': False,
+                    'versions': {},
+                    'error': str(e)
+                }
 
-        # 清除加载指示器
-        versions_list.controls.clear()
+            # 清除加载指示器
+            versions_list.controls.clear()
 
-        if not result['success']:
-            # 显示错误
-            error_text.value = f"获取版本列表失败: {result['error']}"
-            error_text.visible = True
-            versions_list.controls.append(
-                ft.Text("暂无可选版本", size=14, color=ft.Colors.GREY_500)
-            )
-        else:
-            # 获取当前版本信息
-            current_version_result = manager.get_current_version()
-            current_version = current_version_result.get('version', 'unknown')
-
-            # 显示版本列表
-            versions = result['versions']
-            version_items = sorted(
-                versions.items(),
-                key=lambda x: parse_version(x[0]),
-                reverse=True
-            )
-
-            if not version_items:
+            if not result['success']:
+                # 显示错误
+                error_text.value = f"获取版本列表失败: {result['error']}"
+                error_text.visible = True
                 versions_list.controls.append(
                     ft.Text("暂无可选版本", size=14, color=ft.Colors.GREY_500)
                 )
             else:
-                for version_str, version_data in version_items:
-                    is_current = (version_str == current_version)
-                    version_card = create_version_card(
-                        version_str,
-                        version_data,
-                        is_current=is_current,
-                        on_click=None if is_current else lambda e, v=version_str, d=version_data, c=version_data['commit']: show_switch_confirm(v, d)
-                    )
-                    versions_list.controls.append(version_card)
+                # 获取当前版本信息
+                current_version_result = manager.get_current_version()
+                current_version = current_version_result.get('version', 'unknown')
 
-        page.update()
+                # 显示版本列表
+                versions = result['versions']
+                version_items = sorted(
+                    versions.items(),
+                    key=lambda x: parse_version(x[0]),
+                    reverse=True
+                )
+
+                if not version_items:
+                    versions_list.controls.append(
+                        ft.Text("暂无可选版本", size=14, color=ft.Colors.GREY_500)
+                    )
+                else:
+                    for version_str, version_data in version_items:
+                        is_current = (version_str == current_version)
+                        version_card = create_version_card(
+                            version_str,
+                            version_data,
+                            is_current=is_current,
+                            on_click=None if is_current else lambda e, v=version_str, d=version_data: show_switch_confirm(v, d)
+                        )
+                        versions_list.controls.append(version_card)
+
+            is_loading[0] = False
+            page.update()
+
+        # 使用 Flet 的 run_task 运行异步任务
+        _fetch_task[0] = page.run_task(fetch_and_update)
 
     # 刷新所有信息
     def refresh_all():
@@ -254,7 +279,9 @@ def create_version_switch_view(page, terminal, ui_event):
             # 将版本号添加到version_data中，方便event.py使用
             version_data_with_num = version_data.copy()
             version_data_with_num['version'] = version_str
-            ui_event.switch_st_version(version_data_with_num, version_data['commit'])
+            # 传递 tag_name 用于版本切换
+            tag_name = version_data.get('tag_name', f'v{version_str}')
+            ui_event.switch_st_version(version_data_with_num, tag_name)
 
         show_version_switch_dialog(page, version_str, version_data, do_switch)
 

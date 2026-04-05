@@ -263,12 +263,6 @@ class ExtensionManager:
                 return True, f"成功删除扩展: {ext_info.name}"
             else:
                 return False, f"扩展目录不存在: {ext_info.path}"
-            if os.path.exists(ext_info.path):
-                shutil.rmtree(ext_info.path)
-                self._log(f"已删除扩展: {ext_info.name}")
-                return True, f"成功删除扩展: {ext_info.name}"
-            else:
-                return False, f"扩展目录不存在: {ext_info.path}"
         except Exception as e:
             error_msg = f"删除扩展失败: {e}"
             app_logger.error(error_msg, exc_info=True)
@@ -342,16 +336,8 @@ class ExtensionManager:
         # 应用镜像
         if mirror == "gh-proxy.org":
             return f"https://gh-proxy.org/{url}"
-        elif mirror == "ghfile.geekertao.top":
-            return f"https://ghfile.geekertao.top/{url}"
-        elif mirror == "gh.dpik.top":
-            return f"https://gh.dpik.top/{url}"
-        elif mirror == "github.dpik.top":
-            return url.replace("github.com", "github.dpik.top")
-        elif mirror == "github.acmsz.top":
-            return url.replace("github.com", "github.acmsz.top")
-        elif mirror == "git.yylx.win":
-            return url.replace("github.com", "git.yylx.win")
+        elif mirror == "gh.llkk.cc":
+            return f"https://gh.llkk.cc/{url}"
 
         return url
 

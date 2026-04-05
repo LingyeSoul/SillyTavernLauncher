@@ -10,7 +10,7 @@ import json
 import asyncio
 from packaging import version
 import urllib.request
-from core.git_utils import switch_git_remote_to_gitee
+from core.git_utils import switch_git_remote
 import re
 from utils.logger import app_logger
 
@@ -448,15 +448,8 @@ class UiEvent:
                     self.terminal.add_log("未找到nodejs")
             else:
                 if git_path:
-                    # 从配置获取镜像设置
-                    mirror_type = self.config_manager.get("github.mirror", "github")
-
-                    # 根据镜像设置选择仓库地址
-                    if mirror_type == "github":
-                        repo_url = "https://github.com/SillyTavern/SillyTavern.git"
-                    else:
-                        # 使用Gitee镜像
-                        repo_url = "https://gitee.com/lingyesoul/SillyTavern.git"
+                    # 所有镜像源都使用GitHub原始仓库地址，通过gitconfig镜像加速
+                    repo_url = "https://github.com/SillyTavern/SillyTavern.git"
 
                     self.terminal.add_log(f"正在从 {repo_url} 安装SillyTavern...")
 
@@ -1013,15 +1006,8 @@ class UiEvent:
                         self.terminal.add_log(f"检查detached HEAD状态时出错: {str(ex)}")
 
                     # 检查当前远程仓库地址是否正确
-                    mirror_type = self.config_manager.get("github.mirror", "github")
-
-                    # 确保远程仓库地址正确
-                    if mirror_type == "github":
-                        expected_remote = (
-                            "https://github.com/SillyTavern/SillyTavern.git"
-                        )
-                    else:
-                        expected_remote = "https://gitee.com/lingyesoul/SillyTavern.git"
+                    # 所有镜像源都使用GitHub原始仓库地址，通过gitconfig镜像加速
+                    expected_remote = "https://github.com/SillyTavern/SillyTavern.git"
 
                     try:
                         # 获取当前远程仓库地址
@@ -1716,31 +1702,47 @@ class UiEvent:
                     self.terminal.add_log(f"共移除 {removed_count} 个旧的镜像映射")
 
                 # 仅当选择非GitHub镜像时才添加镜像映射
-                added = False
+                needs_write = False
                 if mirror_type != "github":
                     # 使用镜像站作为GitHub的镜像源
                     mirror_url = f"https://{mirror_type}/https://github.com/"
                     new_section = f'url "{mirror_url}"'
+                    target_insteadof = "https://github.com/"
+
+                    # 检查是否需要添加或更新
                     if not gitconfig.has_section(new_section):
                         gitconfig.add_section(new_section)
-                        added = True
-                    elif not gitconfig.has_option(new_section, "insteadof"):
-                        added = True
-
-                    gitconfig.set(new_section, "insteadof", "https://github.com/")
-
-                    if added:
+                        needs_write = True
                         self.terminal.add_log(
-                            f"添加镜像映射: {new_section} -> https://github.com/"
+                            f"添加镜像映射: {new_section} -> {target_insteadof}"
+                        )
+                    elif not gitconfig.has_option(new_section, "insteadof"):
+                        needs_write = True
+                        self.terminal.add_log(
+                            f"添加镜像映射: {new_section} -> {target_insteadof}"
                         )
                     else:
-                        self.terminal.add_log(
-                            f"更新镜像映射: {new_section} -> https://github.com/"
-                        )
+                        # 检查当前配置是否已经是目标值
+                        current_insteadof = gitconfig.get(new_section, "insteadof")
+                        if current_insteadof != target_insteadof:
+                            needs_write = True
+                            self.terminal.add_log(
+                                f"更新镜像映射: {new_section} -> {target_insteadof}"
+                            )
+
+                    if needs_write:
+                        gitconfig.set(new_section, "insteadof", target_insteadof)
 
                 # 如果没有配置项且文件不存在，则不创建空文件
                 if (not gitconfig.sections()) and (not os.path.exists(gitconfig_path)):
                     self.terminal.add_log("未添加任何镜像配置，无需创建配置文件")
+                    return
+
+                # 检查是否有实际变更
+                has_changes = needs_write or removed_count > 0
+
+                if not has_changes:
+                    self.terminal.add_log("镜像配置无变更，跳过写入")
                     return
 
                 # 确保目录存在
@@ -1769,13 +1771,11 @@ class UiEvent:
 
                 self.terminal.add_log(f"详细错误信息: {traceback.format_exc()}")
 
-        # 若使用镜像且SillyTavern已存在，同步切换其远程地址
-        if mirror_type != "github" and self.env.checkST():
-            success, message = switch_git_remote_to_gitee()
+        # 若SillyTavern已存在，同步切换其远程地址为GitHub原始仓库
+        if self.env.checkST():
+            success, message = switch_git_remote(mirror_type)
             if success:
-                self.terminal.add_log(
-                    f"已将SillyTavern仓库远程地址切换到Gitee镜像: {message}"
-                )
+                self.terminal.add_log(f"远程仓库地址已同步: {message}")
             else:
                 self.terminal.add_log(f"切换SillyTavern仓库远程地址失败: {message}")
 
@@ -2170,15 +2170,15 @@ class UiEvent:
         # 实际确认对话框在st_version_ui.py中处理
         pass
 
-    def switch_st_version(self, version_info, commit_hash):
+    def switch_st_version(self, version_info, tag_name):
         """
-        执行SillyTavern版本切换（保持在release分支，避免detached HEAD）
+        执行SillyTavern版本切换（使用Git tag）
 
         Args:
-            version_info (dict): 版本信息 {version, commit, date, source}
-            commit_hash (str): 目标commit hash
+            version_info (dict): 版本信息 {version, commit, date, source, tag_name}
+            tag_name (str): 目标tag名称
         """
-        from core.git_utils import checkout_st_version, check_git_status
+        from core.git_utils import checkout_st_tag, check_git_status
         import os
 
         try:
@@ -2199,16 +2199,17 @@ class UiEvent:
                 self.terminal.add_log(f"警告: {status_msg}")
                 app_logger.warning(f"版本切换警告: {status_msg}")
                 self.show_error_dialog("警告", f"{status_msg}，切换可能丢失更改")
+                return
 
-            # 3. 执行版本切换（在release分支上使用reset --hard）
-            success, message = checkout_st_version(commit_hash)
+            # 3. 执行版本切换（使用tag）
+            success, message = checkout_st_tag(tag_name)
 
             if success:
                 self.terminal.add_log(f"✓ {message}")
                 self.terminal.add_log(f"✓ 成功切换到版本 v{version_info['version']}")
                 app_logger.info(f"成功切换到版本 v{version_info['version']}")
 
-                # 验证当前分支状态
+                # 验证当前commit
                 from core.git_utils import get_current_commit
 
                 verify_success, current_commit, verify_msg = get_current_commit()

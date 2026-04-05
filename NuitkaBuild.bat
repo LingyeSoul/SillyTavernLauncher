@@ -20,7 +20,7 @@ flet packn src/main.py ^
   --product-name "%PRODUCT_NAME%" ^
   --file-description "%APP_NAME% %PRODUCT_NAME%" ^
   --product-version "%SEMVER%" ^
-  --copyright "Copyright (c) 2025 LingyeSoul" ^
+  --copyright "Copyright (c) 2026 LingyeSoul" ^
   --distpath "%DIST_PATH%" ^
   --yes
 
