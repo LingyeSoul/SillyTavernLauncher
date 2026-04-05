@@ -16,7 +16,7 @@ jobs:
       COMPANY_NAME: LingyeSoul
       ICON_PATH: src/assets/icon.ico
       DIST_PATH: dist
-      COPYRIGHT: "Copyright (c) 2025 LingyeSoul"
+      COPYRIGHT: "Copyright (c) 2026 LingyeSoul"
 
     steps:
       - name: Checkout code

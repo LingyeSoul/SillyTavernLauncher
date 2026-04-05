@@ -92,27 +92,13 @@ class UniUI:
                             ft.DropdownM2(
                                 options=[
                                     ft.dropdown.Option(
-                                        "github", "官方源 (github.com) - 可能较慢"
+                                        "github", "官方源 (github.com)"
                                     ),
                                     ft.dropdown.Option(
-                                        "gh-proxy.org", "镜像站点1 (gh-proxy.org)"
+                                        "gh-proxy.org", "镜像站点 (gh-proxy.org)"
                                     ),
                                     ft.dropdown.Option(
-                                        "ghfile.geekertao.top",
-                                        "镜像站点2 (ghfile.geekertao.top)",
-                                    ),
-                                    ft.dropdown.Option(
-                                        "gh.dpik.top", "镜像站点3 (gh.dpik.top)"
-                                    ),
-                                    ft.dropdown.Option(
-                                        "github.dpik.top", "镜像站点4 (github.dpik.top)"
-                                    ),
-                                    ft.dropdown.Option(
-                                        "github.acmsz.top",
-                                        "镜像站点5 (github.acmsz.top)",
-                                    ),
-                                    ft.dropdown.Option(
-                                        "git.yylx.win", "镜像站点6 (git.yylx.win)"
+                                        "gh.llkk.cc", "镜像站点 (gh.llkk.cc)"
                                     ),
                                 ],
                                 value=self.config_manager.get("github.mirror"),
@@ -549,12 +535,12 @@ class UniUI:
                     import traceback
 
                     print(f"最小化窗口失败: {str(inner_e)}")
-                    app_logger.error("错误详情: {traceback.format_exc()}")
+                    app_logger.error(f"错误详情: {traceback.format_exc()}")
             except Exception as e:
                 import traceback
 
                 print(f"最小化窗口失败: {str(e)}")
-                app_logger.error("错误详情: {traceback.format_exc()}")
+                app_logger.error(f"错误详情: {traceback.format_exc()}")
 
         # 设置窗口事件
         def window_event(e):
@@ -859,7 +845,7 @@ class UniUI:
                 error_msg = str(e)
                 # 如果是页面已销毁的错误，静默处理
                 if "destroyed" in error_msg.lower() or "session" in error_msg.lower():
-                    app_logger.warning("版本切换视图初始化跳过: {error_msg}")
+                    app_logger.warning(f"版本切换视图初始化跳过: {error_msg}")
                     self.version_view = self._create_simple_version_view()
                 else:
                     print(f"版本切换视图初始化失败: {e}")

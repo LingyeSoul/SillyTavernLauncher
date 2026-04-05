@@ -42,7 +42,12 @@ class ConfigManager:
                 "agreement_accepted": False,  # 用户是否已同意使用协议
                 "agreement_version": "",  # 协议版本
                 "github": {
-                    "mirror": "gh-proxy.org"
+                    "mirror": "gh-proxy.org",
+                    "mirrors": {
+                        "github": "github.com",
+                        "ghproxy": "gh-proxy.org",
+                        "ghllkk": "gh.llkk.cc",
+                    }
                 },
                 "log": False,
                 "checkupdate": False,

@@ -560,8 +560,8 @@ class VersionChecker:
         if mirror == "github":
             raw_url = "https://raw.githubusercontent.com/LingyeSoul/SillyTavernLauncher/refs/heads/main/src/version.py"
         else:
-            # 使用镜像站
-            raw_url = "https://gitee.com/lingyesoul/SillyTavernLauncher/raw/main/src/version.py"
+            # 使用镜像站代理raw.githubusercontent.com
+            raw_url = f"https://{mirror}/https://raw.githubusercontent.com/LingyeSoul/SillyTavernLauncher/refs/heads/main/src/version.py"
 
         try:
             async with aiohttp.ClientSession() as session:

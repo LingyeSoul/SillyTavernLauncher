@@ -4,8 +4,6 @@ SillyTavern版本管理器
 """
 import json
 import os
-import aiohttp
-import asyncio
 from datetime import datetime
 from config.config_manager import ConfigManager
 
@@ -17,27 +15,18 @@ class STVersionManager:
         self.config_manager = ConfigManager()
         self.st_dir = os.path.join(os.getcwd(), "SillyTavern")
 
-        # STVersions.json的URL地址
-        self.github_url = "https://raw.githubusercontent.com/LingyeSoul/SillyTavern/refs/heads/release/STVersions.json"
-        self.gitee_url = "https://gitee.com/lingyesoul/SillyTavern/raw/release/STVersions.json"
-
     def get_versions_json_url(self):
         """
-        根据配置返回正确的STVersions.json URL
+        [已废弃] 不再从远程获取版本列表
 
         Returns:
-            str: URL地址
+            str: 返回空字符串
         """
-        mirror = self.config_manager.get("github.mirror", "github")
+        return ""
 
-        if mirror == "github":
-            return self.github_url
-        else:
-            return self.gitee_url
-
-    async def fetch_st_versions(self):
+    def fetch_st_versions(self):
         """
-        从远程获取STVersions.json并解析
+        从本地Git仓库获取版本列表
 
         Returns:
             dict: {
@@ -47,57 +36,31 @@ class STVersionManager:
                 'error': error_message
             }
         """
-        url = self.get_versions_json_url()
+        from core.git_utils import get_st_tags
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url,
-                    headers={'User-Agent': 'SillyTavernLauncher/1.0'},
-                    timeout=aiohttp.ClientTimeout(total=15)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return {
-                            'success': True,
-                            'versions': data.get('versions', {}),
-                            'latest': data.get('latest', ''),
-                            'error': None
-                        }
-                    else:
-                        return {
-                            'success': False,
-                            'versions': {},
-                            'latest': '',
-                            'error': f'HTTP {response.status}'
-                        }
-        except asyncio.TimeoutError:
-            return {
-                'success': False,
-                'versions': {},
-                'latest': '',
-                'error': '网络请求超时，请检查网络连接'
-            }
-        except aiohttp.ClientError as e:
-            return {
-                'success': False,
-                'versions': {},
-                'latest': '',
-                'error': f'网络错误: {str(e)}'
-            }
-        except json.JSONDecodeError:
-            return {
-                'success': False,
-                'versions': {},
-                'latest': '',
-                'error': '版本列表格式错误，请联系开发者'
-            }
+            success, tags_data, message = get_st_tags(self.st_dir)
+
+            if success:
+                return {
+                    'success': True,
+                    'versions': tags_data.get('versions', {}),
+                    'latest': tags_data.get('latest', ''),
+                    'error': None
+                }
+            else:
+                return {
+                    'success': False,
+                    'versions': {},
+                    'latest': '',
+                    'error': message
+                }
         except Exception as e:
             return {
                 'success': False,
                 'versions': {},
                 'latest': '',
-                'error': f'未知错误: {str(e)}'
+                'error': f'获取版本列表失败: {str(e)}'
             }
 
     def get_current_version(self):
@@ -176,36 +139,9 @@ class STVersionManager:
 
     def run_fetch_async(self):
         """
-        同步包装器，用于在线程中运行异步获取版本列表
+        获取版本列表（同步调用）
 
         Returns:
             dict: fetch_st_versions的返回值
         """
-        def run_loop():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                return loop.run_until_complete(self.fetch_st_versions())
-            finally:
-                loop.close()
-
-        import threading
-        result = {}
-        def worker():
-            nonlocal result
-            result = run_loop()
-
-        thread = threading.Thread(target=worker)
-        thread.daemon = True
-        thread.start()
-        thread.join(timeout=20)
-
-        if thread.is_alive():
-            return {
-                'success': False,
-                'versions': {},
-                'latest': '',
-                'error': '获取版本列表超时'
-            }
-
-        return result
+        return self.fetch_st_versions()

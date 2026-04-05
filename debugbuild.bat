@@ -15,7 +15,7 @@ flet pack src/main.py ^
   --product-version "%SEMVER%" ^
   --file-version "0.0.0" ^
   --company-name "%COMPANY_NAME%" ^
-  --copyright "Copyright (c) 2025 LingyeSoul" ^
+  --copyright "Copyright (c) 2026 LingyeSoul" ^
   --onedir ^
   --distpath "%DIST_PATH%" ^
   --debug-console DEBUG_CONSOLE^

@@ -51,7 +51,7 @@ flet packn src/main.py ^
   --name "%APP_NAME%" ^
   --product-name "酒馆启动器" ^
   --file-description "%APP_NAME% %PRODUCT_NAME%" ^
-  --copyright "Copyright (c) 2025 LingyeSoul" ^
+  --copyright "Copyright (c) 2026 LingyeSoul" ^
   --distpath "%DIST_PATH%" ^
   --debug-console ^
   --yes
