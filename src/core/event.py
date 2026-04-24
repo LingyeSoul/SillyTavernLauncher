@@ -704,6 +704,20 @@ class UiEvent:
     def start_sillytavern(self, e):
         """启动SillyTavern"""
         try:
+            if not self.config_manager.get("has_started_st", False):
+                from ui.dialogs.first_start_dialog import show_first_start_dialog
+
+                def on_first_start_confirmed(result):
+                    if not result:
+                        self.terminal.add_log("用户取消启动")
+                        return
+                    self.config_manager.set("has_started_st", True)
+                    self.config_manager.save_config()
+                    self.start_sillytavern(e)
+
+                show_first_start_dialog(self.page, on_first_start_confirmed)
+                return
+
             # 立即输出提示信息
             self.terminal.add_log("正在启动SillyTavern...")
 

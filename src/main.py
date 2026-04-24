@@ -34,19 +34,46 @@ async def main(page: ft.Page):
         config = config_manager.config
 
         fetcher = AgreementFetcher()
-        try:
-            remote_date, content, from_cache = fetcher.get_agreement()
-        except Exception as e:
-            app_logger.error(f"获取协议失败且无缓存: {e}", exc_info=True)
-            from ui.dialogs.agreement_dialog import show_network_error_dialog
-            show_network_error_dialog(page)
-            return
 
+        # 步骤1: 先尝试用缓存立即显示（如果有）
+        cached = fetcher.load_cache()
         current_version = config.get("agreement_version", "")
-        if (not config.get("agreement_accepted", False) or
-            current_version != remote_date):
-            show_agreement_dialog(page, uniUI.ui_event, content, remote_date)
 
+        if cached:
+            cached_date = cached.get("date", "")
+            if (not config.get("agreement_accepted", False) or
+                current_version != cached_date):
+                show_agreement_dialog(page, uniUI.ui_event, cached["content"], cached_date)
+
+        # 步骤2: 后台获取远程协议
+        loop = asyncio.get_event_loop()
+
+        def _fetch_remote():
+            import asyncio
+            try:
+                remote_date, content, from_cache = fetcher.get_agreement()
+                if from_cache:
+                    return
+                # 远程获取成功，比较版本
+                if (not config.get("agreement_accepted", False) or
+                    current_version != remote_date):
+                    async def _show():
+                        show_agreement_dialog(page, uniUI.ui_event, content, remote_date)
+                    asyncio.run_coroutine_threadsafe(_show(), loop)
+            except Exception as e:
+                app_logger.error(f"后台获取协议失败: {e}", exc_info=True)
+                if not cached:
+                    err = str(e)
+                    async def _show_error():
+                        from ui.dialogs.agreement_dialog import show_network_error_dialog
+                        show_network_error_dialog(page, err)
+                    asyncio.run_coroutine_threadsafe(_show_error(), loop)
+
+        import threading
+        t = threading.Thread(target=_fetch_remote, daemon=True)
+        t.start()
+
+        # 步骤3: 欢迎对话框（不依赖协议获取，直接显示）
         if config.get("first_run", True):
             show_welcome_dialog(page)
             config_manager.set("first_run", False)
