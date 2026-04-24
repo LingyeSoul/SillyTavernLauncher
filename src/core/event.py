@@ -447,45 +447,75 @@ class UiEvent:
                 else:
                     self.terminal.add_log("未找到nodejs")
             else:
+                # ST未安装 — 需要确认后安装
                 if git_path:
-                    # 所有镜像源都使用GitHub原始仓库地址，通过gitconfig镜像加速
-                    repo_url = "https://github.com/SillyTavern/SillyTavern.git"
+                    from ui.dialogs.install_confirm_dialog import show_install_confirm_dialog
 
-                    self.terminal.add_log(f"正在从 {repo_url} 安装SillyTavern...")
+                    def on_install_confirmed(result):
+                        if not result:
+                            self.terminal.add_log("用户取消安装")
+                            return
 
-                    # 使用run_async_task处理异步任务
-                    async def install_st():
-                        process = await self.execute_command(
-                            f'"{git_path}git" clone {repo_url} -b release', "."
-                        )
-                        if process:
-                            await process.wait()
-                            self.terminal.add_log("SillyTavern安装完成")
+                        # 用户确认后执行安装
+                        repo_url = "https://github.com/SillyTavern/SillyTavern.git"
+                        self.terminal.add_log(f"正在从 {repo_url} 安装SillyTavern...")
 
-                            # 检查Node.js环境并自动安装依赖
-                            if self.env.get_node_path():
-                                if self.env.check_nodemodules():
-                                    self.terminal.add_log("依赖项已安装")
+                        async def install_st():
+                            process = await self.execute_command(
+                                f'"{git_path}git" clone {repo_url} -b release', "."
+                            )
+                            if process:
+                                await process.wait()
+                                self.terminal.add_log("SillyTavern安装完成")
+                                # 记录下载行为
+                                self._record_download("clone")
+
+                                # 检查Node.js环境并自动安装依赖
+                                if self.env.get_node_path():
+                                    if self.env.check_nodemodules():
+                                        self.terminal.add_log("依赖项已安装")
+                                    else:
+                                        self.terminal.add_log("正在安装依赖...")
+                                        # 安装npm依赖
+                                        dep_process = await self.execute_command(
+                                            f'"{self.env.get_node_path()}npm" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com',
+                                            "SillyTavern",
+                                        )
+                                        if dep_process:
+                                            await dep_process.wait()
+                                            self.terminal.add_log("依赖安装完成")
                                 else:
-                                    self.terminal.add_log("正在安装依赖...")
-                                    # 安装npm依赖
-                                    dep_process = await self.execute_command(
-                                        f'"{self.env.get_node_path()}npm" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com',
-                                        "SillyTavern",
-                                    )
-                                    if dep_process:
-                                        await dep_process.wait()
-                                        self.terminal.add_log("依赖安装完成")
-                            else:
-                                self.terminal.add_log("未找到nodejs")
+                                    self.terminal.add_log("未找到nodejs")
 
-                    self.run_async_task(install_st())
+                        self.run_async_task(install_st())
+
+                    show_install_confirm_dialog(self.page, on_install_confirmed)
                 else:
                     self.terminal.add_log("Error: Git路径未正确配置")
         except Exception as ex:
             error_msg = f"安装SillyTavern时出错: {str(ex)}"
             self.terminal.add_log(error_msg)
             app_logger.exception(error_msg)
+
+    def _record_download(self, action: str):
+        """
+        记录下载行为到配置文件
+
+        Args:
+            action: 下载行为描述（如 "clone"）
+        """
+        try:
+            from datetime import datetime
+            downloads = self.config_manager.get("downloads", [])
+            downloads.append({
+                "timestamp": datetime.now().isoformat(),
+                "action": action
+            })
+            self.config_manager.set("downloads", downloads)
+            self.config_manager.save_config()
+            app_logger.info(f"记录下载行为: {action}")
+        except Exception as e:
+            app_logger.error(f"记录下载行为失败: {e}", exc_info=True)
 
     def validate_path_for_npm(self, path=None, show_success=True):
         """

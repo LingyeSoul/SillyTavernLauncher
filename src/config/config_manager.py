@@ -41,6 +41,7 @@ class ConfigManager:
                 "first_run": True,
                 "agreement_accepted": False,  # 用户是否已同意使用协议
                 "agreement_version": "",  # 协议版本
+                "downloads": [],  # 用户下载行为记录
                 "github": {
                     "mirror": "gh-proxy.org",
                     "mirrors": {
