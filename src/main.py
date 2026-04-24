@@ -11,6 +11,7 @@ from features.system.env_sys import SysEnv
 from ui.dialogs.welcome_dialog import show_welcome_dialog
 from ui.dialogs.agreement_dialog import show_agreement_dialog
 from utils.logger import app_logger
+from features.agreement.fetcher import AgreementFetcher
 
 ft.context.disable_auto_update() #修复页面卡卡的感觉
 
@@ -32,26 +33,22 @@ async def main(page: ft.Page):
         config_manager = ConfigManager()
         config = config_manager.config
 
-        # 步骤1: 检查用户是否已同意使用协议
-        # 定义当前协议版本
-        required_version = "2025-01-17"
+        fetcher = AgreementFetcher()
+        try:
+            remote_date, content, from_cache = fetcher.get_agreement()
+        except Exception as e:
+            app_logger.error(f"获取协议失败且无缓存: {e}", exc_info=True)
+            from ui.dialogs.agreement_dialog import show_network_error_dialog
+            show_network_error_dialog(page)
+            return
+
         current_version = config.get("agreement_version", "")
-
-        # 判断是否需要显示协议对话框：
-        # 1. 用户从未同意过协议 (agreement_accepted == False)
-        # 2. 或者用户同意的协议版本低于当前版本 (需要重新同意)
         if (not config.get("agreement_accepted", False) or
-            current_version < required_version):
-            # 显示协议对话框，用户必须同意才能继续
-            show_agreement_dialog(page, uniUI.ui_event)
-            # 注意：如果用户不同意，对话框会直接退出程序
-            # 如果用户同意，对话框会保存状态和版本号并关闭
+            current_version != remote_date):
+            show_agreement_dialog(page, uniUI.ui_event, content, remote_date)
 
-        # 步骤2: 检查是否为首次运行（显示欢迎对话框）
         if config.get("first_run", True):
-            # 显示欢迎对话框
             show_welcome_dialog(page)
-            # 更新配置文件，将first_run设置为False
             config_manager.set("first_run", False)
             config_manager.save_config()
     

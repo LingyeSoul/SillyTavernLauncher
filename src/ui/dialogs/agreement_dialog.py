@@ -14,17 +14,21 @@ from config.config_manager import ConfigManager
 class AgreementDialog:
     """使用协议对话框类"""
 
-    def __init__(self, page, ui_event):
+    def __init__(self, page, ui_event, content_text="", version_date=""):
         """
         初始化协议对话框
 
         Args:
             page: Flet页面对象
             ui_event: UiEvent事件处理对象
+            content_text: 协议内容文本（远程获取）
+            version_date: 协议版本日期（远程获取）
         """
         self.page = page
         self.ui_event = ui_event
         self.dialog = None
+        self.content_text = content_text
+        self.version_date = version_date
 
         # 倒计时相关属性
         self._countdown = 30 # 30倒计时
@@ -60,7 +64,7 @@ class AgreementDialog:
         # 保存同意状态
         config_manager = ConfigManager()
         config_manager.set("agreement_accepted", True)
-        config_manager.set("agreement_version", "2025-01-17")  # 协议版本
+        config_manager.set("agreement_version", self.version_date)  # 协议版本（动态）
         config_manager.save_config()
 
         # 关闭对话框
@@ -115,87 +119,8 @@ class AgreementDialog:
 
     def show(self):
         """显示协议对话框"""
-        # 协议内容
-        agreement_content = """
-SillyTavernLauncher 免责声明与合规使用协议
-版本日期：2025年1月17日
-生效日期：即日起生效
-
-欢迎使用 SillyTavernLauncher（以下简称"本启动器"）。为了确保您合法、合规地使用本工具，特制定本免责声明与合规说明。请在使用前仔细阅读以下条款。
-
-一、工具性质与免责声明
-
-【功能界定】
-• 本启动器仅为 SillyTavern 应用程序的启动管理工具（GUI 启动器）
-• 其核心功能在于辅助用户启动主程序
-• 不涉及任何内容生成、提示词修改、内容审核或主程序核心功能的运行逻辑
-• 本项目本身不参与任何信息内容的生成、存储、传播环节
-
-【责任区分】
-• 作为工具提供方，我们仅提供技术层面的启动与管理服务
-• 我们不对用户通过本启动器使用 SillyTavern 主程序所产生的任何内容承担法律责任
-• 因使用本启动器而产生的任何内容安全、信息合规等法律责任，完全由用户自行承担
-
-二、用户合规义务
-
-用户在使用本启动器及由此启动的 SillyTavern 主程序时，必须严格遵守以下规定：
-
-【遵守法律法规】
-• 用户须严格遵守《中华人民共和国网络安全法》
-• 《中华人民共和国个人信息保护法》
-• 《生成式人工智能服务管理暂行办法》等国家相关法律法规
-• 以及 SillyTavern 主程序的用户协议
-
-【禁止非法用途】
-• 严禁利用本工具或主程序规避合规要求
-• 禁止生成或传播任何包含淫秽色情、暴力恐怖、赌博诈骗、造谣传谣、政治敏感等法律法规禁止的违法不良信息
-
-【维护网络环境】
-• 请用户在使用过程中自觉履行网络安全义务
-• 遵守公序良俗，共同维护清朗网络空间
-
-三、日志功能与数据处理政策
-
-本启动器内置了日志记录功能，旨在提升技术支持能力。我们就此功能的核心原则声明如下：
-
-1. 功能用途限定
-• 日志记录功能仅用于技术故障排查、运行状态监控及功能优化
-• 收集范围：严格限定为 SillyTavern 软件运行层面的技术数据，包括但不限于：
-  - 进程 ID、接口调用记录、错误代码、系统环境参数等
-• 排除范围：本启动器不主动收集任何用户的：
-  - 隐私信息、身份信息（如账号、手机号）
-  - 或内容交互数据（如聊天内容、对话记录）
-
-2. 数据所有权与控制权
-日志数据的生成、存储与使用完全由用户掌控：
-
-• 本地存储：日志文件默认存储在用户本地设备的指定目录（例如：启动器路径/logs/）
-• 数据隔离：本启动器不会主动上传、同步或分享日志数据至任何第三方服务器或云端
-• 删除权限：用户拥有完全控制权
-  - 可手动删除本地日志文件
-  - 启动器不会在用户删除后留存任何日志备份
-
-3. 日志数据的合规使用
-用户在使用日志功能时，仍需遵守相关法律法规，不得利用日志功能：
-• 收集、存储或传播他人的隐私信息及敏感个人信息
-• 记录或留存违法违规内容（如涉政、涉黄、涉暴、侵权等内容）
-• 将日志数据用于非法用途（包括但不限于商业售卖、恶意攻击、违法取证等）
-
-四、其他条款
-
-【条款更新】
-• 本声明内容将根据法律法规及监管要求适时调整
-• 如有更新，将在启动器内另行通知
-• 更新后的条款一旦公布即代替原条款，恕不另行通知
-
-【最终解释权】
-• 本免责声明与合规说明的最终解释权归 SillyTavernLauncher 开发团队所有
-
-
-您一旦下载、安装或使用本启动器，即视为您已充分理解并同意接受本协议全部内容的约束。
-
-请仔细阅读以上协议内容，并在下方选择是否同意：
-        """
+        # 协议内容由远程获取
+        agreement_content = self.content_text
 
         # 倒计时文本（30强制阅读）
         self._countdown_text = ft.Text(
@@ -286,13 +211,42 @@ SillyTavernLauncher 免责声明与合规使用协议
         self._start_countdown()
 
 
-def show_agreement_dialog(page, ui_event):
+def show_agreement_dialog(page, ui_event, content_text="", version_date=""):
     """
     显示协议对话框的便捷函数
 
     Args:
         page: Flet页面对象
         ui_event: UiEvent事件处理对象
+        content_text: 协议内容文本（远程获取）
+        version_date: 协议版本日期（远程获取）
     """
-    dialog = AgreementDialog(page, ui_event)
+    dialog = AgreementDialog(page, ui_event, content_text, version_date)
     dialog.show()
+
+
+def show_network_error_dialog(page):
+    dialog = ft.AlertDialog(
+        modal=True,
+        title=ft.Row([
+            ft.Icon(ft.Icons.WIFI_OFF, size=28, color=ft.Colors.RED_600),
+            ft.Text("网络连接失败", size=18, weight=ft.FontWeight.BOLD),
+        ], spacing=10),
+        content=ft.Text(
+            "无法连接服务器获取使用协议，请检查网络后重试。",
+            size=14,
+        ),
+        actions=[
+            ft.Button(
+                "退出程序",
+                bgcolor=ft.Colors.RED_600,
+                color=ft.Colors.WHITE,
+                on_click=lambda e: page.window.close(),
+                style=ft.ButtonStyle(
+                    shape=ft.RoundedRectangleBorder(radius=8),
+                )
+            ),
+        ],
+        actions_alignment=ft.MainAxisAlignment.END,
+    )
+    page.show_dialog(dialog)

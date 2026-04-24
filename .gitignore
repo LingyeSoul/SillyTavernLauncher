@@ -24,3 +24,5 @@ app.log
 CLAUDE.md
 AGENTS.md
 /openspec
+/.sisyphus
+agreement_cache.json
