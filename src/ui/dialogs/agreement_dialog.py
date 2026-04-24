@@ -225,20 +225,50 @@ def show_agreement_dialog(page, ui_event, content_text="", version_date=""):
     dialog.show()
 
 
-def show_network_error_dialog(page):
+def show_network_error_dialog(page, error_msg=""):
+    """
+    显示协议获取失败对话框（不可关闭，仅可退出程序）
+
+    Args:
+        page: Flet页面对象
+        error_msg: 错误详细信息
+    """
+    error_detail = ft.Text(
+        str(error_msg)[:500],
+        size=12,
+        color=ft.Colors.GREY_700,
+        selectable=True,
+        visible=bool(error_msg),
+    )
+
     dialog = ft.AlertDialog(
         modal=True,
+        barrier_dismissible=False,
         title=ft.Row([
-            ft.Icon(ft.Icons.WIFI_OFF, size=28, color=ft.Colors.RED_600),
-            ft.Text("网络连接失败", size=18, weight=ft.FontWeight.BOLD),
+            ft.Icon(ft.Icons.ERROR_OUTLINE, size=28, color=ft.Colors.RED_600),
+            ft.Text("协议获取失败", size=18, weight=ft.FontWeight.BOLD),
         ], spacing=10),
-        content=ft.Text(
-            "无法连接服务器获取使用协议，请检查网络后重试。",
-            size=14,
+        content=ft.Container(
+            content=ft.Column([
+                ft.Text(
+                    "无法获取使用协议内容，应用程序无法继续运行。",
+                    size=14,
+                ),
+                ft.Text(
+                    "请检查网络连接后重新启动程序。",
+                    size=13,
+                    color=ft.Colors.GREY_600,
+                ),
+                ft.Divider(height=10),
+                error_detail,
+            ], spacing=5),
+            width=500,
+            padding=5,
         ),
         actions=[
             ft.Button(
                 "退出程序",
+                icon=ft.Icons.EXIT_TO_APP,
                 bgcolor=ft.Colors.RED_600,
                 color=ft.Colors.WHITE,
                 on_click=lambda e: page.window.close(),
