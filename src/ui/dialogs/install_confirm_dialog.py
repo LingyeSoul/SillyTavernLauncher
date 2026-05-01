@@ -73,7 +73,6 @@ class InstallConfirmDialog:
                     self._age_checkbox,
                 ], spacing=8),
                 width=600,
-                height=120,
                 padding=10,
             ),
             actions=[
