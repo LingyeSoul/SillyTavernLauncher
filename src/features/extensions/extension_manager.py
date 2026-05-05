@@ -192,6 +192,10 @@ class ExtensionManager:
         else:
             base_path = self._get_user_ext_path()
 
+        # SillyTavern未安装时目录不存在，静默返回空列表
+        if not os.path.isdir(base_path):
+            return extensions
+
         self._ensure_dir_exists(base_path)
 
         try:

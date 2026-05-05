@@ -1,5 +1,6 @@
 import threading
 import os
+import shutil
 import flet as ft
 from features.system.env import Env
 from config.config_manager import ConfigManager
@@ -464,28 +465,53 @@ class UiEvent:
                             process = await self.execute_command(
                                 f'"{git_path}git" clone {repo_url} -b release', "."
                             )
-                            if process:
-                                await process.wait()
-                                self.terminal.add_log("SillyTavern安装完成")
-                                # 记录下载行为
-                                self._record_download("clone")
+                            if not process:
+                                error_msg = "创建git clone进程失败"
+                                self.terminal.add_log(f"安装失败: {error_msg}")
+                                app_logger.error(f"SillyTavern安装失败: {error_msg}")
+                                self.show_error_dialog("安装失败", error_msg)
+                                return
+                            await process.wait()
+                            if process.returncode != 0:
+                                error_msg = f"git clone进程返回错误码: {process.returncode}"
+                                self.terminal.add_log(f"安装失败: {error_msg}")
+                                app_logger.error(f"SillyTavern安装失败: {error_msg}")
+                                self.show_error_dialog("安装失败", error_msg)
+                                # 自动清理失败的clone文件夹
+                                def is_failed_clone_folder(path):
+                                    if not os.path.isdir(path):
+                                        return False
+                                    entries = os.listdir(path)
+                                    return entries == [] or entries == ['.git']
+                                st_folder = os.path.join(os.getcwd(), 'SillyTavern')
+                                if is_failed_clone_folder(st_folder):
+                                    try:
+                                        shutil.rmtree(st_folder)
+                                        self.terminal.add_log("已自动清理失败的安装目录")
+                                        app_logger.info(f"已清理失败的clone目录: {st_folder}")
+                                    except Exception as cleanup_err:
+                                        app_logger.error(f"清理失败目录时出错: {cleanup_err}", exc_info=True)
+                                return
+                            self.terminal.add_log("SillyTavern安装完成")
+                            # 记录下载行为
+                            self._record_download("clone")
 
-                                # 检查Node.js环境并自动安装依赖
-                                if self.env.get_node_path():
-                                    if self.env.check_nodemodules():
-                                        self.terminal.add_log("依赖项已安装")
-                                    else:
-                                        self.terminal.add_log("正在安装依赖...")
-                                        # 安装npm依赖
-                                        dep_process = await self.execute_command(
-                                            f'"{self.env.get_node_path()}npm" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com',
-                                            "SillyTavern",
-                                        )
-                                        if dep_process:
-                                            await dep_process.wait()
-                                            self.terminal.add_log("依赖安装完成")
+                            # 检查Node.js环境并自动安装依赖
+                            if self.env.get_node_path():
+                                if self.env.check_nodemodules():
+                                    self.terminal.add_log("依赖项已安装")
                                 else:
-                                    self.terminal.add_log("未找到nodejs")
+                                    self.terminal.add_log("正在安装依赖...")
+                                    # 安装npm依赖
+                                    dep_process = await self.execute_command(
+                                        f'"{self.env.get_node_path()}npm" install --no-audit --no-fund --loglevel=error --no-progress --omit=dev --registry=https://registry.npmmirror.com',
+                                        "SillyTavern",
+                                    )
+                                    if dep_process:
+                                        await dep_process.wait()
+                                        self.terminal.add_log("依赖安装完成")
+                            else:
+                                self.terminal.add_log("未找到nodejs")
 
                         self.run_async_task(install_st())
 
