@@ -159,7 +159,7 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
         if current_dialog:
             try:
                 page.pop_dialog()
-            except:
+            except Exception:
                 pass
         current_dialog = dialog
         page.show_dialog(dialog)
@@ -168,7 +168,7 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
         """关闭当前对话框"""
         try:
             page.pop_dialog()
-        except:
+        except Exception:
             pass
 
     async def close_dialog_async():

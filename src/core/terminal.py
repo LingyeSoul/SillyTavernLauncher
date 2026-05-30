@@ -260,9 +260,9 @@ class AsyncTerminal:
                                     page = self.view.page
                                     if page is not None:
                                         self.logs.update()
-                                except:
+                                except Exception:
                                     pass
-                except:
+                except Exception:
                     pass
 
         except Exception as e:
@@ -287,19 +287,19 @@ class AsyncTerminal:
                             preserved.append(entry)
                         else:
                             discard_count += 1
-                    except:
+                    except Exception:
                         break
 
                 # 将保留的日志放回队列
                 for entry in preserved:
                     try:
                         self._log_queue.put_nowait(entry)
-                    except:
+                    except Exception:
                         pass
 
                 if discard_count > 0:
                     print(f"[INFO] 页面不可用，丢弃了 {discard_count} 条日志")
-            except:
+            except Exception:
                 pass
             return
 
@@ -327,7 +327,7 @@ class AsyncTerminal:
                     # 事件循环已关闭，直接同步处理（如果可能）
                     try:
                         self._process_batch()
-                    except:
+                    except Exception:
                         # 同步处理也失败，保留最近10条日志
                         preserved = []
                         discard_count = 0
@@ -338,14 +338,14 @@ class AsyncTerminal:
                                     preserved.append(entry)
                                 else:
                                     discard_count += 1
-                            except:
+                            except Exception:
                                 break
 
                         # 将保留的日志放回队列
                         for entry in preserved:
                             try:
                                 self._log_queue.put_nowait(entry)
-                            except:
+                            except Exception:
                                 pass
 
                         if discard_count > 0:
@@ -1215,7 +1215,7 @@ class AsyncTerminal:
                     while not self._log_queue.empty():
                         try:
                             self._log_queue.get_nowait()
-                        except:
+                        except Exception:
                             break
                     stats['queues_cleared'] = queue_size
             except Exception:
@@ -1401,10 +1401,7 @@ class AsyncTerminal:
             if self._debug_mode:
                 print("[DEBUG] 设置 _processing = False")
 
-        # 2. 等待一小段时间确保没有正在运行的任务
-        time.sleep(0.1)
-
-        # 3. 清空日志控件
+        # 2. 清空日志控件
         control_count = len(self.logs.controls)
         self.logs.controls.clear()
 
@@ -1415,7 +1412,7 @@ class AsyncTerminal:
             try:
                 self._log_queue.get_nowait()
                 cleared_count += 1
-            except:
+            except Exception:
                 break
         if cleared_count > 0 and self._debug_mode:
             print(f"[DEBUG] 清空了队列中的 {cleared_count}/{queue_size} 条日志")
@@ -1498,14 +1495,14 @@ class AsyncTerminal:
                             preserved_entries.append(entry)
                         else:
                             discard_count += 1
-                    except:
+                    except Exception:
                         break
 
                 # 将保留的条目放回队列
                 for entry in preserved_entries:
                     try:
                         self._log_queue.put_nowait(entry)
-                    except:
+                    except Exception:
                         pass
 
                 queue_size = len(preserved_entries)
@@ -1519,14 +1516,14 @@ class AsyncTerminal:
                 self._log_queue.put_nowait(processed_text)
                 with self._log_queue_not_empty:
                     self._log_queue_not_empty.notify()  # 通知消费者
-            except:
+            except Exception:
                 # 队列已满，移除最旧的日志
                 try:
                     self._log_queue.get_nowait()
                     self._log_queue.put_nowait(processed_text)
                     with self._log_queue_not_empty:
                         self._log_queue_not_empty.notify()
-                except:
+                except Exception:
                     pass
 
             # ========== 每100条日志触发一次清理 ==========
@@ -1540,7 +1537,7 @@ class AsyncTerminal:
                 try:
                     cleanup_timer = self._create_timer(0.1, lambda: self.cleanup_all_resources(aggressive=False))
                     cleanup_timer.start()
-                except:
+                except Exception:
                     pass
 
             # 立即安排处理少量日志

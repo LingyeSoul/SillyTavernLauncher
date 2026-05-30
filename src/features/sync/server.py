@@ -364,13 +364,19 @@ class SyncServer:
 
             try:
                 # Security check - prevent directory traversal
-                file_path = os.path.normpath(file_path).replace('..', '')
-                full_path = os.path.join(self.data_path, file_path)
+                base = os.path.realpath(self.data_path)
+                full_path = os.path.realpath(os.path.join(self.data_path, file_path))
+
+                if not full_path.startswith(base + os.sep) and full_path != base:
+                    return jsonify({
+                        'success': False,
+                        'error': 'Access denied'
+                    }), 403
 
                 if not os.path.exists(full_path):
                     return jsonify({
                         'success': False,
-                        'error': f'File not found: {file_path}'
+                        'error': 'File not found'
                     }), 404
 
                 if not os.path.isfile(full_path):

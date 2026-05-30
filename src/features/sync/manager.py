@@ -179,7 +179,7 @@ class DataSyncManager:
                         result_queue.append((ip, True, data))
                     else:
                         result_queue.append((ip, False, None))
-                except:
+                except Exception:
                     result_queue.append((ip, False, None))
 
             # Scan common IP ranges based on local IP
@@ -427,7 +427,7 @@ class DataSyncManager:
                     try:
                         total_size += os.path.getsize(file_path)
                         file_count += 1
-                    except:
+                    except Exception:
                         continue
 
             info['size'] = total_size

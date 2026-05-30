@@ -5,7 +5,6 @@ import urllib.error
 from config.config_manager import ConfigManager
 import flet as ft
 from flet import UrlLauncher
-import ssl
 import asyncio
 import aiohttp
 from version import VERSION, RELEASES_VERSION
@@ -18,10 +17,6 @@ class VersionChecker:
         # 使用本地 VERSION 作为当前版本，与远程 RELEASES_VERSION 进行比较
         self.current_version = VERSION
         self.page = page
-        # 禁用SSL证书验证（仅在需要时使用）
-        self.context = ssl.create_default_context()
-        self.context.check_hostname = False
-        self.context.verify_mode = ssl.CERT_NONE
     def _showMsg(self, v):
         # 使用正确的 API 显示 SnackBar（适配 Flet 0.80.1）
         self.page.show_dialog(ft.SnackBar(ft.Text(v), show_close_icon=True, duration=3000))

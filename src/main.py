@@ -13,9 +13,8 @@ from ui.dialogs.agreement_dialog import show_agreement_dialog
 from utils.logger import app_logger
 from features.agreement.fetcher import AgreementFetcher
 
-ft.context.disable_auto_update() #修复页面卡卡的感觉
-
 async def main(page: ft.Page):
+    ft.context.disable_auto_update() #修复页面卡卡的感觉
     await page.window.center()
     page.title = "SillyTavernLauncher"
     page.theme = ft.Theme(color_scheme_seed=ft.Colors.BLUE,font_family="Microsoft YaHei")

@@ -133,7 +133,7 @@ class STVersionManager:
             # 处理ISO格式日期
             date_obj = datetime.fromisoformat(date_str.replace('+02:00', '').replace('+03:00', '').replace('Z', ''))
             return date_obj.strftime('%Y-%m-%d %H:%M')
-        except:
+        except Exception:
             # 如果解析失败，返回原字符串
             return date_str
 

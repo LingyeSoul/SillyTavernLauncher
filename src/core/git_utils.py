@@ -1,8 +1,12 @@
 import os
+import re
 import subprocess
 from features.system.env import Env
 from config.config_manager import ConfigManager
 from utils.logger import app_logger
+
+_COMMIT_HASH_RE = re.compile(r'^[0-9a-f]{7,40}$')
+_TAG_NAME_RE = re.compile(r'^[a-zA-Z0-9._-]+$')
 
 
 def _get_git_command():
@@ -70,6 +74,10 @@ def checkout_st_version(commit_hash, st_dir=None):
     git_dir = os.path.join(st_dir, ".git")
     if not os.path.exists(git_dir):
         return False, "SillyTavern目录不是Git仓库"
+
+    # 校验 commit_hash 格式，防止命令注入
+    if not _COMMIT_HASH_RE.match(commit_hash):
+        return False, f"无效的 commit hash 格式: {commit_hash}"
 
     try:
         git_cmd, needs_quotes = _get_git_command()
@@ -336,7 +344,7 @@ def check_git_status(st_dir=None):
                         creationflags=subprocess.CREATE_NO_WINDOW,
                     )
                     return True, "工作区干净（已自动恢复package-lock.json）"
-                except:
+                except Exception:
                     pass
 
             # 如果还有其他文件被修改，返回错误
@@ -808,6 +816,10 @@ def checkout_st_tag(tag_name, st_dir=None):
     git_dir = os.path.join(st_dir, ".git")
     if not os.path.exists(git_dir):
         return False, "SillyTavern目录不是Git仓库"
+
+    # 校验 tag_name 格式，防止命令注入
+    if not _TAG_NAME_RE.match(tag_name):
+        return False, f"无效的 tag 名称格式: {tag_name}"
 
     try:
         git_cmd, needs_quotes = _get_git_command()

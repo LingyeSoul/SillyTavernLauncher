@@ -102,6 +102,10 @@ class stcfg:
             return None
 
     def _migrate_whitelist_from_txt(self) -> bool:
+        # 已迁移则跳过
+        if self.config_data.get("_whitelist_migrated"):
+            return False
+
         if not os.path.exists(self.whitelist_txt_path):
             return False
 
@@ -122,16 +126,19 @@ class stcfg:
                 self.whitelist_ips = migrated_ips + [
                     ip for ip in self.whitelist_ips if ip not in migrated_ips
                 ]
-                self.save_config()
-                app_logger.info(
-                    f"已从 whitelist.txt 迁移 {len(new_ips)} 个 IP 到 config.yaml"
-                )
-                # 仅在迁移成功并保存配置后才删除旧文件
-                try:
-                    os.remove(self.whitelist_txt_path)
-                    app_logger.info("已删除旧的 whitelist.txt 文件")
-                except Exception as e:
-                    app_logger.warning(f"删除 whitelist.txt 失败: {str(e)}")
+
+            # 标记迁移完成后再保存，防止重复执行
+            self.config_data["_whitelist_migrated"] = True
+            self.save_config()
+            app_logger.info(
+                f"已从 whitelist.txt 迁移 {len(new_ips)} 个 IP 到 config.yaml"
+            )
+            # 仅在迁移成功并保存配置后才删除旧文件
+            try:
+                os.remove(self.whitelist_txt_path)
+                app_logger.info("已删除旧的 whitelist.txt 文件")
+            except Exception as e:
+                app_logger.warning(f"删除 whitelist.txt 失败: {str(e)}")
 
             return True
 
