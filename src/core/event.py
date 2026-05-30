@@ -1109,6 +1109,8 @@ class UiEvent:
                     def on_git_complete(process):
                         if process.returncode == 0:
                             self.terminal.add_log("Git更新成功")
+                            # 刷新版本页面显示
+                            self._refresh_version_view()
                             if self.env.get_node_path():
                                 self.terminal.add_log("正在安装依赖...")
 
@@ -1163,6 +1165,8 @@ class UiEvent:
                                             # 避免递归调用，直接处理结果
                                             if retry_process.returncode == 0:
                                                 self.terminal.add_log("Git更新成功")
+                                                # 刷新版本页面显示
+                                                self._refresh_version_view()
                                                 if self.env.get_node_path():
                                                     self.terminal.add_log(
                                                         "正在安装依赖..."
