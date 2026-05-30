@@ -61,7 +61,7 @@ class NetworkManager:
         try:
             # 只有在缓存过期时才执行ipconfig命令获取网络配置信息
             self._log("IP缓存已过期，执行ipconfig命令获取新IP...", 'info')
-            result = subprocess.run(['ipconfig'], capture_output=True, text=True, shell=True)
+            result = subprocess.run(['ipconfig'], capture_output=True, text=True)
 
             if result.returncode != 0:
                 self._log(f"ipconfig命令执行失败: {result.stderr}", 'error')
@@ -238,11 +238,10 @@ class NetworkManager:
         """
         try:
             # 方法1: 连接外部DNS获取IP
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.settimeout(3)
-            s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
-            s.close()
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.settimeout(3)
+                s.connect(("8.8.8.8", 80))
+                local_ip = s.getsockname()[0]
 
             if self._is_valid_ip(local_ip):
                 self._log(f"通过备用方法获取IP: {local_ip}", 'info')

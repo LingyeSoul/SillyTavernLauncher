@@ -88,7 +88,7 @@ class SyncClient:
         """析构函数确保资源释放"""
         try:
             self.close()
-        except:
+        except Exception:
             pass
 
     def _request(self, endpoint, method='GET', params=None, stream=False):
@@ -427,10 +427,17 @@ class SyncClient:
         with zipfile.ZipFile(zip_path, 'r') as zip_file:
             files = zip_file.namelist()
             total_files = len(files)
+            real_extract = os.path.realpath(extract_path)
 
             for i, file in enumerate(files, 1):
                 # Skip directories
                 if file.endswith('/'):
+                    continue
+
+                # Zip Slip protection
+                member_path = os.path.realpath(os.path.join(extract_path, file))
+                if not member_path.startswith(real_extract + os.sep) and member_path != real_extract:
+                    print(f"跳过不安全的 ZIP 条目: {file}")
                     continue
 
                 # Extract file

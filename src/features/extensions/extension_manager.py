@@ -15,14 +15,6 @@ import subprocess
 import zipfile
 import json
 import re
-from typing import Tuple, List, Callable
-from dataclasses import dataclass, field
-from enum import Enum
-import threading
-
-from config.config_manager import ConfigManager
-from core.git_utils import _get_git_command, _format_git_cmd
-from utils.logger import app_logger
 from typing import Optional, Tuple, List, Dict, Callable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -366,6 +358,10 @@ class ExtensionManager:
         if original_url != repo_url:
             self._log(f"使用镜像: {repo_url}")
 
+        # 校验 URL 格式，防止命令注入
+        if not re.match(r'^https?://[a-zA-Z0-9._/~:@!$&\'()*+,;=\-]+$', repo_url):
+            return False, f"无效的仓库 URL: {repo_url}"
+
         # 确定目标目录
         if ext_type == ExtensionType.GLOBAL:
             target_dir = self._get_global_ext_path()
@@ -486,8 +482,13 @@ class ExtensionManager:
             import tempfile
 
             with tempfile.TemporaryDirectory() as temp_dir:
-                # 解压 ZIP
+                # 解压 ZIP（Zip Slip 防护）
                 with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                    real_temp = os.path.realpath(temp_dir)
+                    for member in zip_ref.namelist():
+                        member_path = os.path.realpath(os.path.join(temp_dir, member))
+                        if not member_path.startswith(real_temp + os.sep) and member_path != real_temp:
+                            raise ValueError(f"ZIP 包含不安全的路径: {member}")
                     zip_ref.extractall(temp_dir)
 
                 # 检查解压后的结构

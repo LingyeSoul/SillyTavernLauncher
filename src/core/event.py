@@ -1,6 +1,7 @@
 import threading
 import os
 import shutil
+import shlex
 import flet as ft
 from features.system.env import Env
 from config.config_manager import ConfigManager
@@ -154,8 +155,6 @@ class UiEvent:
         # 分割参数并逐个验证
         try:
             # 使用 shlex 安全分割参数（保留引号内的空格）
-            import shlex
-
             parts = shlex.split(args, posix=False)
         except ValueError as e:
             return False, f"参数格式错误: {str(e)}"
@@ -328,7 +327,7 @@ class UiEvent:
             try:
                 self.terminal.stop_processes_sync()
                 app_logger.info("进程已停止")
-            except Exception as e:
+            except Exception as ex:
                 app_logger.exception("停止进程时出错")
 
         # ========== 3. 异步销毁窗口 ==========
@@ -1549,7 +1548,7 @@ class UiEvent:
                     if hasattr(self, "page") and self.page:
                         # 通过页面会话获取UI实例并更新代理URL字段
                         self.page.session.set("proxy_url", proxy_url)
-                except:
+                except Exception:
                     pass
 
                 self.terminal.add_log(f"自动设置代理: {proxy_url}")

@@ -19,7 +19,7 @@ class Env:
     
     def get_git_path(self):
         return self.git_dir
-    def  get_node_path(self):
+    def get_node_path(self):
         return self.node_path
     def checkST(self):
         if not os.path.exists(self.st_dir):

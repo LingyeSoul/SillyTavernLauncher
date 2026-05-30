@@ -92,7 +92,7 @@ class ConfigManager:
 
         # 读取现有配置
         try:
-            with open(self.config_path, "r") as f:
+            with open(self.config_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
             # 如果读取失败，返回默认配置
@@ -109,8 +109,10 @@ class ConfigManager:
             config_data = self.config
 
         try:
-            with open(self.config_path, "w") as f:
-                json.dump(config_data, f, indent=4)
+            tmp_path = self.config_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, indent=4, ensure_ascii=False)
+            os.replace(tmp_path, self.config_path)
         except Exception as e:
             raise Exception(f"保存配置文件失败: {str(e)}")
 

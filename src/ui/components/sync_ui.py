@@ -638,7 +638,7 @@ class DataSyncUI:
                 # 检查是否已经显示过首次启动对话框
                 return not self.config_manager.get("sync.first_shown", False)
             return True  # 如果没有配置管理器，默认显示
-        except:
+        except Exception:
             return True  # 出错时默认显示
 
     def _mark_first_server_dialog_shown(self):
@@ -646,7 +646,7 @@ class DataSyncUI:
         try:
             if self.config_manager:
                 self.config_manager.set("sync.first_shown", True)
-        except:
+        except Exception:
             pass  # 出错时忽略
 
     def _show_first_server_dialog(self, port=None, host=None):
