@@ -287,7 +287,8 @@ def create_version_switch_view(page, terminal, ui_event):
 
     # 刷新按钮事件
     def on_refresh(e):
-        terminal.add_log("正在刷新版本列表...")
+        terminal.add_log("正在刷新版本信息...")
+        update_current_version()
         load_versions()
 
     # 主视图 - 简洁布局
