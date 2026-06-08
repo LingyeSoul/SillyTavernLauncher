@@ -9,6 +9,7 @@ import json
 import zipfile
 import io
 import hashlib
+import sys
 from datetime import datetime
 from pathlib import Path
 from flask import Flask, request, jsonify, send_file, Response
@@ -237,7 +238,17 @@ class SyncServer:
 
         try:
             # 方法2: 使用ipconfig命令
-            result = subprocess.run(['ipconfig'], capture_output=True, text=True, shell=True)
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = subprocess.CREATE_NO_WINDOW
+            result = subprocess.run(
+                ['ipconfig'],
+                capture_output=True,
+                text=True,
+                creationflags=creationflags,
+                encoding='gbk',
+                errors='ignore'
+            )
             if result.returncode == 0:
                 import re
                 # 查找IPv4地址

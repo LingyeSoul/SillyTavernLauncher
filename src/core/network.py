@@ -8,6 +8,7 @@ import time
 import subprocess
 import re
 import socket
+import sys
 from typing import Optional
 
 
@@ -61,7 +62,17 @@ class NetworkManager:
         try:
             # 只有在缓存过期时才执行ipconfig命令获取网络配置信息
             self._log("IP缓存已过期，执行ipconfig命令获取新IP...", 'info')
-            result = subprocess.run(['ipconfig'], capture_output=True, text=True)
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = subprocess.CREATE_NO_WINDOW
+            result = subprocess.run(
+                ['ipconfig'],
+                capture_output=True,
+                text=True,
+                creationflags=creationflags,
+                encoding='gbk',
+                errors='ignore'
+            )
 
             if result.returncode != 0:
                 self._log(f"ipconfig命令执行失败: {result.stderr}", 'error')
