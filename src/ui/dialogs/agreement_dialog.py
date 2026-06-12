@@ -202,7 +202,8 @@ class AgreementDialog:
         )
 
         # 保存同意按钮引用
-        self._agree_button = self.dialog.actions[1]
+        actions = self.dialog.actions
+        self._agree_button = actions[1] if len(actions) > 1 else None
 
         # 使用 Flet 的标准 API 显示对话框
         self.page.show_dialog(self.dialog)

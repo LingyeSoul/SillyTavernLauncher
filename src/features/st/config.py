@@ -165,7 +165,10 @@ class stcfg:
         broader_subnet = None
         if not is_ipv6:
             ip_parts = local_ip.split(".")
-            broader_subnet = f"{ip_parts[0]}.{ip_parts[1]}.*.*"
+            if len(ip_parts) >= 2:
+                broader_subnet = f"{ip_parts[0]}.{ip_parts[1]}.*.*"
+            else:
+                app_logger.warning(f"IP 格式异常，无法提取前两段: {local_ip}")
 
         subnet_exists = any(
             ip == current_subnet or (broader_subnet and ip == broader_subnet)
@@ -189,6 +192,8 @@ class stcfg:
                         new_whitelist.append(ip)
                 else:
                     ip_parts_local = local_ip.split(".")
+                    if not ip_parts_local:
+                        continue
                     ip_prefix = ip.split(".")[0] if "." in ip else ""
                     if (
                         ip_prefix
