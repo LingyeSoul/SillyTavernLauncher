@@ -264,8 +264,9 @@ class WelcomeDialog:
             questions_column.controls.append(question_ui)
 
             # 保存反馈文本引用
-            feedback = question_ui.controls[2]
-            explanation = question_ui.controls[3]
+            controls = question_ui.controls
+            feedback = controls[2] if len(controls) > 2 else ft.Text("", visible=False)
+            explanation = controls[3] if len(controls) > 3 else ft.Text("", visible=False)
             self.ui_controls['feedback_texts'].append(feedback)
             self.ui_controls['explanation_texts'].append(explanation)
 
@@ -330,7 +331,8 @@ class WelcomeDialog:
         )
 
         # 保存按钮引用
-        self.ui_controls['action_button'] = self.dialog.actions[1]  # 操作按钮（验证答案/完成并关闭）
+        actions = self.dialog.actions
+        self.ui_controls['action_button'] = actions[1] if len(actions) > 1 else None
 
         # 使用 Flet 的标准 API 显示对话框
         self.page.show_dialog(self.dialog)
