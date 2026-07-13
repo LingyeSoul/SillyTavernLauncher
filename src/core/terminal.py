@@ -928,7 +928,7 @@ class AsyncTerminal:
         重构说明：
         - 使用 asyncio StreamReader 的方法，更简单可靠
         - 移除复杂的缓冲区管理和自适应逻辑
-        - 确保流在结束时被正确关闭
+        - 流的生命周期由 asyncio subprocess transport 管理
         - 减少内存泄漏风险
         - 使用 _safe_readline() 处理超长行（>64KB）问题
         """
@@ -973,7 +973,8 @@ class AsyncTerminal:
                 self.add_log("[DEBUG] 输出读取任务被取消")
 
         except Exception as ex:
-            # 记录错误但不中断
+            # 记录错误但不中断；即使 UI 已销毁也保留完整堆栈。
+            app_logger.error(f"读取 {stream_type} 流失败: {ex}", exc_info=True)
             try:
                 if hasattr(self, 'view') and self.view is not None:
                     page = self.view.page  # 可能抛出 RuntimeError
@@ -982,13 +983,6 @@ class AsyncTerminal:
             except (RuntimeError, AttributeError):
                 pass  # 控件已从页面移除，忽略
 
-        finally:
-            # 确保流被关闭
-            try:
-                if stream and not stream.is_closing():
-                    stream.close()
-            except Exception:
-                app_logger.debug("已忽略非关键异常", exc_info=True)
     def create_output_tasks(self, process):
         """
         创建并注册输出处理任务（由 terminal 完全管理）
@@ -1031,6 +1025,18 @@ class AsyncTerminal:
             - 性能提升：消除最多 500ms 的阻塞时间
             """
             try:
+                # 主动检索异常，避免后台任务失败后触发
+                # "Task exception was never retrieved"。
+                task_error = None if task.cancelled() else task.exception()
+                if task_error is not None:
+                    import traceback
+                    traceback_text = "".join(traceback.format_exception(
+                        type(task_error),
+                        task_error,
+                        task_error.__traceback__,
+                    ))
+                    app_logger.error(f"输出读取任务失败:\n{traceback_text}")
+
                 # 通过弱引用获取对象
                 term_ref = terminal_weak_ref() if terminal_weak_ref else None
                 proc_ref = process_weak_ref() if process_weak_ref else None
@@ -1140,14 +1146,8 @@ class AsyncTerminal:
                         try:
                             # 检查进程是否已结束
                             if process.returncode is not None:
-                                # 进程已结束，关闭流
-                                try:
-                                    if process.stdout:
-                                        process.stdout.close()
-                                    if process.stderr:
-                                        process.stderr.close()
-                                except Exception:
-                                    app_logger.debug("已忽略非关键异常", exc_info=True)
+                                # stdout/stderr 是 StreamReader，由 subprocess
+                                # transport 在进程结束时管理其生命周期。
                                 stats['processes_cleaned'] += 1
                             else:
                                 # 进程仍在运行

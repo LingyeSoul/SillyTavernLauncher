@@ -146,10 +146,10 @@ class AppLogger:
             import traceback
             traceback.print_exc()
 
-    def debug(self, msg: str):
-        """记录调试信息"""
+    def debug(self, msg: str, exc_info: bool = False):
+        """记录调试信息，可选择包含当前异常堆栈"""
         try:
-            self.logger.debug(msg)
+            self.logger.debug(msg, exc_info=exc_info)
         except Exception:
             print(f"[{self._get_timestamp()}] [DEBUG] {msg}")
 
