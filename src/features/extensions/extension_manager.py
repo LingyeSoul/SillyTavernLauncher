@@ -19,9 +19,10 @@ from typing import Optional, Tuple, List, Dict, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 import threading
+from urllib.parse import urlsplit
 
 from config.config_manager import ConfigManager
-from core.git_utils import _get_git_command, _format_git_cmd
+from core.git_utils import _get_git_command
 from utils.logger import app_logger
 
 
@@ -78,6 +79,7 @@ class ExtensionManager:
     # 目录路径
     GLOBAL_EXT_DIR = "SillyTavern/public/scripts/extensions/third-party"
     USER_EXT_DIR = "SillyTavern/data/default-user/extensions"
+    EXTENSION_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
     def __init__(self, log_callback: Optional[Callable[[str], None]] = None):
         """
@@ -128,6 +130,33 @@ class ExtensionManager:
         if not os.path.exists(path):
             os.makedirs(path, exist_ok=True)
             self._log(f"创建目录: {path}")
+
+    def _validate_extension_name(self, name: str) -> str:
+        """Validate and normalize an extension directory name."""
+        normalized = name.strip()
+        if not normalized or not self.EXTENSION_NAME_RE.fullmatch(normalized):
+            raise ValueError("扩展名称只能包含字母、数字、下划线和短横线")
+        return normalized
+
+    def _safe_extension_path(self, target_dir: str, name: str) -> str:
+        """Build a child path and enforce that it stays in the managed directory."""
+        normalized_name = self._validate_extension_name(name)
+        real_target_dir = os.path.realpath(target_dir)
+        target_path = os.path.realpath(os.path.join(real_target_dir, normalized_name))
+        if os.path.commonpath((real_target_dir, target_path)) != real_target_dir:
+            raise ValueError("扩展路径超出受管目录")
+        return target_path
+
+    def _validate_managed_extension(self, ext_info: ExtensionInfo) -> None:
+        """Ensure an extension object points to its declared managed directory."""
+        target_dir = (
+            self._get_global_ext_path()
+            if ext_info.ext_type == ExtensionType.GLOBAL
+            else self._get_user_ext_path()
+        )
+        expected_path = self._safe_extension_path(target_dir, ext_info.name)
+        if os.path.realpath(ext_info.path) != expected_path:
+            raise ValueError("扩展路径不在声明的受管目录中")
 
     def _load_manifest(self, ext_path: str) -> Optional[Dict]:
         """
@@ -245,6 +274,7 @@ class ExtensionManager:
             (成功, 消息)
         """
         try:
+            self._validate_managed_extension(ext_info)
             if os.path.exists(ext_info.path):
                 # Windows 上需要处理只读文件
                 def on_rm_error(func, path, exc_info):
@@ -280,6 +310,11 @@ class ExtensionManager:
         if ext_info.ext_type == target_type:
             return False, "源类型和目标类型相同"
 
+        try:
+            self._validate_managed_extension(ext_info)
+        except ValueError as e:
+            return False, str(e)
+
         # 确定目标路径
         if target_type == ExtensionType.GLOBAL:
             target_dir = self._get_global_ext_path()
@@ -287,7 +322,7 @@ class ExtensionManager:
             target_dir = self._get_user_ext_path()
 
         self._ensure_dir_exists(target_dir)
-        target_path = os.path.join(target_dir, ext_info.name)
+        target_path = self._safe_extension_path(target_dir, ext_info.name)
 
         # 检查目标是否已存在
         if os.path.exists(target_path):
@@ -358,8 +393,14 @@ class ExtensionManager:
         if original_url != repo_url:
             self._log(f"使用镜像: {repo_url}")
 
-        # 校验 URL 格式，防止命令注入
-        if not re.match(r'^https?://[a-zA-Z0-9._/~:@!$&\'()*+,;=\-]+$', repo_url):
+        # 只允许无凭据的 HTTP(S) URL；命令使用参数列表执行，不经过 shell。
+        parsed_url = urlsplit(repo_url)
+        if (
+            parsed_url.scheme not in {"http", "https"}
+            or not parsed_url.hostname
+            or parsed_url.username
+            or parsed_url.password
+        ):
             return False, f"无效的仓库 URL: {repo_url}"
 
         # 确定目标目录
@@ -381,7 +422,11 @@ class ExtensionManager:
             else:
                 return False, "无法从 URL 提取扩展名称，请提供自定义名称"
 
-        target_path = os.path.join(target_dir, ext_name)
+        try:
+            ext_name = self._validate_extension_name(ext_name)
+            target_path = self._safe_extension_path(target_dir, ext_name)
+        except ValueError as e:
+            return False, str(e)
 
         # 检查是否已存在
         if os.path.exists(target_path):
@@ -391,16 +436,11 @@ class ExtensionManager:
             self._log(f"正在从 Git 安装扩展: {ext_name}")
 
             # 获取 git 命令
-            git_cmd, needs_quotes = _get_git_command()
-
-            # 执行 git clone
-            clone_cmd = _format_git_cmd(
-                git_cmd, needs_quotes, f'clone "{repo_url}" "{target_path}"'
-            )
+            git_cmd, _ = _get_git_command()
 
             result = subprocess.run(
-                clone_cmd,
-                shell=True,
+                [git_cmd, "clone", "--", repo_url, target_path],
+                shell=False,
                 capture_output=True,
                 text=True,
                 creationflags=subprocess.CREATE_NO_WINDOW,
@@ -469,7 +509,11 @@ class ExtensionManager:
                 r"[-_](main|master|latest)$", "", ext_name, flags=re.IGNORECASE
             )
 
-        target_path = os.path.join(target_dir, ext_name)
+        try:
+            ext_name = self._validate_extension_name(ext_name)
+            target_path = self._safe_extension_path(target_dir, ext_name)
+        except ValueError as e:
+            return False, str(e)
 
         # 检查是否已存在
         if os.path.exists(target_path):
@@ -501,8 +545,8 @@ class ExtensionManager:
                     source_path = os.path.join(temp_dir, extracted_items[0])
                     # 如果用户没有指定自定义名称，使用目录名
                     if not custom_name:
-                        ext_name = extracted_items[0]
-                        target_path = os.path.join(target_dir, ext_name)
+                        ext_name = self._validate_extension_name(extracted_items[0])
+                        target_path = self._safe_extension_path(target_dir, ext_name)
                         if os.path.exists(target_path):
                             return False, f"扩展已存在: {ext_name}"
                 else:
@@ -545,6 +589,11 @@ class ExtensionManager:
         Returns:
             (成功, 消息)
         """
+        try:
+            self._validate_managed_extension(ext_info)
+        except ValueError as e:
+            return False, str(e)
+
         # 确定目标路径
         if target_type == ExtensionType.GLOBAL:
             target_dir = self._get_global_ext_path()
@@ -554,12 +603,12 @@ class ExtensionManager:
         self._ensure_dir_exists(target_dir)
 
         # 确定新名称
-        if new_name:
-            target_name = new_name
-        else:
-            target_name = ext_info.name
-
-        target_path = os.path.join(target_dir, target_name)
+        target_name = new_name or ext_info.name
+        try:
+            target_path = self._safe_extension_path(target_dir, target_name)
+            target_name = self._validate_extension_name(target_name)
+        except ValueError as e:
+            return False, str(e)
 
         # 检查目标是否已存在
         if os.path.exists(target_path):
@@ -595,8 +644,11 @@ class ExtensionManager:
         new_name = new_name.strip()
 
         # 检查名称是否合法
-        if not re.match(r"^[\w\-]+$", new_name):
-            return False, "扩展名称只能包含字母、数字、下划线和短横线"
+        try:
+            self._validate_managed_extension(ext_info)
+            new_name = self._validate_extension_name(new_name)
+        except ValueError as e:
+            return False, str(e)
 
         if new_name == ext_info.name:
             return False, "新名称与原名称相同"
@@ -607,7 +659,7 @@ class ExtensionManager:
         else:
             target_dir = self._get_user_ext_path()
 
-        target_path = os.path.join(target_dir, new_name)
+        target_path = self._safe_extension_path(target_dir, new_name)
 
         # 检查目标是否已存在
         if os.path.exists(target_path):

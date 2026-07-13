@@ -1,13 +1,10 @@
 from utils.logger import app_logger
-import json
-import urllib.request
-import urllib.error
 from config.config_manager import ConfigManager
 import flet as ft
 from flet import UrlLauncher
 import asyncio
 import aiohttp
-from version import VERSION, RELEASES_VERSION
+from version import VERSION
 import threading
 import re
 
@@ -309,14 +306,6 @@ class VersionChecker:
 
             # 检测章节标题（### ✨ 新增功能）
             elif line.startswith('###'):
-                section_icon_map = {
-                    '✨': 'new',
-                    '🔧': 'improve',
-                    '🐛': 'fix',
-                    '📝': 'other',
-                    '⚠️': 'warning'
-                }
-
                 section_title = line.replace('###', '').strip()
                 current_section = section_title
                 current_items = []

@@ -8,11 +8,9 @@ from config.config_manager import ConfigManager
 from features.st.config import stcfg
 from features.system.env_sys import SysEnv
 import subprocess
-import json
 import asyncio
-from packaging import version
 import urllib.request
-from core.git_utils import switch_git_remote
+from core.git_utils import run_git_command, switch_git_remote
 import re
 from utils.logger import app_logger
 
@@ -45,12 +43,12 @@ class UiEvent:
         if use_sys_env:
             self.env = SysEnv()
             tmp = self.env.checkSysEnv()
-            if not tmp == True:
+            if tmp is not True:
                 self.terminal.add_log(tmp)
         else:
             self.env = Env()
             tmp = self.env.checkEnv()
-            if not tmp == True:
+            if tmp is not True:
                 self.terminal.add_log(tmp)
         self.stCfg = stcfg()
         self.tray = None  # 添加tray引用
@@ -265,7 +263,7 @@ class UiEvent:
                         try:
                             await self.terminal.stop_processes()
                             app_logger.info("进程已停止")
-                        except Exception as ex:
+                        except Exception:
                             app_logger.exception("停止进程时出错")
                     # 3. 销毁窗口
                     await self._close_and_destroy_window_async()
@@ -327,7 +325,7 @@ class UiEvent:
             try:
                 self.terminal.stop_processes_sync()
                 app_logger.info("进程已停止")
-            except Exception as ex:
+            except Exception:
                 app_logger.exception("停止进程时出错")
 
         # ========== 3. 异步销毁窗口 ==========
@@ -365,7 +363,7 @@ class UiEvent:
                 self.tray = None
 
             app_logger.info("UIEvent resources cleaned up")
-        except Exception as e:
+        except Exception:
             app_logger.exception("UIEvent cleanup error")
 
     def __del__(self):
@@ -373,8 +371,8 @@ class UiEvent:
         try:
             self.cleanup()
         except Exception as e:
-            # __del__ 中避免使用 logger，防止模块已卸载导致错误
-            pass
+            # 解释器关闭阶段日志模块可能已卸载，只能使用后备输出。
+            print(f"UIEvent 析构清理失败: {e}")
 
     def switch_theme(self, e):
         try:
@@ -617,34 +615,25 @@ class UiEvent:
             "、",
             "《",
             "》",
-            '"',
-            '"',
             """, """,
             "…",
             "——",
             # 全角字符
             "　",
-            "！",
             "＂",
             "＃",
             "＄",
             "％",
             "＆",
             "＇",
-            "（",
-            "）",
             "＊",
             "＋",
-            "，",
             "－",
             "．",
             "／",
-            "：",
-            "；",
             "＜",
             "＝",
             "＞",
-            "？",
             "＠",
             "［",
             "＼",
@@ -1023,12 +1012,11 @@ class UiEvent:
                     self.terminal.add_log("检查Git状态...")
                     try:
                         # 检查是否处于detached HEAD状态
-                        branch_check = subprocess.run(
-                            f'"{git_path}git" rev-parse --abbrev-ref HEAD',
-                            shell=True,
+                        branch_check = run_git_command(
+                            ["rev-parse", "--abbrev-ref", "HEAD"],
+                            self.env.st_dir,
                             capture_output=True,
                             text=True,
-                            cwd=self.env.st_dir,
                             creationflags=subprocess.CREATE_NO_WINDOW,
                         )
 
@@ -1041,12 +1029,11 @@ class UiEvent:
                                 )
 
                                 # 先尝试本地checkout，如果失败则从远程创建
-                                checkout_result = subprocess.run(
-                                    f'"{git_path}git" checkout -B release origin/release',
-                                    shell=True,
+                                checkout_result = run_git_command(
+                                    ["checkout", "-B", "release", "origin/release"],
+                                    self.env.st_dir,
                                     capture_output=True,
                                     text=True,
-                                    cwd=self.env.st_dir,
                                     creationflags=subprocess.CREATE_NO_WINDOW,
                                 )
 
@@ -1055,12 +1042,11 @@ class UiEvent:
                                 else:
                                     # 尝试更简单的恢复方式
                                     self.terminal.add_log("尝试另一种恢复方式...")
-                                    checkout_result2 = subprocess.run(
-                                        f'"{git_path}git" checkout release',
-                                        shell=True,
+                                    checkout_result2 = run_git_command(
+                                        ["checkout", "release"],
+                                        self.env.st_dir,
                                         capture_output=True,
                                         text=True,
-                                        cwd=self.env.st_dir,
                                         creationflags=subprocess.CREATE_NO_WINDOW,
                                     )
 
@@ -1080,12 +1066,11 @@ class UiEvent:
 
                     try:
                         # 获取当前远程仓库地址
-                        current_remote_process = subprocess.run(
-                            f'"{git_path}git" remote get-url origin',
-                            shell=True,
+                        current_remote_process = run_git_command(
+                            ["remote", "get-url", "origin"],
+                            self.env.st_dir,
                             capture_output=True,
                             text=True,
-                            cwd=self.env.st_dir,
                             creationflags=subprocess.CREATE_NO_WINDOW,
                         )
 
@@ -1096,10 +1081,9 @@ class UiEvent:
                                 self.terminal.add_log(
                                     f"更新远程仓库地址: {expected_remote}"
                                 )
-                                subprocess.run(
-                                    f'"{git_path}git" remote set-url origin {expected_remote}',
-                                    shell=True,
-                                    cwd=self.env.st_dir,
+                                run_git_command(
+                                    ["remote", "set-url", "origin", expected_remote],
+                                    self.env.st_dir,
                                     creationflags=subprocess.CREATE_NO_WINDOW,
                                 )
                     except Exception as ex:
@@ -1140,10 +1124,9 @@ class UiEvent:
                             )
                             try:
                                 # 尝试解决package-lock.json冲突
-                                reset_process = subprocess.run(
-                                    f'"{git_path}git" checkout -- package-lock.json',
-                                    shell=True,
-                                    cwd=self.env.st_dir,
+                                reset_process = run_git_command(
+                                    ["checkout", "--", "package-lock.json"],
+                                    self.env.st_dir,
                                     creationflags=subprocess.CREATE_NO_WINDOW,
                                     capture_output=True,
                                     text=True,
@@ -1257,12 +1240,11 @@ class UiEvent:
                     self.terminal.add_log("检查Git状态...")
                     try:
                         # 检查是否处于detached HEAD状态
-                        branch_check = subprocess.run(
-                            f'"{git_path}git" rev-parse --abbrev-ref HEAD',
-                            shell=True,
+                        branch_check = run_git_command(
+                            ["rev-parse", "--abbrev-ref", "HEAD"],
+                            self.env.st_dir,
                             capture_output=True,
                             text=True,
-                            cwd=self.env.st_dir,
                             creationflags=subprocess.CREATE_NO_WINDOW,
                         )
 
@@ -1275,12 +1257,11 @@ class UiEvent:
                                 )
 
                                 # 先尝试本地checkout，如果失败则从远程创建
-                                checkout_result = subprocess.run(
-                                    f'"{git_path}git" checkout -B release origin/release',
-                                    shell=True,
+                                checkout_result = run_git_command(
+                                    ["checkout", "-B", "release", "origin/release"],
+                                    self.env.st_dir,
                                     capture_output=True,
                                     text=True,
-                                    cwd=self.env.st_dir,
                                     creationflags=subprocess.CREATE_NO_WINDOW,
                                 )
 
@@ -1289,12 +1270,11 @@ class UiEvent:
                                 else:
                                     # 尝试更简单的恢复方式
                                     self.terminal.add_log("尝试另一种恢复方式...")
-                                    checkout_result2 = subprocess.run(
-                                        f'"{git_path}git" checkout release',
-                                        shell=True,
+                                    checkout_result2 = run_git_command(
+                                        ["checkout", "release"],
+                                        self.env.st_dir,
                                         capture_output=True,
                                         text=True,
-                                        cwd=self.env.st_dir,
                                         creationflags=subprocess.CREATE_NO_WINDOW,
                                     )
 
@@ -1339,14 +1319,16 @@ class UiEvent:
                                                     node_modules_path = os.path.join(
                                                         self.env.st_dir, "node_modules"
                                                     )
-                                                    if os.path.exists(
-                                                        node_modules_path
+                                                    if await asyncio.to_thread(
+                                                        os.path.exists,
+                                                        node_modules_path,
                                                     ):
                                                         try:
                                                             import shutil
 
-                                                            shutil.rmtree(
-                                                                node_modules_path
+                                                            await asyncio.to_thread(
+                                                                shutil.rmtree,
+                                                                node_modules_path,
                                                             )
                                                         except Exception as ex:
                                                             self.terminal.add_log(
@@ -1414,10 +1396,9 @@ class UiEvent:
                                 )
                                 try:
                                     # 尝试解决package-lock.json冲突
-                                    reset_process = subprocess.run(
-                                        f'"{git_path}git" checkout -- package-lock.json',
-                                        shell=True,
-                                        cwd=self.env.st_dir,
+                                    reset_process = run_git_command(
+                                        ["checkout", "--", "package-lock.json"],
+                                        self.env.st_dir,
                                         creationflags=subprocess.CREATE_NO_WINDOW,
                                         capture_output=True,
                                         text=True,
@@ -1553,8 +1534,7 @@ class UiEvent:
                         # 通过页面会话获取UI实例并更新代理URL字段
                         self.page.session.set("proxy_url", proxy_url)
                 except Exception:
-                    pass
-
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
                 self.terminal.add_log(f"自动设置代理: {proxy_url}")
                 self.showMsg(f"已自动设置代理: {proxy_url}")
             else:
@@ -1647,7 +1627,7 @@ class UiEvent:
     def sys_env_check(self, e):
         sysenv = SysEnv()
         tmp = sysenv.checkSysEnv()
-        if tmp == True:
+        if tmp is True:
             self.showMsg(
                 f"{tmp} Git：{sysenv.get_git_path()} NodeJS：{sysenv.get_node_path()}"
             )
@@ -1657,7 +1637,7 @@ class UiEvent:
     def in_env_check(self, e):
         inenv = Env()
         tmp = inenv.checkEnv()
-        if tmp == True:
+        if tmp is True:
             self.showMsg(
                 f"{tmp} Git：{inenv.get_git_path()} NodeJS：{inenv.get_node_path()}"
             )
@@ -1973,8 +1953,7 @@ class UiEvent:
             # 1. 构建环境变量
             if platform.system() == "Windows":
                 # 确保工作目录存在
-                if not os.path.exists(workdir):
-                    os.makedirs(workdir)
+                await asyncio.to_thread(os.makedirs, workdir, exist_ok=True)
 
                 # 构建环境变量字典
                 env = os.environ.copy()
@@ -2017,14 +1996,11 @@ class UiEvent:
                 try:
                     if process.returncode is None:
                         process.terminate()
-                        import asyncio
-
                         await asyncio.sleep(0.5)
                         if process.returncode is None:
                             process.kill()
                 except Exception:
-                    pass
-
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
                 # 移除进程引用
                 self.terminal.remove_process(process.pid)
 
@@ -2064,12 +2040,11 @@ class UiEvent:
                         def on_status_complete(p):
                             # 使用git diff检查本地和远程release分支的差异
                             try:
-                                diff_process = subprocess.run(
-                                    f'"{git_path}git" diff release..origin/release',
-                                    shell=True,
+                                diff_process = run_git_command(
+                                    ["diff", "release..origin/release"],
+                                    "SillyTavern",
                                     capture_output=True,
                                     text=True,
-                                    cwd="SillyTavern",
                                     creationflags=subprocess.CREATE_NO_WINDOW,
                                     encoding="utf-8",
                                     errors="ignore",  # 忽略编码错误
@@ -2203,9 +2178,17 @@ class UiEvent:
 
             # 直接启动 cmd.exe，不使用 shell 命令注入
             # /k 参数表示保持窗口打开并执行后续命令
+            cmd_executable = os.environ.get(
+                "COMSPEC",
+                os.path.join(
+                    os.environ.get("SystemRoot", r"C:\Windows"),
+                    "System32",
+                    "cmd.exe",
+                ),
+            )
             subprocess.Popen(
                 [
-                    "cmd.exe",
+                    cmd_executable,
                     "/k",
                     "chcp 65001 >nul && echo 环境变量已设置，欢迎使用！ && cmd /k",
                 ],
@@ -2252,7 +2235,6 @@ class UiEvent:
             tag_name (str): 目标tag名称
         """
         from core.git_utils import checkout_st_tag, check_git_status
-        import os
 
         try:
             # 1. 检查SillyTavern是否正在运行
@@ -2320,7 +2302,7 @@ class UiEvent:
                 if hasattr(version_view, "refresh"):
                     # 调用版本视图的刷新方法
                     version_view.refresh()
-        except Exception as e:
+        except Exception:
             app_logger.exception("刷新版本视图时出错")
 
     def _ask_install_dependencies(self):

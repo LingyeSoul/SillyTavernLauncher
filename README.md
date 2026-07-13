@@ -34,7 +34,7 @@ SillyTavernLauncher 仅为 SillyTavern 应用的启动管理工具（GUI 启动�
 ## 技术栈 🧰
 
 - 🐍 **Python 3.9+** - 核心编程语言
-- 🎨 **Flet 0.80.1** - 现代 GUI 框架
+- 🎨 **Flet 0.82.2** - 现代 GUI 框架
 - 🔄 **asyncio** - 异步编程支持
 - 📦 **Git** - 版本控制
 - 🌐 **Node.js 18+** - SillyTavern 服务运行

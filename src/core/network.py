@@ -5,6 +5,7 @@ IP address detection and network-related functions
 """
 
 import time
+import os
 import subprocess
 import re
 import socket
@@ -65,8 +66,13 @@ class NetworkManager:
             creationflags = 0
             if sys.platform == "win32":
                 creationflags = subprocess.CREATE_NO_WINDOW
+            ipconfig_executable = os.path.join(
+                os.environ.get("SystemRoot", r"C:\Windows"),
+                "System32",
+                "ipconfig.exe",
+            )
             result = subprocess.run(
-                ['ipconfig'],
+                [ipconfig_executable],
                 capture_output=True,
                 text=True,
                 creationflags=creationflags,

@@ -2,7 +2,6 @@ from utils.logger import app_logger
 import flet as ft
 from flet import UrlLauncher
 import platform
-import os
 import threading
 import weakref
 from features.system.env import Env
@@ -881,10 +880,8 @@ class UniUI:
                     update_ui()
 
         except Exception as e:
-            print(f"异步加载视图失败: {e}")
-            import traceback
-
-            traceback.print_exc()
+            error_message = str(e)
+            app_logger.error(f"异步加载视图失败: {error_message}", exc_info=True)
 
             # 如果加载失败，确保UI仍然可用
             def show_error():
@@ -895,7 +892,7 @@ class UniUI:
                                 ft.Text(
                                     "加载部分界面失败", size=16, color=ft.Colors.RED_500
                                 ),
-                                ft.Text(str(e), size=14),
+                                ft.Text(error_message, size=14),
                                 ft.Text("请重启应用或联系开发者", size=14),
                                 ft.Button(
                                     "重试",
@@ -1002,7 +999,7 @@ class UniUI:
                 try:
                     self._rail.on_change = None
                 except Exception:
-                    pass
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
                 self._rail = None
 
             # 2. 显式断开按钮行的事件处理器
@@ -1015,7 +1012,7 @@ class UniUI:
                         if hasattr(control, "on_click"):
                             control.on_click = None
                 except Exception:
-                    pass
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
                 self._terminal_button_row = None
 
             # 3. 清理 ui_event（必须先清理，打破循环引用）
@@ -1024,7 +1021,7 @@ class UniUI:
                     if hasattr(self.ui_event, "cleanup"):
                         self.ui_event.cleanup()
                 except Exception:
-                    pass
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
                 self.ui_event = None
 
             # 4. 清理 terminal（添加异常处理，避免解释器关闭时的线程错误）
@@ -1036,7 +1033,7 @@ class UniUI:
                     if "can't create new thread" not in str(e):
                         raise
                 except Exception:
-                    pass
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
                 self.terminal = None
 
             # 5. 清理 sync_ui
@@ -1044,7 +1041,7 @@ class UniUI:
                 try:
                     self.sync_ui.destroy()
                 except Exception:
-                    pass
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
                 self.sync_ui = None
 
             # 6. 清理 content 和 page 引用
@@ -1052,7 +1049,7 @@ class UniUI:
                 try:
                     self._content.content = None
                 except Exception:
-                    pass
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
                 self._content = None
 
             if hasattr(self, "page") and self.page is not None:
@@ -1061,7 +1058,7 @@ class UniUI:
                     if hasattr(self.page, "clean"):
                         self.page.clean()
                 except Exception:
-                    pass
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
                 self.page = None
 
             # 7. 清理视图引用
@@ -1099,4 +1096,4 @@ class UniUI:
         try:
             self.cleanup()
         except Exception:
-            pass
+            app_logger.debug("已忽略非关键异常", exc_info=True)

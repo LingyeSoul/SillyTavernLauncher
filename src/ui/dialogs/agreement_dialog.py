@@ -4,7 +4,6 @@
 提供首次启动时的使用协议对话框，确保用户同意免责声明和合规使用协议。
 """
 
-import sys
 import time
 import threading
 import flet as ft
@@ -96,7 +95,7 @@ class AgreementDialog:
                             raise
 
                     self.page.run_task(update_ui)
-                except (AssertionError, RuntimeError) as e:
+                except (AssertionError, RuntimeError):
                     # 如果 run_task 失败，回退到同步更新
                     try:
                         self.page.update()

@@ -1,20 +1,16 @@
-from utils.logger import app_logger
 #!/usr/bin/env python3
 """
 SillyTavern Data Sync UI
 Flet-based user interface for data synchronization
 """
 
-import os
 import threading
 import time
-import datetime
-import re
-import queue
 from typing import Optional
 import flet as ft
-from core import network
+
 from core.network import get_network_manager
+from utils.logger import app_logger
 
 try:
     from features.sync.manager import DataSyncManager
@@ -73,7 +69,7 @@ class DataSyncUI:
 
         if self.page is None:
             # page对象不可用，无法更新UI
-            app_logger.warning(f"[同步UI] 警告：page对象不可用，无法更新UI")
+            app_logger.warning("[同步UI] 警告：page对象不可用，无法更新UI")
             return
 
         # UI已创建，直接添加到视图
@@ -103,7 +99,7 @@ class DataSyncUI:
 
                 self.page.run_task(update_ui)
 
-            except (AssertionError, RuntimeError) as e:
+            except (AssertionError, RuntimeError):
                 # 如果 run_task 失败，回退到同步更新
                 try:
                     self._sync_log_view.update()
@@ -132,7 +128,7 @@ class DataSyncUI:
                 # 立即设置日志回调，以防在UI创建前就开始服务器操作
                 self.sync_manager.set_ui_log_callback(self._add_log)
             except Exception as e:
-                raise Exception(f"同步管理器初始化失败: {e}")
+                raise Exception(f"同步管理器初始化失败: {e}") from e
 
     def _get_control(self, name: str, factory_func):
         """Get or create UI control (lazy loading)"""
@@ -454,7 +450,7 @@ class DataSyncUI:
                     self.refresh_timer = threading.Timer(5.0, refresh)  # Increased to 5 seconds
                     self.refresh_timer.start()
             except Exception:
-                pass  # Ignore errors during refresh
+                app_logger.debug("后台刷新同步状态失败", exc_info=True)
 
         if self.page is not None:
             self.refresh_timer = threading.Timer(5.0, refresh)  # Initial delay 5 seconds
@@ -513,7 +509,7 @@ class DataSyncUI:
                     raise
 
         except Exception:
-            pass  # Silently ignore errors in refresh timer
+            app_logger.debug("刷新同步状态失败", exc_info=True)
 
     def _update_ui(self):
         """Update UI with current status (full update)"""
@@ -647,7 +643,7 @@ class DataSyncUI:
             if self.config_manager:
                 self.config_manager.set("sync.first_shown", True)
         except Exception:
-            pass  # 出错时忽略
+            app_logger.debug("保存首次同步提示状态失败", exc_info=True)
 
     def _show_first_server_dialog(self, port=None, host=None):
         """显示首次启动服务器的不可关闭对话框"""
@@ -673,11 +669,11 @@ class DataSyncUI:
             ft.Text("• 建议定期备份重要数据", size=13, color=ft.Colors.RED_500),
             ft.Divider(),
             ft.Text(
-                "服务器启动后，局域网内的其他设备可以通过您的IP地址和端口访问同步服务。",
+                "服务器启动后，请使用日志中带访问令牌的完整地址连接同步服务。",
                 size=13
             ),
             ft.Text(
-                f"默认端口: 9999，访问地址格式: http://您的IP:9999",
+                "完整地址中的访问令牌属于敏感信息，请仅分享给可信设备。",
                 size=12,
                 color=ft.Colors.GREY_600
             ),
@@ -841,8 +837,8 @@ class DataSyncUI:
 
                     if servers:
                         for i, (server_url, server_info) in enumerate(servers, 1):
-                            data_path = server_info.get('data_path', 'N/A')
                             timestamp = server_info.get('timestamp', 'N/A')
+                            auth_required = server_info.get('auth_required', False)
 
                             server_card = ft.Card(
                                 ft.Container(
@@ -852,12 +848,18 @@ class DataSyncUI:
                                             ft.Text(f"服务器 {i}", weight=ft.FontWeight.BOLD),
                                             ft.Text(server_url, size=11, color=ft.Colors.BLUE_600)
                                         ]),
-                                        ft.Text(f"数据路径: {data_path}", size=11),
+                                        ft.Text(
+                                            "需要从服务端复制带令牌的完整地址"
+                                            if auth_required
+                                            else "服务器未启用访问认证",
+                                            size=11,
+                                        ),
                                         ft.Text(f"时间: {timestamp}", size=11, color=ft.Colors.GREY_600),
                                         ft.Button(
                                             "使用此服务器",
                                             on_click=lambda _, url=server_url: self._select_server(url),
-                                            icon=ft.Icons.CHECK
+                                            icon=ft.Icons.CHECK,
+                                            disabled=auth_required,
                                         )
                                     ]),
                                     padding=10
@@ -967,7 +969,7 @@ class DataSyncUI:
                 if hasattr(self.sync_manager, 'is_server_running') and self.sync_manager.is_server_running:
                     self.sync_manager.stop_sync_server()
             except Exception:
-                pass  # Ignore errors during cleanup
+                app_logger.debug("销毁同步界面时停止服务失败", exc_info=True)
 
         # Clear page reference to prevent access during shutdown
         self.page = None
@@ -994,8 +996,7 @@ class DataSyncUI:
             if local_ip:
                 return local_ip
         except Exception:
-            pass
-
+            app_logger.debug("已忽略非关键异常", exc_info=True)
         # 如果都失败了，返回一个常见的局域网IP作为默认值
         return "192.168.1.100"
 

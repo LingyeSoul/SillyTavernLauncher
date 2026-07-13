@@ -1,5 +1,5 @@
-import sys
 import os
+import shutil
 import subprocess
 from packaging import version
 
@@ -37,24 +37,26 @@ class SysEnv:
 
     def check_system_git(self):
         try:
-            # First check if git is available
-            version_result = subprocess.run(['git', '--version'], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            git_executable = shutil.which('git')
+            if not git_executable:
+                return 'Git is not installed on system'
+
+            version_result = subprocess.run([git_executable, '--version'], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
             if version_result.returncode != 0:
                 return 'Git is not installed on system'
-            
-            # Search for git executable in PATH
-            for path in os.environ['PATH'].split(os.pathsep):
-                git_path = os.path.join(path, 'git.exe')
-                if os.path.isfile(git_path):
-                    self.system_git_path = path.rstrip('\\') + '\\'
-                    return True
-            return 'Git is not installed on system'
+
+            self.system_git_path = os.path.dirname(git_executable) + os.sep
+            return True
         except FileNotFoundError:
             return 'Git is not installed on system'
 
     def check_system_node(self):
         try:
-            version_result = subprocess.run(['node', '--version'], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            node_executable = shutil.which('node')
+            if not node_executable:
+                return 'Node.js is not installed on system'
+
+            version_result = subprocess.run([node_executable, '--version'], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
             if version_result.returncode != 0:
                 return 'Node.js is not installed on system'
             
@@ -62,13 +64,8 @@ class SysEnv:
             if version.parse(node_version) < version.parse('18.0.0'):
                 return f'Node.js version {node_version} is too old, requires 18.x LTS or higher'
             
-            # Search for node executable in PATH
-            for path in os.environ['PATH'].split(os.pathsep):
-                node_path = os.path.join(path, 'node.exe')
-                if os.path.isfile(node_path):
-                    self.system_node_path = path.rstrip('\\') + '\\'
-                    return True
-            return 'Node.js is not installed on system'
+            self.system_node_path = os.path.dirname(node_executable) + os.sep
+            return True
         except FileNotFoundError:
             return 'Node.js is not installed on system'
         

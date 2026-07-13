@@ -10,7 +10,6 @@ import logging
 import os
 import sys
 import threading
-from typing import Optional
 
 
 class ErrorOnlyFilter(logging.Filter):
