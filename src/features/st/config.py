@@ -1,8 +1,14 @@
 import os
+from collections.abc import MutableMapping
 from typing import Optional
+
 from ruamel.yaml import YAML
+
 from utils.logger import app_logger
 from core.network import get_network_manager
+
+
+DEFAULT_PRIVATE_ADDRESS_RANGES = ("127.0.0.0/8", "::1/128")
 
 
 class stcfg:
@@ -22,6 +28,12 @@ class stcfg:
         self.enable_forwarded_whitelist = True
         self.whitelist_ips = ["::1", "127.0.0.1"]
         self.unified_whitelist = False
+
+        self.private_address_whitelist_enabled = False
+        self.private_address_allow_unresolved_hosts = False
+        self.private_address_log_blocked = True
+        self.private_address_log_allowed = False
+        self.private_address_allowed_ranges = list(DEFAULT_PRIVATE_ADDRESS_RANGES)
 
         self.yaml = YAML()
         self.yaml.preserve_quotes = True
@@ -54,6 +66,34 @@ class stcfg:
                 )
                 self.unified_whitelist = self.config_data.get("unifiedWhitelist", False)
 
+                private_whitelist = self.config_data.get(
+                    "privateAddressWhitelist", {}
+                ) or {}
+                if not isinstance(private_whitelist, MutableMapping):
+                    private_whitelist = {}
+                private_log = private_whitelist.get("log", {}) or {}
+                if not isinstance(private_log, MutableMapping):
+                    private_log = {}
+                allowed_ranges = private_whitelist.get(
+                    "allowedRanges", list(DEFAULT_PRIVATE_ADDRESS_RANGES)
+                )
+                if not isinstance(allowed_ranges, list):
+                    allowed_ranges = list(DEFAULT_PRIVATE_ADDRESS_RANGES)
+
+                self.private_address_whitelist_enabled = private_whitelist.get(
+                    "enabled", False
+                )
+                self.private_address_allow_unresolved_hosts = private_whitelist.get(
+                    "allowUnresolvedHosts", False
+                )
+                self.private_address_log_blocked = private_log.get(
+                    "blockedRequests", True
+                )
+                self.private_address_log_allowed = private_log.get(
+                    "allowedRequests", False
+                )
+                self.private_address_allowed_ranges = allowed_ranges
+
             self._migrate_whitelist_from_txt()
 
         except Exception as e:
@@ -81,6 +121,25 @@ class stcfg:
             self.config_data["whitelist"] = self.whitelist_ips
             self.config_data["unifiedWhitelist"] = self.unified_whitelist
 
+            private_whitelist = self.config_data.get("privateAddressWhitelist")
+            if not isinstance(private_whitelist, MutableMapping):
+                private_whitelist = {}
+                self.config_data["privateAddressWhitelist"] = private_whitelist
+            private_log = private_whitelist.get("log")
+            if not isinstance(private_log, MutableMapping):
+                private_log = {}
+                private_whitelist["log"] = private_log
+
+            private_whitelist["enabled"] = self.private_address_whitelist_enabled
+            private_whitelist["allowUnresolvedHosts"] = (
+                self.private_address_allow_unresolved_hosts
+            )
+            private_log["blockedRequests"] = self.private_address_log_blocked
+            private_log["allowedRequests"] = self.private_address_log_allowed
+            private_whitelist["allowedRanges"] = (
+                self.private_address_allowed_ranges
+            )
+
             with open(self.config_path, "w", encoding="utf-8") as file:
                 self.yaml.dump(self.config_data, file)
 
@@ -100,6 +159,23 @@ class stcfg:
             return None
         except Exception:
             return None
+
+    def get_current_subnet(self) -> Optional[str]:
+        """
+        获取当前设备所在的局域网网段。
+
+        Returns:
+            Optional[str]: SillyTavern 支持的网段通配符，获取失败时返回 None。
+        """
+        local_ip = get_network_manager().get_local_ip()
+        if not local_ip:
+            app_logger.warning("无法获取本地IP，跳过当前网段检测")
+            return None
+
+        subnet = self._get_subnet_from_ip(local_ip)
+        if not subnet:
+            app_logger.warning(f"无法从IP {local_ip} 提取网段")
+        return subnet
 
     def _migrate_whitelist_from_txt(self) -> bool:
         # 已迁移则跳过
@@ -216,34 +292,50 @@ class stcfg:
 
     def create_whitelist(self):
         """
-        创建或更新 IP 白名单配置
-        如果白名单中没有当前设备的网段，则自动添加
+        创建或更新 IP 与私有地址白名单配置。
+
+        开启局域网监听时自动启用私有地址请求过滤。当前网段仅自动加入
+        入站 IP 白名单；出站私有地址范围保持最小权限，由用户显式添加。
 
         Returns:
             bool: 操作是否成功
         """
-        local_ip = get_network_manager().get_local_ip()
-
         try:
+            local_ip = get_network_manager().get_local_ip()
+            changed = False
+
+            if not self.private_address_whitelist_enabled:
+                self.private_address_whitelist_enabled = True
+                changed = True
+
             if local_ip:
                 subnet = self._get_subnet_from_ip(local_ip)
-                if subnet and subnet not in self.whitelist_ips:
-                    self.whitelist_ips.insert(0, subnet)
-                    if "127.0.0.1" not in self.whitelist_ips:
-                        self.whitelist_ips.append("127.0.0.1")
-                    if "::1" not in self.whitelist_ips:
-                        self.whitelist_ips.append("::1")
-                    self.save_config()
+                if subnet:
+                    if subnet not in self.whitelist_ips:
+                        self.whitelist_ips.insert(0, subnet)
+                        changed = True
                     app_logger.info(
-                        f"白名单已更新，添加网段: {subnet} (本地IP: {local_ip})"
+                        f"智能白名单已检查当前网段: {subnet} (本地IP: {local_ip})"
                     )
-                elif not subnet:
+                else:
                     app_logger.warning(f"无法提取网段 (本地IP: {local_ip})")
             else:
                 app_logger.warning("无法获取本地IP，白名单未更新")
+
+            for address in ("127.0.0.1", "::1"):
+                if address not in self.whitelist_ips:
+                    self.whitelist_ips.append(address)
+                    changed = True
+            for address_range in DEFAULT_PRIVATE_ADDRESS_RANGES:
+                if address_range not in self.private_address_allowed_ranges:
+                    self.private_address_allowed_ranges.append(address_range)
+                    changed = True
+
+            if changed:
+                self.save_config()
             return True
         except Exception as e:
-            app_logger.error(f"白名单更新失败: {str(e)}")
+            app_logger.error(f"白名单更新失败: {str(e)}", exc_info=True)
             return False
 
     def sync_whitelists(self, source: str = "ip"):

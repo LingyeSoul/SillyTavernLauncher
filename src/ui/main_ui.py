@@ -157,14 +157,14 @@ class UniUI:
                                     ),
                                     ft.IconButton(
                                         icon=ft.Icons.EDIT_OUTLINED,
-                                        tooltip="编辑IP白名单",
+                                        tooltip="编辑网络白名单",
                                         on_click=self.ui_event.edit_ip_whitelist,
                                     ),
                                 ],
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                             ),
                             ft.Text(
-                                "开启后允许局域网设备访问，可在config.yaml中配置IP白名单",
+                                "开启后允许局域网设备访问，并自动启用私有地址请求保护",
                                 size=14,
                                 color=ft.Colors.BLUE_400,
                             ),

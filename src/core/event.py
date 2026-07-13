@@ -1591,16 +1591,33 @@ class UiEvent:
     def edit_ip_whitelist(self, e):
         from ui.dialogs.ip_whitelist_dialog import show_ip_whitelist_dialog
 
-        def on_save(mode, forwarded, ips):
+        def on_save(
+            mode,
+            forwarded,
+            ips,
+            private_enabled,
+            allowed_ranges,
+            allow_unresolved,
+            log_blocked,
+            log_allowed,
+        ):
             self.stCfg.whitelist_mode = mode
             self.stCfg.enable_forwarded_whitelist = forwarded
             self.stCfg.whitelist_ips = ips
+            self.stCfg.private_address_whitelist_enabled = private_enabled
+            self.stCfg.private_address_allowed_ranges = allowed_ranges
+            self.stCfg.private_address_allow_unresolved_hosts = allow_unresolved
+            self.stCfg.private_address_log_blocked = log_blocked
+            self.stCfg.private_address_log_allowed = log_allowed
             if self.stCfg.unified_whitelist:
                 self.stCfg.sync_whitelists("ip")
             else:
                 self.stCfg.save_config()
             self.showMsg(
-                f"IP白名单配置已更新：过滤{'开启' if mode else '关闭'}, IP数: {len(ips)}"
+                "网络白名单配置已更新，重启酒馆后生效："
+                f"访问过滤{'开启' if mode else '关闭'}, IP数: {len(ips)}; "
+                f"私网保护{'开启' if private_enabled else '关闭'}, "
+                f"可信范围数: {len(allowed_ranges)}"
             )
 
         show_ip_whitelist_dialog(self.page, self.stCfg, on_save)
