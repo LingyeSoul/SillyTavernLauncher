@@ -5,14 +5,13 @@ Flask HTTP service for providing SillyTavern user data to clients
 """
 
 import os
-import json
+import hmac
+import secrets
 import zipfile
 import io
-import hashlib
 import sys
 from datetime import datetime
-from pathlib import Path
-from flask import Flask, request, jsonify, send_file, Response
+from flask import Flask, request, jsonify, send_file
 import threading
 import time
 import logging
@@ -60,8 +59,7 @@ class UILogHandler(logging.Handler):
             # Send to UI log system
             self.ui_log_callback(message, level)
         except Exception:
-            # If UI callback fails, don't break the logging
-            pass
+            self.handleError(record)
 
 
 class CustomRequestHandler(WSGIRequestHandler):
@@ -93,7 +91,7 @@ class CustomRequestHandler(WSGIRequestHandler):
                     ui_log_callback(f"HTTP请求: {clean_message}", 'info')
                     return
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("自定义请求日志失败", exc_info=True)
 
         # Fallback to default logging
         super().log_request(code, size)
@@ -113,14 +111,14 @@ class CustomRequestHandler(WSGIRequestHandler):
                     ui_log_callback(f"服务器日志: {clean_message}", 'info')
                     return
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("自定义服务器日志失败", exc_info=True)
 
         # Fallback to default logging
         super().log(type, message, *args)
 
 
 class SyncServer:
-    def __init__(self, data_path=None, port=9999, host=None):
+    def __init__(self, data_path=None, port=9999, host=None, auth_token=None):
         """
         Initialize sync server
 
@@ -128,6 +126,7 @@ class SyncServer:
             data_path (str): Path to SillyTavern data directory
             port (int): Server port
             host (str): Server host address
+            auth_token (str): Bearer token required for data endpoints
         """
         self.app = Flask(__name__)
         self.port = port
@@ -137,6 +136,7 @@ class SyncServer:
         else:
             self.host = host
         self.data_path = data_path or self._find_data_path()
+        self.auth_token = auth_token or secrets.token_urlsafe(24)
         self.running = False
         self.server_thread = None
         self.httpd = None  # Werkzeug HTTP 服务器引用，用于优雅关闭
@@ -148,7 +148,7 @@ class SyncServer:
         if not os.path.exists(self.data_path):
             raise FileNotFoundError(f"数据目录不存在: {self.data_path}")
 
-        self._log(f"数据同步服务已初始化", 'info')
+        self._log("数据同步服务已初始化", 'info')
         self._log(f"数据路径: {self.data_path}", 'info')
         self._log(f"监听地址: {self.host}:{port}", 'info')
         self._log("注意: 服务器仅在局域网内监听，确保安全性", 'info')
@@ -234,15 +234,20 @@ class SyncServer:
                 return local_ip
 
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("通过套接字获取局域网 IP 失败", exc_info=True)
 
         try:
             # 方法2: 使用ipconfig命令
             creationflags = 0
             if sys.platform == "win32":
                 creationflags = subprocess.CREATE_NO_WINDOW
+            ipconfig_executable = os.path.join(
+                os.environ.get("SystemRoot", r"C:\Windows"),
+                "System32",
+                "ipconfig.exe",
+            )
             result = subprocess.run(
-                ['ipconfig'],
+                [ipconfig_executable],
                 capture_output=True,
                 text=True,
                 creationflags=creationflags,
@@ -260,7 +265,7 @@ class SyncServer:
                         return ip
 
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("通过 ipconfig 获取局域网 IP 失败", exc_info=True)
 
         return None
 
@@ -320,13 +325,33 @@ class SyncServer:
     def _setup_routes(self):
         """Setup Flask routes"""
 
+        @self.app.before_request
+        def require_authentication():
+            """Require a bearer token for every endpoint except discovery health."""
+            if request.path == '/health':
+                return None
+
+            authorization = request.headers.get('Authorization', '')
+            scheme, _, provided_token = authorization.partition(' ')
+            if (
+                scheme.lower() != 'bearer'
+                or not provided_token
+                or not hmac.compare_digest(provided_token, self.auth_token)
+            ):
+                return jsonify({
+                    'success': False,
+                    'error': 'Authentication required'
+                }), 401
+
+            return None
+
         @self.app.route('/health', methods=['GET'])
         def health_check():
             """Health check endpoint"""
             return jsonify({
                 'status': 'healthy',
                 'timestamp': datetime.now().isoformat(),
-                'data_path': self.data_path
+                'auth_required': True
             })
 
         @self.app.route('/manifest', methods=['GET'])
@@ -414,7 +439,6 @@ class SyncServer:
             return jsonify({
                 'success': True,
                 'server_info': {
-                    'data_path': self.data_path,
                     'port': self.port,
                     'host': self.host,
                     'running': self.running,
@@ -483,7 +507,7 @@ class SyncServer:
     def _calculate_total_size(self):
         """Calculate total size of data directory"""
         total_size = 0
-        for root, dirs, files in os.walk(self.data_path):
+        for root, _dirs, files in os.walk(self.data_path):
             for file in files:
                 file_path = os.path.join(root, file)
                 try:
@@ -499,7 +523,7 @@ class SyncServer:
             return
 
         def run_server():
-            self._log(f"启动数据同步服务...", 'info')
+            self._log("启动数据同步服务...", 'info')
 
             # Configure Flask to show access logs
             import logging
@@ -518,7 +542,8 @@ class SyncServer:
             self.server_thread = threading.Thread(target=run_server, daemon=False)
             self.server_thread.start()
             self.running = True
-            self._log(f"数据同步服务已启动在后台: http://{self.host}:{self.port}", 'success')
+            share_url = f"http://{self.host}:{self.port}#token={self.auth_token}"
+            self._log(f"数据同步服务已启动在后台: {share_url}", 'success')
             self._log("可用接口:", 'info')
             self._log("  GET /health      - 健康检查", 'info')
             self._log("  GET /manifest    - 获取文件清单", 'info')

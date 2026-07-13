@@ -1,4 +1,3 @@
-from utils.logger import app_logger
 #!/usr/bin/env python3
 """
 SillyTavern Data Sync Client
@@ -6,16 +5,15 @@ Python client for synchronizing SillyTavern user data from remote server
 """
 
 import os
-import json
 import requests
 import zipfile
-import io
 import shutil
-import time
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import datetime
 import tempfile
 import argparse
+from urllib.parse import parse_qs, urlsplit, urlunsplit
+
+from utils.logger import app_logger
 
 
 class SyncClient:
@@ -28,10 +26,20 @@ class SyncClient:
             data_path (str): Local SillyTavern data directory
             timeout (int): Request timeout in seconds
         """
-        self.server_url = server_url.rstrip('/')
+        parsed_url = urlsplit(server_url.strip())
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.hostname:
+            raise ValueError("同步服务器地址必须是有效的 HTTP(S) URL")
+
+        fragment = parse_qs(parsed_url.fragment)
+        self.auth_token = fragment.get("token", [""])[0]
+        self.server_url = urlunsplit(
+            (parsed_url.scheme, parsed_url.netloc, parsed_url.path.rstrip('/'), '', '')
+        )
         self.data_path = data_path or self._find_data_path()
         self.timeout = timeout
         self.session = requests.Session()
+        if self.auth_token:
+            self.session.headers["Authorization"] = f"Bearer {self.auth_token}"
         self._is_closed = False
 
         # 配置连接池
@@ -46,7 +54,7 @@ class SyncClient:
         # Ensure data directory exists
         os.makedirs(self.data_path, exist_ok=True)
 
-        print(f"数据同步客户端已初始化")
+        print("数据同步客户端已初始化")
         print(f"服务器地址: {self.server_url}")
         print(f"本地数据路径: {self.data_path}")
 
@@ -89,8 +97,7 @@ class SyncClient:
         try:
             self.close()
         except Exception:
-            pass
-
+            app_logger.debug("已忽略非关键异常", exc_info=True)
     def _request(self, endpoint, method='GET', params=None, stream=False):
         """Make HTTP request to server"""
         url = f"{self.server_url}/{endpoint}"
@@ -102,18 +109,17 @@ class SyncClient:
             )
             response.raise_for_status()
             return response
-        except requests.exceptions.Timeout:
-            raise Exception(f"请求超时 {endpoint}: 超过 {self.timeout} 秒")
+        except requests.exceptions.Timeout as e:
+            raise Exception(f"请求超时 {endpoint}: 超过 {self.timeout} 秒") from e
         except requests.exceptions.RequestException as e:
-            raise Exception(f"请求失败 {endpoint}: {str(e)}")
+            raise Exception(f"请求失败 {endpoint}: {str(e)}") from e
 
     def check_server_health(self):
         """Check if server is healthy and accessible"""
         try:
             response = self._request('health')
-            data = response.json()
-            print(f"服务器状态: 健康")
-            print(f"服务器数据路径: {data.get('data_path', 'N/A')}")
+            _ = response.json()
+            print("服务器状态: 健康")
             return True
         except Exception as e:
             app_logger.error(f"服务器健康检查失败: {e}")
@@ -323,7 +329,7 @@ class SyncClient:
         # Get server info
         server_info = self.get_server_info()
         if server_info:
-            print(f"服务器信息:")
+            print("服务器信息:")
             print(f"  文件数量: {server_info.get('server_info', {}).get('file_count', 0)}")
             print(f"  总大小: {self._format_size(server_info.get('server_info', {}).get('total_size', 0))}")
 

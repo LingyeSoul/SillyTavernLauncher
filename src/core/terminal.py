@@ -157,7 +157,7 @@ class AsyncTerminal:
                     if not self._log_queue.empty():
                         self._process_batch()
                     time.sleep(0.02)
-                except Exception as e:
+                except Exception:
                     app_logger.exception("日志处理循环错误")
 
         # 在单独的线程中运行日志处理循环（保持为 daemon，避免阻塞程序退出）
@@ -244,9 +244,8 @@ class AsyncTerminal:
             except (AssertionError, RuntimeError, AttributeError) as e:
                 # 控件树问题或控件已从页面移除，忽略但记录
                 if self._debug_mode:
-                    import traceback
                     print(f"[DEBUG] UI更新失败（预期错误）: {str(e)}")
-            except Exception as e:
+            except Exception:
                 # 捕获所有其他异常（这些可能导致灰屏）
                 app_logger.exception("UI更新时发生未预期错误（可能导致灰屏）")
                 # 尝试恢复：确保至少有一个控件
@@ -261,11 +260,10 @@ class AsyncTerminal:
                                     if page is not None:
                                         self.logs.update()
                                 except Exception:
-                                    pass
+                                    app_logger.debug("已忽略非关键异常", exc_info=True)
                 except Exception:
-                    pass
-
-        except Exception as e:
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
+        except Exception:
             app_logger.exception("批量处理失败")
         finally:
             self._processing = False
@@ -295,12 +293,11 @@ class AsyncTerminal:
                     try:
                         self._log_queue.put_nowait(entry)
                     except Exception:
-                        pass
-
+                        app_logger.debug("已忽略非关键异常", exc_info=True)
                 if discard_count > 0:
                     print(f"[INFO] 页面不可用，丢弃了 {discard_count} 条日志")
             except Exception:
-                pass
+                app_logger.debug("已忽略非关键异常", exc_info=True)
             return
 
         try:
@@ -313,7 +310,7 @@ class AsyncTerminal:
                 # 在异步任务中处理批量更新
                 try:
                     self._process_batch()
-                except Exception as e:
+                except Exception:
                     # 捕获并记录所有异常，避免导致灰屏
                     app_logger.exception("批量处理失败（同步阶段）")
 
@@ -346,8 +343,7 @@ class AsyncTerminal:
                             try:
                                 self._log_queue.put_nowait(entry)
                             except Exception:
-                                pass
-
+                                app_logger.debug("已忽略非关键异常", exc_info=True)
                         if discard_count > 0:
                             app_logger.info(f"事件循环已关闭，丢弃了 {discard_count} 条日志")
                     return
@@ -358,7 +354,7 @@ class AsyncTerminal:
                 except Exception as sync_error:
                     app_logger.error(f"同步处理也失败: {sync_error}")
                 return
-            except Exception as e:
+            except Exception:
                 # 记录其他异常并尝试同步处理
                 app_logger.exception("调度批量处理时发生未预期错误")
                 try:
@@ -368,11 +364,11 @@ class AsyncTerminal:
                 return
 
             return
-        except (RuntimeError, AttributeError) as e:
+        except (RuntimeError, AttributeError):
             # 控件已从页面移除或 page 属性访问失败
             app_logger.exception("访问页面属性失败")
             return
-        except Exception as e:
+        except Exception:
             # 捕获所有其他异常
             app_logger.exception("_schedule_batch_process 发生未预期错误")
 
@@ -472,8 +468,7 @@ class AsyncTerminal:
                     if timer.is_alive():
                         timer.cancel()
                 except Exception:
-                    pass
-
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
             self._active_timers.clear()
 
         return count
@@ -532,8 +527,7 @@ class AsyncTerminal:
                     elif hasattr(process, 'send_signal'):
                         process.send_signal(signal.SIGKILL)
                 except Exception:
-                    pass
-
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
             except Exception as ex:
                 error_msg = str(ex).strip()
                 if error_msg:
@@ -602,7 +596,6 @@ class AsyncTerminal:
                         task.cancel()
                 self._output_tasks = []
 
-        import signal
 
         # 阶段 1 & 2: 优雅终止 + 强制终止
         for proc_info in processes_to_stop:  # ========== 修改：使用副本 ==========
@@ -631,8 +624,7 @@ class AsyncTerminal:
                     elif hasattr(process, 'send_signal'):
                         process.send_signal(signal.SIGTERM)
                 except Exception:
-                    pass
-
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
                 # 等待优雅退出（最多2秒）
                 for _ in range(20):
                     await asyncio.sleep(0.1)
@@ -656,8 +648,7 @@ class AsyncTerminal:
                         elif hasattr(process, 'send_signal'):
                             process.send_signal(signal.SIGKILL)
                     except Exception:
-                        pass
-
+                        app_logger.debug("已忽略非关键异常", exc_info=True)
                     # 等待强制终止生效（最多1秒）
                     for _ in range(10):
                         await asyncio.sleep(0.1)
@@ -762,7 +753,6 @@ class AsyncTerminal:
         """
         import asyncio
         import subprocess
-        import os
         import shlex
 
         process = None
@@ -783,24 +773,24 @@ class AsyncTerminal:
 
             # 验证可执行文件
             use_shell = False
-            if not os.path.isfile(executable):
+            if not await asyncio.to_thread(os.path.isfile, executable):
                 # 在 Windows 上，如果路径没有扩展名，尝试添加常见扩展名
                 if '.' not in os.path.basename(executable):
                     extensions = ['.exe', '.cmd', '.bat', '.ps1']
                     for ext in extensions:
-                        if os.path.isfile(executable + ext):
+                        if await asyncio.to_thread(os.path.isfile, executable + ext):
                             executable = executable + ext
                             if self._debug_mode:
                                 self.add_log(f"[DEBUG] 自动添加扩展名: {ext}")
                             break
-                if not os.path.isfile(executable):
+                if not await asyncio.to_thread(os.path.isfile, executable):
                     raise FileNotFoundError(f"找不到可执行文件: {executable}")
 
             # 检测是否为批处理文件，直接使用 shell 方式
             if executable.lower().endswith(('.cmd', '.bat')):
                 use_shell = True
                 if self._debug_mode:
-                    self.add_log(f"[DEBUG] 检测到批处理文件，使用 shell 方式")
+                    self.add_log("[DEBUG] 检测到批处理文件，使用 shell 方式")
 
             # 创建进程
             if not use_shell:
@@ -854,8 +844,7 @@ class AsyncTerminal:
                         if process.returncode is None:
                             process.kill()
                 except Exception:
-                    pass
-
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
             return None
 
     async def _consume_oversized_chunk(self, reader, consumed_bytes, is_first_chunk):
@@ -981,7 +970,7 @@ class AsyncTerminal:
         except asyncio.CancelledError:
             # 任务被取消，正常退出
             if self._debug_mode:
-                self.add_log(f"[DEBUG] 输出读取任务被取消")
+                self.add_log("[DEBUG] 输出读取任务被取消")
 
         except Exception as ex:
             # 记录错误但不中断
@@ -999,8 +988,7 @@ class AsyncTerminal:
                 if stream and not stream.is_closing():
                     stream.close()
             except Exception:
-                pass
-
+                app_logger.debug("已忽略非关键异常", exc_info=True)
     def create_output_tasks(self, process):
         """
         创建并注册输出处理任务（由 terminal 完全管理）
@@ -1159,7 +1147,7 @@ class AsyncTerminal:
                                     if process.stderr:
                                         process.stderr.close()
                                 except Exception:
-                                    pass
+                                    app_logger.debug("已忽略非关键异常", exc_info=True)
                                 stats['processes_cleaned'] += 1
                             else:
                                 # 进程仍在运行
@@ -1173,7 +1161,7 @@ class AsyncTerminal:
                                             process.kill()
                                         stats['processes_cleaned'] += 1
                                     except Exception:
-                                        pass
+                                        app_logger.debug("已忽略非关键异常", exc_info=True)
                                 else:
                                     # 保留活动进程
                                     active_processes.append(proc_info)
@@ -1219,8 +1207,7 @@ class AsyncTerminal:
                             break
                     stats['queues_cleared'] = queue_size
             except Exception:
-                pass
-
+                app_logger.debug("已忽略非关键异常", exc_info=True)
         # 5. 强制垃圾回收
         try:
             before_memory = self.get_memory_usage()
@@ -1228,8 +1215,7 @@ class AsyncTerminal:
             after_memory = self.get_memory_usage()
             stats['memory_freed'] = before_memory - after_memory
         except Exception:
-            pass
-
+            app_logger.debug("已忽略非关键异常", exc_info=True)
         # 6. 清理 UI 控件（激进模式）
         stats['ui_controls_cleaned'] = 0
         if aggressive:
@@ -1240,8 +1226,7 @@ class AsyncTerminal:
                 # 计算实际清理数量（使用 max 避免负数）
                 stats['ui_controls_cleaned'] = max(0, before_count - after_count)
             except Exception:
-                pass
-
+                app_logger.debug("已忽略非关键异常", exc_info=True)
         # 7. 启动周期性清理定时器（如果尚未启动）
         if not hasattr(self, '_cleanup_timer_started'):
             self._start_periodic_cleanup()
@@ -1328,9 +1313,9 @@ class AsyncTerminal:
             if hasattr(self, '_log_thread') and self._log_thread:
                 if self._log_thread.is_alive():
                     self._stop_event.set()
-        except Exception:
-            # 析构函数中不应该抛出异常
-            pass
+        except Exception as e:
+            # 解释器关闭阶段日志模块可能已卸载，只能使用后备输出。
+            print(f"AsyncTerminal 析构清理失败: {e}")
 
 
     def get_resource_stats(self):
@@ -1379,7 +1364,7 @@ class AsyncTerminal:
             # 使用 print 而非 add_log，避免在清理时添加新的 UI 控件
             if self._debug_mode:
                 print("[DEBUG] UI 控件已清理")
-        except Exception as e:
+        except Exception:
             app_logger.exception("清理 UI 控件时出错")
 
     def clear_terminal(self):
@@ -1450,7 +1435,7 @@ class AsyncTerminal:
                     duration=3000,
                 )
                 self.view.page.show_dialog(snack_bar)
-        except Exception as ex:
+        except Exception:
             # 如果 SnackBar 显示失败，fallback 到普通日志
             self.add_log(f"✓ 终端已清空（界面: {control_count}, 队列: {cleared_count}）")
 
@@ -1503,8 +1488,7 @@ class AsyncTerminal:
                     try:
                         self._log_queue.put_nowait(entry)
                     except Exception:
-                        pass
-
+                        app_logger.debug("已忽略非关键异常", exc_info=True)
                 queue_size = len(preserved_entries)
                 if discard_count > 0 and self._debug_mode:
                     # 使用 print 避免递归调用 add_log
@@ -1524,8 +1508,7 @@ class AsyncTerminal:
                     with self._log_queue_not_empty:
                         self._log_queue_not_empty.notify()
                 except Exception:
-                    pass
-
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
             # ========== 每100条日志触发一次清理 ==========
             if not hasattr(self, '_log_count'):
                 self._log_count = 0
@@ -1538,8 +1521,7 @@ class AsyncTerminal:
                     cleanup_timer = self._create_timer(0.1, lambda: self.cleanup_all_resources(aggressive=False))
                     cleanup_timer.start()
                 except Exception:
-                    pass
-
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
             # 立即安排处理少量日志
             current_time = time.time()
 
@@ -1560,8 +1542,8 @@ class AsyncTerminal:
                     # 页面无效，不处理
                     pass
 
-        except (TypeError, IndexError, AttributeError) as e:
+        except (TypeError, IndexError, AttributeError):
             app_logger.exception("日志处理异常")
-        except Exception as e:
+        except Exception:
             app_logger.exception("日志处理未知错误")
 

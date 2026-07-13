@@ -1,6 +1,5 @@
 import flet as ft
 from flet import UrlLauncher
-from time import sleep
 from ui.main_ui import UniUI
 from config.config_manager import ConfigManager
 from features.update.checker import VersionChecker

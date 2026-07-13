@@ -4,6 +4,7 @@ from io import BytesIO
 import base64
 import re
 from core.event import UiEvent
+from utils.logger import app_logger
 class Tray:
     def _base64_to_image(self,base64_str: str) -> Image.Image:
         base64_data = re.sub('^data:image/.+;base64,', '', base64_str)
@@ -45,8 +46,8 @@ class Tray:
         # 步骤 1: 停止托盘图标
         try:
             self.tray.stop()
-        except Exception as e:
-            pass  # 托盘可能已经停止
+        except Exception:
+            app_logger.debug("托盘图标已停止或无法停止", exc_info=True)
 
         # 步骤 2: 调用 ui_event 处理窗口隐藏、进程停止和异步销毁
         if self.ui_event:

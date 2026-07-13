@@ -160,7 +160,7 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
             try:
                 page.pop_dialog()
             except Exception:
-                pass
+                app_logger.debug("已忽略非关键异常", exc_info=True)
         current_dialog = dialog
         page.show_dialog(dialog)
 
@@ -169,8 +169,7 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
         try:
             page.pop_dialog()
         except Exception:
-            pass
-
+            app_logger.debug("已忽略非关键异常", exc_info=True)
     async def close_dialog_async():
         """异步关闭当前对话框"""
         close_dialog()
@@ -367,21 +366,6 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
             show_dialog(progress_dialog)
 
             # 在后台线程中执行安装
-            def install():
-                async def update_progress_async(status: str, progress: float):
-                    if cancel_flag["cancelled"]:
-                        return False
-                    status_text.value = status
-                    progress_bar.value = progress
-                    page.update()
-                    return True
-
-                def update_progress(status: str, progress: float):
-                    if cancel_flag["cancelled"]:
-                        return False
-                    # 使用 run_task 在主线程更新 UI
-                    page.run_task(update_progress_async, status, progress)
-                    return True
             def install():
                 def update_progress(status: str, progress: float):
                     if cancel_flag["cancelled"]:
@@ -584,9 +568,6 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
                 page.run_task(show_result_async)
             
             threading.Thread(target=install, daemon=True).start()
-
-        def on_cancel(e):
-            close_dialog()
 
         # 文件选择行
         file_pick_row = ft.Row(

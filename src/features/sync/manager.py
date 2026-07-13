@@ -1,4 +1,3 @@
-from utils.logger import app_logger
 #!/usr/bin/env python3
 """
 SillyTavern Data Sync Manager
@@ -6,13 +5,12 @@ Unified sync management for PC Launcher
 """
 
 import os
-import json
-import time
-import socket
+import secrets
 import threading
 from datetime import datetime
-from pathlib import Path
 from typing import Optional, List, Dict, Tuple
+
+from utils.logger import app_logger
 
 try:
     from features.sync.server import SyncServer
@@ -112,6 +110,7 @@ class DataSyncManager:
             default_lan_ip = self.network_manager.get_local_ip() if self.network_manager else None
             default_lan_ip = default_lan_ip or "192.168.1.100"
             self.server_host = self.config_manager.get("sync.host", default_lan_ip)
+            self.auth_token = self.config_manager.get("sync.token") or secrets.token_urlsafe(24)
         else:
             self.server_enabled = False
             self.server_port = 9999
@@ -119,6 +118,7 @@ class DataSyncManager:
             fallback_lan_ip = self.network_manager.get_local_ip() if self.network_manager else None
             fallback_lan_ip = fallback_lan_ip or "192.168.1.100"
             self.server_host = fallback_lan_ip
+            self.auth_token = secrets.token_urlsafe(24)
 
     def _save_config(self):
         """Save sync configuration"""
@@ -126,13 +126,14 @@ class DataSyncManager:
             self.config_manager.set("sync.enabled", self.server_enabled)
             self.config_manager.set("sync.port", self.server_port)
             self.config_manager.set("sync.host", self.server_host)
+            self.config_manager.set("sync.token", self.auth_token)
             self.config_manager.save_config()
 
     def get_server_url(self) -> str:
         """Get current server URL"""
         if self.server_enabled:
             local_ip = self.network_manager.get_local_ip() if self.network_manager else "localhost"
-            return f"http://{local_ip}:{self.server_port}"
+            return f"http://{local_ip}:{self.server_port}#token={self.auth_token}"
         return ""
 
     def detect_network_servers(self, timeout: int = 5, port: int = None) -> List[Tuple[str, Dict]]:
@@ -214,9 +215,9 @@ class DataSyncManager:
             if servers:
                 self._log(f"发现 {len(servers)} 个 SillyTavern 同步服务器:", 'success')
                 for i, (server_url, data) in enumerate(servers, 1):
-                    data_path = data.get('data_path', 'N/A')
                     timestamp = data.get('timestamp', 'N/A')
-                    self._log(f"  {i}. {server_url} - 数据路径: {data_path} - 时间: {timestamp}", 'info')
+                    auth_status = "需要访问令牌" if data.get('auth_required') else "无认证"
+                    self._log(f"  {i}. {server_url} - {auth_status} - 时间: {timestamp}", 'info')
             else:
                 self._log("未发现 SillyTavern 同步服务器", 'warning')
                 self._log("请确保:", 'warning')
@@ -257,7 +258,8 @@ class DataSyncManager:
             self.sync_server = SyncServer(
                 data_path=self.data_dir,
                 port=self.server_port,
-                host=self.server_host
+                host=self.server_host,
+                auth_token=self.auth_token,
             )
 
             # Set log callback to pass through messages to UI
@@ -285,9 +287,8 @@ class DataSyncManager:
             # Save configuration
             self._save_config()
 
-            local_ip = self.network_manager.get_local_ip() if self.network_manager else "localhost"
-            self._log(f"数据同步服务已启动!", 'success')
-            self._log(f"服务器地址: http://{local_ip}:{self.server_port}", 'info')
+            self._log("数据同步服务已启动!", 'success')
+            self._log(f"服务器地址: {self.get_server_url()}", 'info')
             self._log(f"本地地址: http://localhost:{self.server_port}", 'info')
             self._log(f"数据路径: {self.data_dir}", 'info')
 
@@ -369,7 +370,7 @@ class DataSyncManager:
             server_info = client.get_server_info()
             if server_info:
                 info = server_info.get('server_info', {})
-                print(f"服务器信息:")
+                print("服务器信息:")
                 print(f"  文件数量: {info.get('file_count', 0)}")
                 print(f"  总大小: {client._format_size(info.get('total_size', 0))}")
 
@@ -421,13 +422,16 @@ class DataSyncManager:
         if info['exists']:
             total_size = 0
             file_count = 0
-            for root, dirs, files in os.walk(self.data_dir):
+            for root, _dirs, files in os.walk(self.data_dir):
                 for file in files:
                     file_path = os.path.join(root, file)
                     try:
                         total_size += os.path.getsize(file_path)
                         file_count += 1
                     except Exception:
+                        app_logger.debug(
+                            f"无法统计文件大小: {file_path}", exc_info=True
+                        )
                         continue
 
             info['size'] = total_size
@@ -463,4 +467,3 @@ class DataSyncManager:
 
         return f"{size_bytes:.1f}{size_names[i]}"
 
-    

@@ -1,5 +1,6 @@
 import os
 import re
+import shlex
 import subprocess
 from features.system.env import Env
 from config.config_manager import ConfigManager
@@ -42,14 +43,16 @@ def _format_git_cmd(git_cmd, needs_quotes, args):
         args: 命令参数
 
     Returns:
-        str: 格式化后的完整命令
+        list[str]: 可直接传给 subprocess 的参数列表
     """
-    if needs_quotes:
-        # 内置环境：路径可能包含空格，需要引号
-        return f'"{git_cmd}" {args}'
-    else:
-        # 系统环境：直接使用git命令
-        return f"{git_cmd} {args}"
+    del needs_quotes  # 参数保留用于兼容现有调用方
+    return [git_cmd, *shlex.split(args, posix=True)]
+
+
+def run_git_command(args, cwd, **kwargs):
+    """Run Git without invoking a command shell."""
+    git_cmd, _ = _get_git_command()
+    return subprocess.run([git_cmd, *args], cwd=cwd, shell=False, **kwargs)
 
 
 def checkout_st_version(commit_hash, st_dir=None):
@@ -85,7 +88,6 @@ def checkout_st_version(commit_hash, st_dir=None):
         # 步骤1：检查当前分支状态
         check_branch = subprocess.run(
             _format_git_cmd(git_cmd, needs_quotes, "rev-parse --abbrev-ref HEAD"),
-            shell=True,
             capture_output=True,
             text=True,
             cwd=st_dir,
@@ -103,7 +105,6 @@ def checkout_st_version(commit_hash, st_dir=None):
             # 尝试切换到release分支
             checkout_release = subprocess.run(
                 _format_git_cmd(git_cmd, needs_quotes, "checkout release"),
-                shell=True,
                 capture_output=True,
                 text=True,
                 cwd=st_dir,
@@ -117,7 +118,6 @@ def checkout_st_version(commit_hash, st_dir=None):
                     _format_git_cmd(
                         git_cmd, needs_quotes, "checkout -b release origin/release"
                     ),
-                    shell=True,
                     capture_output=True,
                     text=True,
                     cwd=st_dir,
@@ -136,7 +136,6 @@ def checkout_st_version(commit_hash, st_dir=None):
 
             checkout_release = subprocess.run(
                 _format_git_cmd(git_cmd, needs_quotes, "checkout release"),
-                shell=True,
                 capture_output=True,
                 text=True,
                 cwd=st_dir,
@@ -152,7 +151,6 @@ def checkout_st_version(commit_hash, st_dir=None):
         # 步骤4：检查工作区状态
         status_result = subprocess.run(
             _format_git_cmd(git_cmd, needs_quotes, "status --porcelain"),
-            shell=True,
             capture_output=True,
             text=True,
             cwd=st_dir,
@@ -179,7 +177,6 @@ def checkout_st_version(commit_hash, st_dir=None):
                 )
                 stash_result = subprocess.run(
                     stash_cmd,
-                    shell=True,
                     capture_output=True,
                     text=True,
                     cwd=st_dir,
@@ -198,7 +195,6 @@ def checkout_st_version(commit_hash, st_dir=None):
                     _format_git_cmd(
                         git_cmd, needs_quotes, "checkout -- package-lock.json"
                     ),
-                    shell=True,
                     capture_output=True,
                     text=True,
                     cwd=st_dir,
@@ -211,7 +207,6 @@ def checkout_st_version(commit_hash, st_dir=None):
 
         fetch_result = subprocess.run(
             fetch_cmd,
-            shell=True,
             capture_output=True,
             text=True,
             cwd=st_dir,
@@ -231,7 +226,6 @@ def checkout_st_version(commit_hash, st_dir=None):
         )
         verify_result = subprocess.run(
             verify_cmd,
-            shell=True,
             capture_output=True,
             text=True,
             cwd=st_dir,
@@ -254,7 +248,6 @@ def checkout_st_version(commit_hash, st_dir=None):
 
         reset_result = subprocess.run(
             reset_cmd,
-            shell=True,
             capture_output=True,
             text=True,
             cwd=st_dir,
@@ -265,7 +258,6 @@ def checkout_st_version(commit_hash, st_dir=None):
             # 验证当前状态
             verify_branch = subprocess.run(
                 _format_git_cmd(git_cmd, needs_quotes, "rev-parse --abbrev-ref HEAD"),
-                shell=True,
                 capture_output=True,
                 text=True,
                 cwd=st_dir,
@@ -311,7 +303,6 @@ def check_git_status(st_dir=None):
         # 检查是否有未提交的更改
         result = subprocess.run(
             _format_git_cmd(git_cmd, needs_quotes, "status --porcelain"),
-            shell=True,
             capture_output=True,
             text=True,
             cwd=st_dir,
@@ -338,15 +329,13 @@ def check_git_status(st_dir=None):
                         _format_git_cmd(
                             git_cmd, needs_quotes, "checkout -- package-lock.json"
                         ),
-                        shell=True,
                         cwd=st_dir,
                         capture_output=True,
                         creationflags=subprocess.CREATE_NO_WINDOW,
                     )
                     return True, "工作区干净（已自动恢复package-lock.json）"
                 except Exception:
-                    pass
-
+                    app_logger.debug("已忽略非关键异常", exc_info=True)
             # 如果还有其他文件被修改，返回错误
             modified_count = len(non_package_lock_changes)
             if modified_count > 0:
@@ -376,7 +365,6 @@ def get_current_commit(st_dir=None):
 
         result = subprocess.run(
             _format_git_cmd(git_cmd, needs_quotes, "rev-parse HEAD"),
-            shell=True,
             capture_output=True,
             text=True,
             cwd=st_dir,
@@ -425,7 +413,7 @@ def switch_git_remote(mirror_type="github", st_dir=None):
         )
 
         result = subprocess.run(
-            command, shell=True, capture_output=True, text=True, cwd=st_dir
+            command, capture_output=True, text=True, cwd=st_dir
         )
 
         if result.returncode == 0:
@@ -505,7 +493,6 @@ def cleanup_git_state(st_dir=None):
             print("检测到未完成的合并操作，执行 merge --abort...")
             merge_abort_result = subprocess.run(
                 _format_git_cmd(git_cmd, needs_quotes, "merge --abort"),
-                shell=True,
                 capture_output=True,
                 text=True,
                 cwd=st_dir,
@@ -524,10 +511,9 @@ def cleanup_git_state(st_dir=None):
             rebase_dir = rebase_apply
         
         if rebase_dir:
-            print(f"检测到未完成的rebase操作，执行 rebase --abort...")
+            print("检测到未完成的rebase操作，执行 rebase --abort...")
             rebase_abort_result = subprocess.run(
                 _format_git_cmd(git_cmd, needs_quotes, "rebase --abort"),
-                shell=True,
                 capture_output=True,
                 text=True,
                 cwd=st_dir,
@@ -543,7 +529,6 @@ def cleanup_git_state(st_dir=None):
             print("检测到未完成的cherry-pick操作，执行 cherry-pick --abort...")
             cherry_abort_result = subprocess.run(
                 _format_git_cmd(git_cmd, needs_quotes, "cherry-pick --abort"),
-                shell=True,
                 capture_output=True,
                 text=True,
                 cwd=st_dir,
@@ -559,7 +544,6 @@ def cleanup_git_state(st_dir=None):
             print("检测到未完成的revert操作，执行 revert --abort...")
             revert_abort_result = subprocess.run(
                 _format_git_cmd(git_cmd, needs_quotes, "revert --abort"),
-                shell=True,
                 capture_output=True,
                 text=True,
                 cwd=st_dir,
@@ -574,7 +558,6 @@ def cleanup_git_state(st_dir=None):
         print("清理工作区索引...")
         reset_result = subprocess.run(
             _format_git_cmd(git_cmd, needs_quotes, "reset --hard HEAD"),
-            shell=True,
             capture_output=True,
             text=True,
             cwd=st_dir,
@@ -590,7 +573,6 @@ def cleanup_git_state(st_dir=None):
         print("检查并清理未提交的更改...")
         status_result = subprocess.run(
             _format_git_cmd(git_cmd, needs_quotes, "status --porcelain"),
-            shell=True,
             capture_output=True,
             text=True,
             cwd=st_dir,
@@ -610,7 +592,6 @@ def cleanup_git_state(st_dir=None):
                 print(f"⚠ 检测到{len(non_package_lock_changes)}个未提交的更改，使用reset --hard清理")
                 reset_clean_result = subprocess.run(
                     _format_git_cmd(git_cmd, needs_quotes, "reset --hard HEAD"),
-                    shell=True,
                     capture_output=True,
                     text=True,
                     cwd=st_dir,
@@ -622,7 +603,6 @@ def cleanup_git_state(st_dir=None):
                 # 只有package-lock.json被修改，恢复它
                 subprocess.run(
                     _format_git_cmd(git_cmd, needs_quotes, "checkout -- package-lock.json"),
-                    shell=True,
                     capture_output=True,
                     text=True,
                     cwd=st_dir,
@@ -689,7 +669,6 @@ def get_st_tags(st_dir=None):
         # 步骤1: 获取本地tag列表
         list_tags_result = subprocess.run(
             _format_git_cmd(git_cmd, needs_quotes, "tag -l"),
-            shell=True,
             capture_output=True,
             text=True,
             cwd=st_dir,
@@ -743,7 +722,6 @@ def get_st_tags(st_dir=None):
             # 注意: Windows CMD 不支持单引号，需要使用双引号或转义
             show_result = subprocess.run(
                 _format_git_cmd(git_cmd, needs_quotes, f'show {tag_name} --format="%H|%aI" -s'),
-                shell=True,
                 capture_output=True,
                 text=True,
                 cwd=st_dir,
@@ -827,7 +805,6 @@ def checkout_st_tag(tag_name, st_dir=None):
         # 步骤1: 检查tag是否存在于本地
         verify_result = subprocess.run(
             _format_git_cmd(git_cmd, needs_quotes, f"rev-parse {tag_name}"),
-            shell=True,
             capture_output=True,
             text=True,
             cwd=st_dir,
@@ -844,7 +821,6 @@ def checkout_st_tag(tag_name, st_dir=None):
         # 步骤2: 检查工作区状态
         status_result = subprocess.run(
             _format_git_cmd(git_cmd, needs_quotes, "status --porcelain"),
-            shell=True,
             capture_output=True,
             text=True,
             cwd=st_dir,
@@ -869,7 +845,6 @@ def checkout_st_tag(tag_name, st_dir=None):
                 )
                 stash_result = subprocess.run(
                     stash_cmd,
-                    shell=True,
                     capture_output=True,
                     text=True,
                     cwd=st_dir,
@@ -888,7 +863,6 @@ def checkout_st_tag(tag_name, st_dir=None):
                     _format_git_cmd(
                         git_cmd, needs_quotes, "checkout -- package-lock.json"
                     ),
-                    shell=True,
                     capture_output=True,
                     text=True,
                     cwd=st_dir,
@@ -901,7 +875,6 @@ def checkout_st_tag(tag_name, st_dir=None):
 
         checkout_result = subprocess.run(
             checkout_cmd,
-            shell=True,
             capture_output=True,
             text=True,
             cwd=st_dir,

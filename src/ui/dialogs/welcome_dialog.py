@@ -4,7 +4,7 @@
 提供首次启动时的欢迎对话框，包含启动器功能说明和知识问答功能。
 """
 
-import random
+import secrets
 import flet as ft
 from flet import UrlLauncher
 from config.config_manager import ConfigManager
@@ -254,7 +254,7 @@ class WelcomeDialog:
             self.page.run_task(_open_url)
 
         # 随机抽取5题并按ID排序
-        self.selected_questions = random.sample(self.QUESTION_BANK, 5)
+        self.selected_questions = secrets.SystemRandom().sample(self.QUESTION_BANK, 5)
         self.selected_questions.sort(key=lambda x: x['id'])
 
         # 构建题目列表

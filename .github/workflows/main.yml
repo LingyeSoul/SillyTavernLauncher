@@ -71,7 +71,7 @@ jobs:
           pip install git+https://github.com/LingyeSoul/flet_cli.git@main
 
           # Install flet-desktop
-          pip install flet-desktop
+          pip install flet-desktop==0.82.2
 
           # Install Nuitka and dependencies
           pip install -U Nuitka==2.8.10 pefile pyinstaller
