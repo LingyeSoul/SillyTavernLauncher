@@ -2,10 +2,8 @@ from utils.logger import app_logger
 from config.config_manager import ConfigManager
 import flet as ft
 from flet import UrlLauncher
-import asyncio
 import aiohttp
 from version import VERSION
-import threading
 import re
 
 class VersionChecker:
@@ -509,20 +507,8 @@ class VersionChecker:
             self._showMsg("当前已是最新版本")
     
     def run_check_sync(self):
-        """
-        同步版本的运行检查更新功能，用于在线程中调用异步方法
-        """
-        def run_loop():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(self.run_check())
-            finally:
-                loop.close()
-        
-        thread = threading.Thread(target=run_loop)
-        thread.daemon = True
-        thread.start()
+        """兼容旧调用方，将检查任务提交到 Flet 页面事件循环。"""
+        return self.page.run_task(self.run_check)
 
     def get_github_mirror(self):
         """

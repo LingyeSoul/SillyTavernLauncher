@@ -1,4 +1,3 @@
-import threading
 import os
 import shutil
 import shlex
@@ -54,18 +53,20 @@ class UiEvent:
         self.tray = None  # 添加tray引用
 
     def run_async_task(self, coroutine):
-        """运行异步任务"""
-
-        def run_in_thread():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        """在 Flet 页面事件循环中运行异步任务。"""
+        async def run_on_page_loop():
             try:
-                loop.run_until_complete(coroutine)
-            finally:
-                loop.close()
+                await coroutine
+            except Exception:
+                app_logger.exception("页面异步任务执行失败")
 
-        thread = threading.Thread(target=run_in_thread, daemon=True)
-        thread.start()
+        try:
+            return self.page.run_task(run_on_page_loop)
+        except Exception:
+            if asyncio.iscoroutine(coroutine):
+                coroutine.close()
+            app_logger.exception("提交页面异步任务失败")
+            return None
 
     def show_error_dialog(self, title, message):
         """
@@ -938,29 +939,11 @@ class UiEvent:
                         else:
                             command = base_command
 
-                        process = self.execute_command(command, "SillyTavern")
+                        process = await self.execute_command(command, "SillyTavern")
                         if process:
-
-                            def wait_for_exit():
-                                # 创建一个新的事件循环并运行直到完成
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                                try:
-                                    # 如果process是一个协程对象，我们需要运行它直到完成以获取进程对象
-                                    if asyncio.iscoroutine(process):
-                                        process_obj = loop.run_until_complete(process)
-                                    else:
-                                        process_obj = process
-
-                                    # 等待进程完成
-                                    loop.run_until_complete(process_obj.wait())
-                                finally:
-                                    loop.close()
-                                # 使用同步版本
-                                on_process_exit_sync()
-
-                            threading.Thread(target=wait_for_exit, daemon=True).start()
                             self.terminal.add_log("SillyTavern已重启")
+                            await process.wait()
+                            on_process_exit_sync()
                         else:
                             self.terminal.add_log("重启失败")
                     else:
@@ -2042,123 +2025,69 @@ class UiEvent:
             return
 
         self.terminal.add_log("正在检查更新...")
-        if git_path:
-
-            def on_git_fetch_complete(process):
-                if process.returncode == 0:
-                    self.terminal.add_log("正在检查release分支状态...")
-                    # 检查本地release分支与远程release分支的差异
-                    status_process = self.execute_command(
-                        f'"{git_path}git" status -uno'
-                    )
-
-                    if status_process:
-
-                        def on_status_complete(p):
-                            # 使用git diff检查本地和远程release分支的差异
-                            try:
-                                diff_process = run_git_command(
-                                    ["diff", "release..origin/release"],
-                                    "SillyTavern",
-                                    capture_output=True,
-                                    text=True,
-                                    creationflags=subprocess.CREATE_NO_WINDOW,
-                                    encoding="utf-8",
-                                    errors="ignore",  # 忽略编码错误
-                                )
-
-                                # 检查diff_process是否成功执行
-                                if (
-                                    diff_process.returncode == 0
-                                    and diff_process.stdout is not None
-                                ):
-                                    # 如果没有差异，则diff_process.stdout为空
-                                    if not diff_process.stdout.strip():
-                                        self.terminal.add_log(
-                                            "已是最新版本，正在启动SillyTavern..."
-                                        )
-                                        self.start_sillytavern(None)
-                                    else:
-                                        self.terminal.add_log(
-                                            "检测到新版本，正在更新..."
-                                        )
-                                        # 更新完成后启动SillyTavern
-                                        self.update_sillytavern_with_callback(None)
-                                else:
-                                    # 如果git diff命令执行失败，默认执行更新
-                                    self.terminal.add_log(
-                                        "检查更新状态时遇到问题，正在更新..."
-                                    )
-                                    self.update_sillytavern_with_callback(None)
-                            except Exception as ex:
-                                # 如果出现异常，默认执行更新以确保程序正常运行
-                                self.terminal.add_log(
-                                    f"检查更新时出错: {str(ex)}，正在更新..."
-                                )
-                                self.update_sillytavern_with_callback(None)
-
-                        def wait_for_status_process():
-                            # 等待异步进程完成
-                            process_obj = None
-                            if asyncio.iscoroutine(status_process):
-                                # 正确处理协程对象
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                                try:
-                                    process_obj = loop.run_until_complete(
-                                        status_process
-                                    )
-                                    loop.run_until_complete(process_obj.wait())
-                                finally:
-                                    loop.close()
-                                    asyncio.set_event_loop(None)
-                            else:
-                                process_obj = status_process
-                                process_obj.wait()
-                            on_status_complete(process_obj)
-
-                        threading.Thread(
-                            target=wait_for_status_process, daemon=True
-                        ).start()
-                    else:
-                        self.terminal.add_log(
-                            "无法执行状态检查命令，直接启动SillyTavern..."
-                        )
-                        self.start_sillytavern(None)
-                else:
-                    self.terminal.add_log("检查更新失败，直接启动SillyTavern...")
-                    self.start_sillytavern(None)
-
-            # 获取所有分支的更新，特别是release分支
-            fetch_process = self.execute_command(f'"{git_path}git" fetch --all')
-
-            if fetch_process:
-
-                def wait_for_fetch_process():
-                    # 等待异步进程完成
-                    process_obj = None
-                    if asyncio.iscoroutine(fetch_process):
-                        # 正确处理协程对象
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        try:
-                            process_obj = loop.run_until_complete(fetch_process)
-                            loop.run_until_complete(process_obj.wait())
-                        finally:
-                            loop.close()
-                            asyncio.set_event_loop(None)
-                    else:
-                        process_obj = fetch_process
-                        process_obj.wait()
-                    on_git_fetch_complete(process_obj)
-
-                threading.Thread(target=wait_for_fetch_process, daemon=True).start()
-            else:
-                self.terminal.add_log("执行更新检查命令失败，直接启动SillyTavern...")
-                self.start_sillytavern(None)
-        else:
+        if not git_path:
             self.terminal.add_log("未找到Git路径，直接启动SillyTavern...")
             self.start_sillytavern(None)
+            return
+
+        async def check_updates():
+            try:
+                fetch_process = await self.execute_command(
+                    f'"{git_path}git" fetch --all'
+                )
+                if not fetch_process:
+                    self.terminal.add_log(
+                        "执行更新检查命令失败，直接启动SillyTavern..."
+                    )
+                    self.start_sillytavern(None)
+                    return
+
+                await fetch_process.wait()
+                if fetch_process.returncode != 0:
+                    self.terminal.add_log("检查更新失败，直接启动SillyTavern...")
+                    self.start_sillytavern(None)
+                    return
+
+                self.terminal.add_log("正在检查release分支状态...")
+                status_process = await self.execute_command(
+                    f'"{git_path}git" status -uno'
+                )
+                if not status_process:
+                    self.terminal.add_log(
+                        "无法执行状态检查命令，直接启动SillyTavern..."
+                    )
+                    self.start_sillytavern(None)
+                    return
+                await status_process.wait()
+
+                diff_process = await asyncio.to_thread(
+                    run_git_command,
+                    ["diff", "release..origin/release"],
+                    "SillyTavern",
+                    capture_output=True,
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    encoding="utf-8",
+                    errors="ignore",
+                )
+                if (
+                    diff_process.returncode == 0
+                    and diff_process.stdout is not None
+                    and not diff_process.stdout.strip()
+                ):
+                    self.terminal.add_log("已是最新版本，正在启动SillyTavern...")
+                    self.start_sillytavern(None)
+                    return
+
+                self.terminal.add_log("检测到新版本，正在更新...")
+                self.update_sillytavern_with_callback(None)
+            except Exception as ex:
+                self.terminal.add_log(
+                    f"检查更新时出错: {str(ex)}，正在更新..."
+                )
+                self.update_sillytavern_with_callback(None)
+
+        self.page.run_task(check_updates)
 
     def start_cmd(self, e):
         """
@@ -2382,20 +2311,12 @@ class UiEvent:
             npm_cmd = f'"{node_path}npm" install --no-audit --no-fund --loglevel=error --no-progress --registry=https://registry.npmmirror.com'
             self.terminal.add_log("正在执行 npm install，这可能需要几分钟...")
 
-            # 执行npm install - 注意：execute_command是异步的，需要在事件循环中运行
-            async def run_install():
-                return await self.execute_command(npm_cmd, workdir=st_dir)
-
-            # 在新线程中运行异步任务
-            def wait_for_install():
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+            async def install_dependencies():
                 try:
-                    process = loop.run_until_complete(run_install())
+                    process = await self.execute_command(npm_cmd, workdir=st_dir)
                     if process:
-                        loop.run_until_complete(process.wait())
+                        await process.wait()
                         self.terminal.add_log("✓ npm依赖安装完成")
-                        # 使用对话框显示成功消息
                         self.page.show_dialog(ft.SnackBar(ft.Text("依赖安装完成")))
                     else:
                         self.terminal.add_log("错误: 无法执行npm install")
@@ -2403,10 +2324,8 @@ class UiEvent:
                 except Exception as e:
                     self.terminal.add_log(f"安装依赖时发生错误: {str(e)}")
                     self.show_error_dialog("安装失败", f"安装依赖时发生错误: {str(e)}")
-                finally:
-                    loop.close()
 
-            threading.Thread(target=wait_for_install, daemon=True).start()
+            self.page.run_task(install_dependencies)
 
         except Exception as ex:
             self.terminal.add_log(f"安装依赖时发生错误: {str(ex)}")

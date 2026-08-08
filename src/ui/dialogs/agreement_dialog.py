@@ -4,8 +4,8 @@
 提供首次启动时的使用协议对话框，确保用户同意免责声明和合规使用协议。
 """
 
-import time
-import threading
+import asyncio
+
 import flet as ft
 from config.config_manager import ConfigManager
 
@@ -69,52 +69,38 @@ class AgreementDialog:
         # 关闭对话框
         self.page.pop_dialog()
 
-    def _update_countdown(self):
-        """更新倒计时（每秒更新UI）"""
-        if self._countdown > 0:
-            self._countdown -= 1
-            self._countdown_text.value = f"⏳ 请仔细阅读协议内容（{self._countdown}秒后可同意）"
+    async def _run_countdown(self):
+        """在 Flet 事件循环中运行倒计时并更新控件。"""
+        while self._countdown > 0 and self._countdown_active:
+            await asyncio.sleep(1)
+            if not self._countdown_active or self.page is None:
+                break
 
-            # 倒计时结束，启用同意按钮
+            self._countdown -= 1
+            self._countdown_text.value = (
+                f"⏳ 请仔细阅读协议内容（{self._countdown}秒后可同意）"
+            )
             if self._countdown == 0:
                 self._agree_button.disabled = False
                 self._countdown_text.value = "✅ 您现在可以同意协议了"
                 self._countdown_text.color = ft.Colors.GREEN_600
                 self._countdown_text.weight = ft.FontWeight.BOLD
 
-            # 使用 page.run_task() 调度UI更新（参考 sync_ui.py）
-            if self.page:
-                try:
-                    async def update_ui():
-                        """异步更新UI"""
-                        try:
-                            self.page.update()
-                        except (AssertionError, RuntimeError) as e:
-                            if "Event loop is closed" in str(e):
-                                self._countdown_active = False
-                            raise
-
-                    self.page.run_task(update_ui)
-                except (AssertionError, RuntimeError):
-                    # 如果 run_task 失败，回退到同步更新
-                    try:
-                        self.page.update()
-                    except Exception:
-                        self._countdown_active = False
+            try:
+                self.page.update()
+            except (AssertionError, RuntimeError):
+                self._countdown_active = False
+                break
 
     def _start_countdown(self):
         """启动30秒倒计时"""
-        def countdown_worker():
-            while self._countdown > 0 and self._countdown_active:
-                time.sleep(1)
-                if self._countdown_active and self.page:
-                    # 调用UI更新，Flet会自动处理线程调度
-                    self._update_countdown()
-
         self._countdown_active = True
         self._countdown = 30 # 重置为30
-        countdown_thread = threading.Thread(target=countdown_worker, daemon=True)
-        countdown_thread.start()
+        if self.page:
+            try:
+                self._countdown_timer = self.page.run_task(self._run_countdown)
+            except (AssertionError, RuntimeError):
+                self._countdown_active = False
 
     def show(self):
         """显示协议对话框"""
