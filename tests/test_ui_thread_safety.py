@@ -1,4 +1,5 @@
 import asyncio
+import ast
 import inspect
 import queue
 import sys
@@ -39,6 +40,65 @@ class ClosedPage:
 
 
 class UiThreadSafetyTests(unittest.TestCase):
+    def test_auto_update_is_disabled_in_module_default_context(self):
+        main_source = (SRC_DIR / "main.py").read_text(encoding="utf-8")
+        module = ast.parse(main_source)
+
+        def is_disable_auto_update_call(node):
+            if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+                return False
+            function = node.value.func
+            return (
+                isinstance(function, ast.Attribute)
+                and function.attr == "disable_auto_update"
+                and isinstance(function.value, ast.Attribute)
+                and function.value.attr == "context"
+                and isinstance(function.value.value, ast.Name)
+                and function.value.value.id == "ft"
+            )
+
+        self.assertTrue(any(is_disable_auto_update_call(node) for node in module.body))
+
+    def test_terminal_burst_is_reduced_to_one_bounded_ui_update(self):
+        terminal = AsyncTerminal.__new__(AsyncTerminal)
+        terminal._log_queue = queue.Queue(maxsize=AsyncTerminal.MAX_QUEUE_SIZE)
+        terminal._processing = False
+        terminal._last_process_time = 0
+        terminal._process_interval = AsyncTerminal.PROCESS_INTERVAL
+        terminal._batch_schedule_lock = threading.Lock()
+        terminal._batch_scheduled = False
+        terminal._batch_size_threshold = AsyncTerminal.BATCH_SIZE_THRESHOLD
+        terminal._max_log_entries = AsyncTerminal.MAX_DISPLAY_LOGS
+        terminal._stop_event = threading.Event()
+        terminal._debug_mode = False
+        terminal.logs = LogView()
+        page = CapturingPage()
+        terminal.view = Mock(page=page)
+        terminal.is_page_valid = Mock(return_value=True)
+
+        for index in range(10000):
+            terminal.add_log(f"SP log {index}")
+
+        terminal._start_log_processing_loop()
+        deadline = time.monotonic() + 1
+        while not page.tasks and time.monotonic() < deadline:
+            time.sleep(0.01)
+        terminal._stop_event.set()
+        terminal._log_thread.join(timeout=1)
+
+        self.assertEqual(len(page.tasks), 1)
+        handler, args = page.tasks[0]
+        asyncio.run(handler(*args))
+
+        self.assertTrue(terminal._log_queue.empty())
+        terminal.logs.update.assert_called_once()
+        self.assertEqual(
+            len(terminal.logs.controls),
+            AsyncTerminal.MAX_DISPLAY_LOGS,
+        )
+        self.assertIn("9851", terminal.logs.controls[0].value)
+        self.assertEqual(terminal.logs.controls[-1].value, "SP log 9999")
+
     def test_terminal_worker_only_schedules_ui_batch(self):
         terminal = AsyncTerminal.__new__(AsyncTerminal)
         terminal._log_queue = queue.Queue()
