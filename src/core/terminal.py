@@ -1,9 +1,13 @@
-import flet as ft
+import asyncio
+from collections import deque
+import os
+import queue
 import re
 import threading
-import queue
 import time
-import os
+
+import flet as ft
+
 from utils.logger import app_logger
 
 
@@ -121,15 +125,15 @@ class AsyncTerminal:
 
         # ============ 线程相关变量 ============
         # 日志队列（使用线程安全的队列）
-        self._log_queue = queue.Queue(maxsize=10000)
+        self._log_queue = queue.Queue(maxsize=self.MAX_QUEUE_SIZE)
         self._last_process_time = 0
-        self._process_interval = 0.02
+        self._process_interval = self.PROCESS_INTERVAL
         self._processing = False
         self._batch_schedule_lock = threading.Lock()
         self._batch_scheduled = False
-        self._batch_size_threshold = 30
+        self._batch_size_threshold = self.BATCH_SIZE_THRESHOLD
         self._stop_event = threading.Event()
-        self._max_log_entries = 1500
+        self._max_log_entries = self.MAX_DISPLAY_LOGS
 
         # ========== 新增：异步任务和进程管理锁 ==========
         self._output_tasks_lock = threading.Lock()  # 保护 _output_tasks 列表
@@ -142,9 +146,6 @@ class AsyncTerminal:
         # ========== 新增：定时器跟踪（防止内存泄漏） ==========
         self._active_timers = []  # 跟踪所有活动的定时器
         self._timers_lock = threading.Lock()  # 保护定时器列表
-
-        # ========== 新增：队列非空条件变量 ==========
-        self._log_queue_not_empty = threading.Condition()  # 队列非空条件变量
 
         # 启动日志处理循环
         self._start_log_processing_loop()
@@ -166,35 +167,59 @@ class AsyncTerminal:
         self._log_thread = threading.Thread(target=log_processing_worker, daemon=True)
         self._log_thread.start()
 
-    # ============ 批处理方法（使用旧版本实现）============
+    def _take_log_batch(self, queue_size: int) -> list[str]:
+        """
+        从队列提取下一批日志，高负载时只保留最新的可显示窗口。
+
+        Args:
+            queue_size (int): 本次处理开始时的队列快照大小。
+
+        Returns:
+            list[str]: 要渲染的日志文本。
+        """
+        if queue_size >= self.HIGH_LOAD_THRESHOLD:
+            keep_count = max(1, self._max_log_entries - 1)
+            recent_entries = deque(maxlen=keep_count)
+            drained_count = 0
+
+            for _ in range(queue_size):
+                try:
+                    recent_entries.append(self._log_queue.get_nowait())
+                    drained_count += 1
+                except queue.Empty:
+                    break
+
+            dropped_count = drained_count - len(recent_entries)
+            log_entries = list(recent_entries)
+            if dropped_count > 0:
+                log_entries.insert(
+                    0,
+                    f"[WARNING] 瞬时日志过多，已跳过 {dropped_count} 条旧日志",
+                )
+            return log_entries
+
+        batch_limit = min(self._batch_size_threshold, queue_size)
+        log_entries = []
+        for _ in range(batch_limit):
+            try:
+                log_entries.append(self._log_queue.get_nowait())
+            except queue.Empty:
+                break
+        return log_entries
 
     def _process_batch(self):
-        """处理批量日志条目"""
+        """在 Flet 页面事件循环中处理一批日志。"""
         if self._processing:
             return
 
         current_time = time.time()
         queue_size = self._log_queue.qsize()
-        time_to_process = (current_time - self._last_process_time) >= self._process_interval
-        size_to_process = queue_size >= self._batch_size_threshold
-
-        if not time_to_process and not size_to_process and queue_size > 0:
-            size_to_process = True
-            batch_limit = min(3, queue_size)
-        else:
-            batch_limit = min(self._batch_size_threshold, queue_size) if queue_size > 0 else self._batch_size_threshold
+        if queue_size <= 0:
+            return
 
         self._processing = True
         try:
-            log_entries = []
-            processed_count = 0
-            while processed_count < batch_limit:
-                try:
-                    entry = self._log_queue.get_nowait()
-                    log_entries.append(entry)
-                    processed_count += 1
-                except queue.Empty:
-                    break
+            log_entries = self._take_log_batch(queue_size)
 
             if not log_entries:
                 return
@@ -216,12 +241,19 @@ class AsyncTerminal:
                     new_text = ft.Text(processed_text, selectable=True, size=14)
                 new_controls.append(new_text)
 
-            # 批量更新日志控件
-            self.logs.controls.extend(new_controls)
-
-            # 限制日志数量
-            if len(self.logs.controls) > self._max_log_entries:
-                del self.logs.controls[:-self._max_log_entries//2]
+            # 控件列表只在页面事件循环中变更，并始终保持固定上限。
+            if len(new_controls) >= self._max_log_entries:
+                self.logs.controls.clear()
+                self.logs.controls.extend(new_controls[-self._max_log_entries:])
+            else:
+                overflow = (
+                    len(self.logs.controls)
+                    + len(new_controls)
+                    - self._max_log_entries
+                )
+                if overflow > 0:
+                    del self.logs.controls[:overflow]
+                self.logs.controls.extend(new_controls)
 
             # ========== 新增：在更新 UI 之前再次检查页面有效性 ==========
             # 因为我们是异步执行，页面状态可能在等待期间发生变化
@@ -287,6 +319,7 @@ class AsyncTerminal:
 
             async def async_process_batch():
                 try:
+                    await asyncio.sleep(self._process_interval)
                     self._process_batch()
                 except Exception:
                     app_logger.exception("日志批处理失败")
@@ -1407,82 +1440,15 @@ class AsyncTerminal:
             else:
                 processed_text = clean_text
 
-            # ========== 队列积累保护：如果队列过大，触发紧急清理 ==========
-            queue_size = self._log_queue.qsize()
-
-            # 如果队列超过500条，保留最新100条（而非简单清空）
-            if queue_size > 500:
-                # 避免递归调用，直接处理
-                preserved_entries = []
-                discard_count = 0
-                while not self._log_queue.empty():
-                    try:
-                        entry = self._log_queue.get_nowait()
-                        if len(preserved_entries) < 100:
-                            preserved_entries.append(entry)
-                        else:
-                            discard_count += 1
-                    except Exception:
-                        break
-
-                # 将保留的条目放回队列
-                for entry in preserved_entries:
-                    try:
-                        self._log_queue.put_nowait(entry)
-                    except Exception:
-                        app_logger.debug("已忽略非关键异常", exc_info=True)
-                queue_size = len(preserved_entries)
-                if discard_count > 0 and self._debug_mode:
-                    # 使用 print 避免递归调用 add_log
-                    print(f"[WARNING] 队列积累过多，已丢弃 {discard_count} 条旧日志")
-                    app_logger.warning(f"队列积累过多，已丢弃 {discard_count} 条旧日志")
-
-            # 添加到队列（带条件变量通知）
+            # 队列满时丢弃最旧的一条，确保最新的进程状态仍可见。
             try:
                 self._log_queue.put_nowait(processed_text)
-                with self._log_queue_not_empty:
-                    self._log_queue_not_empty.notify()  # 通知消费者
-            except Exception:
-                # 队列已满，移除最旧的日志
+            except queue.Full:
                 try:
                     self._log_queue.get_nowait()
                     self._log_queue.put_nowait(processed_text)
-                    with self._log_queue_not_empty:
-                        self._log_queue_not_empty.notify()
-                except Exception:
-                    app_logger.debug("已忽略非关键异常", exc_info=True)
-            # ========== 每100条日志触发一次清理 ==========
-            if not hasattr(self, '_log_count'):
-                self._log_count = 0
-            self._log_count += 1
-
-            if self._log_count >= 100:
-                self._log_count = 0
-                # 在后台线程中执行清理，避免阻塞
-                try:
-                    cleanup_timer = self._create_timer(0.1, lambda: self.cleanup_all_resources(aggressive=False))
-                    cleanup_timer.start()
-                except Exception:
-                    app_logger.debug("已忽略非关键异常", exc_info=True)
-            # 立即安排处理少量日志
-            current_time = time.time()
-
-            if queue_size > 0 and (queue_size >= 3 or (current_time - self._last_process_time) >= 0.05):
-                # 只在页面有效时才调度处理
-                try:
-                    if self.is_page_valid():
-                        self._schedule_batch_process()
-                except (RuntimeError, AttributeError):
-                    # 页面无效，不处理
-                    pass
-            elif queue_size > 0:
-                try:
-                    if self.is_page_valid():
-                        timer = self._create_timer(0.03, self._schedule_batch_process)
-                        timer.start()
-                except (RuntimeError, AttributeError):
-                    # 页面无效，不处理
-                    pass
+                except (queue.Empty, queue.Full):
+                    app_logger.debug("日志队列繁忙，已丢弃一条终端日志")
 
         except (TypeError, IndexError, AttributeError):
             app_logger.exception("日志处理异常")
