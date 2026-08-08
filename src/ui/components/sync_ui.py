@@ -4,9 +4,9 @@ SillyTavern Data Sync UI
 Flet-based user interface for data synchronization
 """
 
-import threading
-import time
+import asyncio
 from typing import Optional
+
 import flet as ft
 
 from core.network import get_network_manager
@@ -51,6 +51,20 @@ class DataSyncUI:
         self._log_buffer = []  # 保留属性定义以避免潜在的引用错误，但不再使用
         self._sync_log_view = None
 
+    def _run_page_task(self, handler, *args):
+        """将协程提交到当前 Flet 页面事件循环，不做跨线程同步回退。"""
+        page = self.page
+        if page is None:
+            return None
+
+        try:
+            return page.run_task(handler, *args)
+        except (AssertionError, RuntimeError):
+            app_logger.debug("Flet 页面事件循环不可用", exc_info=True)
+        except Exception:
+            app_logger.exception("提交 Flet 页面任务失败")
+        return None
+
     def _add_log(self, message: str):
         """
         添加日志到同步UI（内部方法）
@@ -72,47 +86,27 @@ class DataSyncUI:
             app_logger.warning("[同步UI] 警告：page对象不可用，无法更新UI")
             return
 
-        # UI已创建，直接添加到视图
-        try:
-            from core.terminal import parse_ansi_text
-            spans = parse_ansi_text(message)
-            log_text = ft.Text(spans=spans, size=14, selectable=True)
-
-            # 保留最新50条
-            if len(self._sync_log_view.controls) >= 50:
-                self._sync_log_view.controls.pop(0)
-
-            self._sync_log_view.controls.append(log_text)
-
-            # ========== 关键修复：参考 terminal.py 的刷新机制 ==========
-            # 使用 page.run_task() 调度异步更新，只更新 ListView 控件
+        async def append_log():
+            """在页面事件循环内创建并挂载日志控件。"""
             try:
-                async def update_ui():
-                    """异步更新UI"""
-                    try:
-                        self._sync_log_view.update()
-                    except AssertionError:
-                        pass  # 忽略控件树过深错误
-                    except RuntimeError as e:
-                        if "Event loop is closed" not in str(e):
-                            raise
+                from core.terminal import parse_ansi_text
 
-                self.page.run_task(update_ui)
+                log_view = self._sync_log_view
+                if log_view is None or self.page is None:
+                    return
 
+                spans = parse_ansi_text(message)
+                log_text = ft.Text(spans=spans, size=14, selectable=True)
+                if len(log_view.controls) >= 50:
+                    log_view.controls.pop(0)
+                log_view.controls.append(log_text)
+                log_view.update()
             except (AssertionError, RuntimeError):
-                # 如果 run_task 失败，回退到同步更新
-                try:
-                    self._sync_log_view.update()
-                except Exception as sync_error:
-                    app_logger.warning(f"[同步UI] 同步更新失败: {sync_error}")
-            except Exception as update_error:
-                app_logger.warning(f"[同步UI] 调度更新失败: {update_error}")
+                app_logger.debug("同步日志控件已不可用", exc_info=True)
+            except Exception:
+                app_logger.exception("同步日志更新失败")
 
-        except Exception as e:
-            # 记录详细错误信息
-            import traceback
-            app_logger.warning(f"[同步UI] 添加日志失败: {e}")
-            app_logger.warning(f"[同步UI] 错误堆栈:\n{traceback.format_exc()}")
+        self._run_page_task(append_log)
 
     def _flush_log_buffer(self):
         """由于移除了缓存机制，此方法不再需要，保留为空实现以维持兼容性"""
@@ -425,36 +419,33 @@ class DataSyncUI:
         )
 
     def _start_refresh_timer(self):
-        """Start timer to refresh UI (optimized)"""
+        """在页面事件循环中启动周期性状态刷新。"""
         if self.refresh_timer:
             self.refresh_timer.cancel()
             self.refresh_timer = None
 
-        def refresh():
-            # Check if page is still valid
-            if self.page is None:
-                return
+        page = self.page
+        if page is None:
+            return
 
-            # Only update if needed (reduce unnecessary calls)
-            try:
-                # Cache last sync info to avoid redundant calls
-                current_sync_info = None
-                if self.sync_manager:
-                    current_sync_info = self.sync_manager.get_sync_info()
+        self._refresh_active = True
 
-                # Update UI with cached info
-                self._update_ui_with_info(current_sync_info)
+        async def refresh_loop():
+            while self._refresh_active and self.page is page:
+                await asyncio.sleep(5)
+                if not self._refresh_active or self.page is not page:
+                    break
+                try:
+                    sync_info = None
+                    if self.sync_manager:
+                        sync_info = await asyncio.to_thread(
+                            self.sync_manager.get_sync_info
+                        )
+                    self._update_ui_with_info(sync_info)
+                except Exception:
+                    app_logger.debug("后台刷新同步状态失败", exc_info=True)
 
-                # Schedule next refresh if page is still valid
-                if self.page is not None:
-                    self.refresh_timer = threading.Timer(5.0, refresh)  # Increased to 5 seconds
-                    self.refresh_timer.start()
-            except Exception:
-                app_logger.debug("后台刷新同步状态失败", exc_info=True)
-
-        if self.page is not None:
-            self.refresh_timer = threading.Timer(5.0, refresh)  # Initial delay 5 seconds
-            self.refresh_timer.start()
+        self.refresh_timer = self._run_page_task(refresh_loop)
 
     def _update_ui_with_info(self, sync_info=None):
         """Update UI with cached sync info (optimized)"""
@@ -580,52 +571,58 @@ class DataSyncUI:
 
     def _on_server_toggle(self, e):
         """Handle server switch toggle"""
-        def toggle_server():
+        server_switch = self._controls.get('server_switch')
+        port_input = self._controls.get('port_input')
+        host_input = self._controls.get('host_input')
+        should_start = bool(server_switch and server_switch.value)
+
+        port = 9999
+        host = self._get_default_lan_ip()
+        if should_start:
+            if port_input and str(port_input.value).isdigit():
+                port = int(port_input.value)
+            if host_input and host_input.value and host_input.value.strip():
+                host = host_input.value.strip()
+
+            if self._should_show_first_server_dialog():
+                self._show_first_server_dialog(port, host)
+                return
+
+        async def toggle_server():
             try:
-                self._ensure_manager()
-
-                server_switch = self._controls.get('server_switch')
-                port_input = self._controls.get('port_input')
-                host_input = self._controls.get('host_input')
-
-                if server_switch and server_switch.value:
-                    port = int(port_input.value) if port_input and port_input.value.isdigit() else 9999
-                    # 优先使用用户输入的地址，如果没有则自动获取局域网IP，确保只在局域网内工作
-                    if host_input and host_input.value.strip():
-                        host = host_input.value.strip()
+                await asyncio.to_thread(self._ensure_manager)
+                if should_start:
+                    success = await asyncio.to_thread(
+                        self.sync_manager.start_sync_server, port, host
+                    )
+                    if success:
+                        server_url = self.sync_manager.get_server_url()
+                        self._add_log(f"同步服务已启动: {server_url}")
                     else:
-                        host = self._get_default_lan_ip()
-
-                    # 先检查是否需要显示首次启动对话框
-                    should_show = self._should_show_first_server_dialog()
-
-                    if should_show:
-                        # 需要显示首次对话框，不启动服务器
-                        self._show_first_server_dialog(port, host)  # 传递端口和主机信息
-                    else:
-                        # 不需要显示对话框，直接启动服务器
-                        success = self.sync_manager.start_sync_server(port, host)
-
-                        if success:
-                            self._add_log(f"同步服务已启动: {self.sync_manager.get_server_url()}")
-                        else:
-                            self._add_log("启动同步服务失败")
-                            if self.page:
-                                self.page.show_dialog(ft.SnackBar(content=ft.Text("启动同步服务失败"), bgcolor=ft.Colors.RED_500))
+                        self._add_log("启动同步服务失败")
+                        self._show_snack("启动同步服务失败", ft.Colors.RED_500)
                 else:
-                    success = self.sync_manager.stop_sync_server()
+                    success = await asyncio.to_thread(
+                        self.sync_manager.stop_sync_server
+                    )
                     if success:
                         self._add_log("同步服务已停止")
                     else:
                         self._add_log("停止同步服务失败")
 
                 self._update_ui()
-
             except Exception as ex:
                 self._add_log(f"切换服务器状态时出错: {ex}")
+                self._show_snack(f"切换同步服务失败: {ex}", ft.Colors.RED_500)
 
-        # Run in background thread to avoid blocking UI
-        threading.Thread(target=toggle_server, daemon=True).start()
+        self._run_page_task(toggle_server)
+
+    def _show_snack(self, message: str, bgcolor):
+        """在页面事件循环中显示操作结果。"""
+        if self.page:
+            self.page.show_dialog(
+                ft.SnackBar(content=ft.Text(message), bgcolor=bgcolor)
+            )
 
     def _should_show_first_server_dialog(self):
         """检查是否应该显示首次启动服务器对话框"""
@@ -724,9 +721,12 @@ class DataSyncUI:
             )
         )
 
-        def update_countdown():
-            """更新倒计时"""
-            if self._dialog_countdown > 0:
+        async def run_countdown():
+            """在页面事件循环中更新首次启动提醒倒计时。"""
+            while self._dialog_countdown > 0 and self._dialog_countdown_active:
+                await asyncio.sleep(1)
+                if not self._dialog_countdown_active or self.page is None:
+                    break
                 self._dialog_countdown -= 1
                 countdown_text.value = f"请仔细阅读以下内容（{self._dialog_countdown}秒后可关闭）"
 
@@ -736,26 +736,17 @@ class DataSyncUI:
                     countdown_text.value = "您可以关闭此窗口了"
                     countdown_text.color = ft.Colors.GREEN_500
 
-                if self._first_server_dialog and self.page:
-                    try:
-                        self.page.update()
-                    except RuntimeError:
-                        # 页面已关闭，停止倒计时
-                        self._dialog_countdown_active = False
+                try:
+                    self.page.update()
+                except RuntimeError:
+                    self._dialog_countdown_active = False
+                    break
 
         def start_countdown():
             """启动倒计时"""
-            def countdown_worker():
-                while self._dialog_countdown > 0 and self._dialog_countdown_active:
-                    time.sleep(1)
-                    if self._dialog_countdown_active and self.page:
-                        # 调用UI更新，Flet会自动处理线程调度
-                        update_countdown()
-
             self._dialog_countdown_active = True
             self._dialog_countdown = 30 # 重置为30秒
-            countdown_thread = threading.Thread(target=countdown_worker, daemon=True)
-            countdown_thread.start()
+            self._dialog_countdown_timer = self._run_page_task(run_countdown)
 
         def on_close(e=None):
             """关闭对话框"""
@@ -772,18 +763,18 @@ class DataSyncUI:
 
             # 关闭对话框后启动服务器
             if port is not None and host is not None:
-                # 在后台线程中启动服务器以避免阻塞UI
-                def start_server_after_dialog():
-                    success = self.sync_manager.start_sync_server(port, host)
+                async def start_server_after_dialog():
+                    success = await asyncio.to_thread(
+                        self.sync_manager.start_sync_server, port, host
+                    )
                     if success:
                         self._add_log(f"同步服务已启动: {self.sync_manager.get_server_url()}")
                     else:
                         self._add_log("启动同步服务失败")
-                        if self.page:
-                            self.page.show_dialog(ft.SnackBar(content=ft.Text("启动同步服务失败"), bgcolor=ft.Colors.RED_500))
+                        self._show_snack("启动同步服务失败", ft.Colors.RED_500)
                     self._update_ui()
 
-                threading.Thread(target=start_server_after_dialog, daemon=True).start()
+                self._run_page_task(start_server_after_dialog)
 
         # 创建对话框
         self._first_server_dialog = ft.AlertDialog(
@@ -824,11 +815,13 @@ class DataSyncUI:
 
     def _scan_servers(self, e):
         """Scan for servers on network"""
-        def scan():
+        async def scan():
             try:
-                self._ensure_manager()
+                await asyncio.to_thread(self._ensure_manager)
                 self._add_log("开始扫描局域网服务器...")
-                servers = self.sync_manager.detect_network_servers()
+                servers = await asyncio.to_thread(
+                    self.sync_manager.detect_network_servers
+                )
 
                 server_list = self._controls.get('server_list')
                 if server_list:
@@ -878,9 +871,9 @@ class DataSyncUI:
 
             except Exception as ex:
                 self._add_log(f"扫描服务器时出错: {ex}")
+                self._show_snack(f"扫描服务器失败: {ex}", ft.Colors.RED_500)
 
-        # Run in background thread
-        threading.Thread(target=scan, daemon=True).start()
+        self._run_page_task(scan)
 
     def _select_server(self, server_url: str):
         """Select a server from the list"""
@@ -893,68 +886,82 @@ class DataSyncUI:
 
     def _start_sync(self, e):
         """Start data synchronization"""
-        def sync():
+        server_url_input = self._controls.get('server_url_input')
+        method_dropdown = self._controls.get('method_dropdown')
+        backup_switch = self._controls.get('backup_switch')
+        server_url = (
+            server_url_input.value.strip()
+            if server_url_input and server_url_input.value
+            else ""
+        )
+        method = method_dropdown.value if method_dropdown else "auto"
+        backup = backup_switch.value if backup_switch else True
+
+        if not server_url:
+            self._add_log("请输入服务器地址")
+            self._show_snack("请输入服务器地址", ft.Colors.RED_500)
+            return
+
+        async def sync():
             try:
-                self._ensure_manager()
+                await asyncio.to_thread(self._ensure_manager)
+                self._add_log(f"检查服务器可用性: {server_url}")
 
-                server_url_input = self._controls.get('server_url_input')
-                method_dropdown = self._controls.get('method_dropdown')
-                backup_switch = self._controls.get('backup_switch')
+                def check_server_health():
+                    from features.sync.client import SyncClient
 
-                if server_url_input:
-                    server_url = server_url_input.value.strip()
-                    if not server_url:
-                        self._add_log("请输入服务器地址")
-                        if self.page:
-                            self.page.show_dialog(ft.SnackBar(content=ft.Text("请输入服务器地址"), bgcolor=ft.Colors.RED_500))
-                        return
-
-                    method = method_dropdown.value if method_dropdown else "auto"
-                    backup = backup_switch.value if backup_switch else True
-
-                    # 在开始同步前先检查服务器是否可用
-                    self._add_log(f"检查服务器可用性: {server_url}")
+                    client = SyncClient(server_url, self.data_dir, timeout=3)
                     try:
-                        from features.sync.client import SyncClient
-                        client = SyncClient(server_url, self.data_dir, timeout=3)
-                        if not client.check_server_health():
-                            self._add_log("服务器不可用或无响应")
-                            if self.page:
-                                self.page.show_dialog(ft.SnackBar(content=ft.Text("服务器不可用或无响应，请检查服务器地址"), bgcolor=ft.Colors.RED_500))
-                            return
-                        self._add_log("服务器可用，开始同步")
-                    except Exception as health_err:
-                        self._add_log(f"服务器健康检查失败: {health_err}")
-                        if self.page:
-                            self.page.show_dialog(ft.SnackBar(content=ft.Text(f"无法连接到服务器: {health_err}"), bgcolor=ft.Colors.RED_500))
-                        return
+                        return client.check_server_health()
+                    finally:
+                        client.close()
 
-                    self._add_log(f"同步方法: {method}, 备份数据: {'是' if backup else '否'}")
+                try:
+                    healthy = await asyncio.to_thread(check_server_health)
+                except Exception as health_err:
+                    self._add_log(f"服务器健康检查失败: {health_err}")
+                    self._show_snack(
+                        f"无法连接到服务器: {health_err}", ft.Colors.RED_500
+                    )
+                    return
 
-                    success = self.sync_manager.sync_from_server(server_url, method, backup)
+                if not healthy:
+                    self._add_log("服务器不可用或无响应")
+                    self._show_snack(
+                        "服务器不可用或无响应，请检查服务器地址",
+                        ft.Colors.RED_500,
+                    )
+                    return
 
-                    if success:
-                        self._add_log("数据同步完成!")
-                        if self.page:
-                            self.page.show_dialog(ft.SnackBar(content=ft.Text("数据同步完成!"), bgcolor=ft.Colors.GREEN_500))
-                    else:
-                        self._add_log("数据同步失败!")
-                        if self.page:
-                            self.page.show_dialog(ft.SnackBar(content=ft.Text("数据同步失败!"), bgcolor=ft.Colors.RED_500))
+                self._add_log("服务器可用，开始同步")
+                self._add_log(
+                    f"同步方法: {method}, 备份数据: {'是' if backup else '否'}"
+                )
+                success = await asyncio.to_thread(
+                    self.sync_manager.sync_from_server,
+                    server_url,
+                    method,
+                    backup,
+                )
 
-                    self._update_ui()
+                if success:
+                    self._add_log("数据同步完成!")
+                    self._show_snack("数据同步完成!", ft.Colors.GREEN_500)
+                else:
+                    self._add_log("数据同步失败!")
+                    self._show_snack("数据同步失败!", ft.Colors.RED_500)
 
+                self._update_ui()
             except Exception as ex:
                 self._add_log(f"同步过程中出错: {ex}")
-                if self.page:
-                    self.page.show_dialog(ft.SnackBar(content=ft.Text(f"同步失败: {ex}"), bgcolor=ft.Colors.RED_500))
+                self._show_snack(f"同步失败: {ex}", ft.Colors.RED_500)
 
-        # Run in background thread
-        threading.Thread(target=sync, daemon=True).start()
+        self._run_page_task(sync)
 
     
     def destroy(self):
         """Clean up resources"""
+        self._refresh_active = False
         # Cancel refresh timer
         if self.refresh_timer:
             self.refresh_timer.cancel()

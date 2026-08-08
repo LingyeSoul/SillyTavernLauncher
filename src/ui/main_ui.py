@@ -1,3 +1,5 @@
+import asyncio
+
 from utils.logger import app_logger
 import flet as ft
 from flet import UrlLauncher
@@ -421,11 +423,7 @@ class UniUI:
     def getAboutView(self):
         # 创建版本检查函数
         def check_for_updates(e):
-            import threading
-
-            update_thread = threading.Thread(target=self.version_checker.run_check_sync)
-            update_thread.daemon = True
-            update_thread.start()
+            self.page.run_task(self.version_checker.run_check)
 
         # 创建URL打开函数
         async def open_github(e):
@@ -497,12 +495,8 @@ class UniUI:
             # 创建简化的初始UI - 非阻塞
             self._create_minimal_ui(page)
 
-            # 异步加载复杂视图
-            import threading
-
-            threading.Thread(
-                target=self._load_views_async, args=(page,), daemon=True
-            ).start()
+            # 控件的创建和挂载必须与 Flet diff 共用同一事件循环。
+            page.run_task(self._load_views_async, page)
 
     def _create_minimal_ui(self, page):
         """创建最小化初始UI - 优先加载主题和Appbar控制"""
@@ -784,9 +778,10 @@ class UniUI:
         self._content.content = unavailable_view
         self._page.update()
 
-    def _load_views_async(self, page):
+    async def _load_views_async(self, page):
         """异步加载复杂视图 - 主题和Appbar已优先加载，此处跳过"""
         try:
+            await asyncio.sleep(0)
             # 延迟创建同步管理器 - 带错误处理
             try:
                 from ui.components.sync_ui import DataSyncUI
@@ -805,6 +800,7 @@ class UniUI:
 
             # 延迟创建设置视图（最复杂）
             self.settings_view = self.getSettingView()
+            await asyncio.sleep(0)
 
             # 延迟创建扩展管理视图
             try:
@@ -827,6 +823,7 @@ class UniUI:
 
             # 延迟创建关于视图
             self.about_view = self.getAboutView()
+            await asyncio.sleep(0)
 
             # 延迟创建版本切换视图
             try:
@@ -896,11 +893,9 @@ class UniUI:
                                 ft.Text("请重启应用或联系开发者", size=14),
                                 ft.Button(
                                     "重试",
-                                    on_click=lambda _: threading.Thread(
-                                        target=self._load_views_async,
-                                        args=(page,),
-                                        daemon=True,
-                                    ).start(),
+                                    on_click=lambda _: page.run_task(
+                                        self._load_views_async, page
+                                    ),
                                 ),
                             ],
                             horizontal_alignment=ft.CrossAxisAlignment.CENTER,

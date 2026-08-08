@@ -125,6 +125,8 @@ class AsyncTerminal:
         self._last_process_time = 0
         self._process_interval = 0.02
         self._processing = False
+        self._batch_schedule_lock = threading.Lock()
+        self._batch_scheduled = False
         self._batch_size_threshold = 30
         self._stop_event = threading.Event()
         self._max_log_entries = 1500
@@ -155,7 +157,7 @@ class AsyncTerminal:
                 try:
                     # 检查队列是否有项目
                     if not self._log_queue.empty():
-                        self._process_batch()
+                        self._schedule_batch_process()
                     time.sleep(0.02)
                 except Exception:
                     app_logger.exception("日志处理循环错误")
@@ -267,112 +269,42 @@ class AsyncTerminal:
             app_logger.exception("批量处理失败")
         finally:
             self._processing = False
-            if not self._log_queue.empty():
-                self._schedule_batch_process()
 
     def _schedule_batch_process(self):
-        """安排批量处理 - 改进版，减少阻塞，确保队列能被处理"""
-        # 快速检查页面是否可用
-        if not self.is_page_valid():
-            # 页面暂时不可用，保留最近10条日志，其余丢弃以避免积累
-            try:
-                preserved = []
-                discard_count = 0
-                while not self._log_queue.empty():
-                    try:
-                        entry = self._log_queue.get_nowait()
-                        if len(preserved) < 10:
-                            preserved.append(entry)
-                        else:
-                            discard_count += 1
-                    except Exception:
-                        break
-
-                # 将保留的日志放回队列
-                for entry in preserved:
-                    try:
-                        self._log_queue.put_nowait(entry)
-                    except Exception:
-                        app_logger.debug("已忽略非关键异常", exc_info=True)
-                if discard_count > 0:
-                    print(f"[INFO] 页面不可用，丢弃了 {discard_count} 条日志")
-            except Exception:
-                app_logger.debug("已忽略非关键异常", exc_info=True)
+        """将日志批处理调度到 Flet 事件循环。"""
+        if not self.is_page_valid() or self._log_queue.empty():
             return
+
+        with self._batch_schedule_lock:
+            if self._batch_scheduled:
+                return
+            self._batch_scheduled = True
 
         try:
             page = self.view.page
             if page is None:
-                return
+                raise RuntimeError("页面不可用")
 
-            # 定义异步处理函数
             async def async_process_batch():
-                # 在异步任务中处理批量更新
                 try:
                     self._process_batch()
                 except Exception:
-                    # 捕获并记录所有异常，避免导致灰屏
-                    app_logger.exception("批量处理失败（同步阶段）")
+                    app_logger.exception("日志批处理失败")
+                finally:
+                    with self._batch_schedule_lock:
+                        self._batch_scheduled = False
+                    if not self._log_queue.empty():
+                        self._schedule_batch_process()
 
-            # 尝试异步调度，失败则使用同步处理
-            try:
-                page.run_task(async_process_batch)
-            except RuntimeError as e:
-                error_msg = str(e)
-                # 只在事件循环真正关闭时跳过
-                if "Event loop is closed" in error_msg:
-                    # 事件循环已关闭，直接同步处理（如果可能）
-                    try:
-                        self._process_batch()
-                    except Exception:
-                        # 同步处理也失败，保留最近10条日志
-                        preserved = []
-                        discard_count = 0
-                        while not self._log_queue.empty():
-                            try:
-                                entry = self._log_queue.get_nowait()
-                                if len(preserved) < 10:
-                                    preserved.append(entry)
-                                else:
-                                    discard_count += 1
-                            except Exception:
-                                break
-
-                        # 将保留的日志放回队列
-                        for entry in preserved:
-                            try:
-                                self._log_queue.put_nowait(entry)
-                            except Exception:
-                                app_logger.debug("已忽略非关键异常", exc_info=True)
-                        if discard_count > 0:
-                            app_logger.info(f"事件循环已关闭，丢弃了 {discard_count} 条日志")
-                    return
-                # 其他 RuntimeError 仍然记录但继续尝试同步处理
-                app_logger.warning(f"调度批量处理遇到 RuntimeError: {error_msg}，尝试同步处理")
-                try:
-                    self._process_batch()
-                except Exception as sync_error:
-                    app_logger.error(f"同步处理也失败: {sync_error}")
-                return
-            except Exception:
-                # 记录其他异常并尝试同步处理
-                app_logger.exception("调度批量处理时发生未预期错误")
-                try:
-                    self._process_batch()
-                except Exception as sync_error:
-                    app_logger.error(f"同步处理也失败: {sync_error}")
-                return
-
-            return
+            page.run_task(async_process_batch)
         except (RuntimeError, AttributeError):
-            # 控件已从页面移除或 page 属性访问失败
-            app_logger.exception("访问页面属性失败")
-            return
+            with self._batch_schedule_lock:
+                self._batch_scheduled = False
+            app_logger.debug("页面事件循环不可用，日志将在页面恢复后处理", exc_info=True)
         except Exception:
-            # 捕获所有其他异常
-            app_logger.exception("_schedule_batch_process 发生未预期错误")
-
-        return
+            with self._batch_schedule_lock:
+                self._batch_scheduled = False
+            app_logger.exception("调度日志批处理失败")
 
     # ============ 进程管理 ============
 
@@ -771,24 +703,34 @@ class AsyncTerminal:
                 self.add_log(f"[DEBUG] 可执行文件: {executable}")
                 self.add_log(f"[DEBUG] 参数: {cmd_args}")
 
-            # 验证可执行文件
+            # Windows 的 Node.js 包同时包含无扩展名 POSIX 脚本和 .cmd 启动器。
+            # 即使无扩展名文件存在，也必须优先选择 Win32 可执行的伴生文件。
             use_shell = False
+            if os.name == 'nt' and '.' not in os.path.basename(executable):
+                extensions = ['.exe', '.cmd', '.bat', '.ps1']
+                for ext in extensions:
+                    candidate = executable + ext
+                    if await asyncio.to_thread(os.path.isfile, candidate):
+                        executable = candidate
+                        if self._debug_mode:
+                            self.add_log(f"[DEBUG] 自动添加扩展名: {ext}")
+                        break
+
             if not await asyncio.to_thread(os.path.isfile, executable):
-                # 在 Windows 上，如果路径没有扩展名，尝试添加常见扩展名
-                if '.' not in os.path.basename(executable):
-                    extensions = ['.exe', '.cmd', '.bat', '.ps1']
-                    for ext in extensions:
-                        if await asyncio.to_thread(os.path.isfile, executable + ext):
-                            executable = executable + ext
-                            if self._debug_mode:
-                                self.add_log(f"[DEBUG] 自动添加扩展名: {ext}")
-                            break
-                if not await asyncio.to_thread(os.path.isfile, executable):
-                    raise FileNotFoundError(f"找不到可执行文件: {executable}")
+                raise FileNotFoundError(f"找不到可执行文件: {executable}")
 
             # 检测是否为批处理文件，直接使用 shell 方式
             if executable.lower().endswith(('.cmd', '.bat')):
                 use_shell = True
+                normalized_args = [
+                    arg[1:-1]
+                    if len(arg) >= 2 and arg[0] == arg[-1] and arg[0] in ('"', "'")
+                    else arg
+                    for arg in cmd_args
+                ]
+                shell_command = subprocess.list2cmdline(
+                    [executable, *normalized_args]
+                )
                 if self._debug_mode:
                     self.add_log("[DEBUG] 检测到批处理文件，使用 shell 方式")
 
@@ -817,7 +759,7 @@ class AsyncTerminal:
             else:
                 # 批处理文件，直接使用 shell 方式
                 process = await asyncio.create_subprocess_shell(
-                    command,
+                    shell_command,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=workdir,

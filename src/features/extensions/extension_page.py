@@ -7,8 +7,7 @@
 - 插件转换、删除
 """
 
-import threading
-from functools import partial
+import asyncio
 
 import flet as ft
 
@@ -170,13 +169,6 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
             page.pop_dialog()
         except Exception:
             app_logger.debug("已忽略非关键异常", exc_info=True)
-    async def close_dialog_async():
-        """异步关闭当前对话框"""
-        close_dialog()
-
-    async def show_snackbar_async(message: str, color=ft.Colors.BLUE_600):
-        """异步显示提示条"""
-        show_snackbar(message, color)
     def refresh_lists():
         """刷新扩展列表"""
         log("正在刷新扩展列表...")
@@ -365,73 +357,29 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
             )
             show_dialog(progress_dialog)
 
-            # 在后台线程中执行安装
-            def install():
-                def update_progress(status: str, progress: float):
-                    if cancel_flag["cancelled"]:
-                        return False
+            async def install():
+                status_text.value = "正在克隆仓库..."
+                progress_bar.value = 0.3
+                page.update()
 
-                    async def update_ui():
-                        status_text.value = status
-                        progress_bar.value = progress
-                        page.update()
-
-                    page.run_task(update_ui)
-                    return True
-
-                # 检查是否已取消
-                if not update_progress("正在克隆仓库...", 0.3):
-                    page.run_task(close_dialog_async)
-                    page.run_task(partial(show_snackbar_async, "安装已取消", ft.Colors.ORANGE_600))
-                    return
-
-                success, message = ext_manager.install_from_git(
-                    url, ext_type, custom_name
+                success, message = await asyncio.to_thread(
+                    ext_manager.install_from_git, url, ext_type, custom_name
                 )
-
-                # 检查是否已取消（安装完成后）
                 if cancel_flag["cancelled"]:
-                    page.run_task(close_dialog_async)
-                    page.run_task(partial(show_snackbar_async, "安装已取消", ft.Colors.ORANGE_600))
-                    return
-
-                update_progress("安装完成" if success else "安装失败", 1.0)
-
-                async def show_result_async():
                     close_dialog()
-                    color = ft.Colors.GREEN_600 if success else ft.Colors.RED_600
-                    show_snackbar(message, color)
-                    if success:
-                        refresh_lists()
-
-                page.run_task(show_result_async)
-                if not update_progress("正在克隆仓库...", 0.3):
-                    page.run_task(close_dialog_async)
-                    page.run_task(partial(show_snackbar_async, "安装已取消", ft.Colors.ORANGE_600))
+                    show_snackbar("安装已取消", ft.Colors.ORANGE_600)
                     return
 
-                success, message = ext_manager.install_from_git(
-                    url, ext_type, custom_name
-                )
+                status_text.value = "安装完成" if success else "安装失败"
+                progress_bar.value = 1.0
+                page.update()
+                close_dialog()
+                color = ft.Colors.GREEN_600 if success else ft.Colors.RED_600
+                show_snackbar(message, color)
+                if success:
+                    refresh_lists()
 
-                # 检查是否已取消（安装完成后）
-                if cancel_flag["cancelled"]:
-                    page.run_task(close_dialog_async)
-                    page.run_task(partial(show_snackbar_async, "安装已取消", ft.Colors.ORANGE_600))
-                    return
-
-                update_progress("安装完成" if success else "安装失败", 1.0)
-
-                async def show_result():
-                    close_dialog()
-                    color = ft.Colors.GREEN_600 if success else ft.Colors.RED_600
-                    show_snackbar(message, color)
-                    if success:
-                        refresh_lists()
-
-                page.run_task(show_result)
-
-            threading.Thread(target=install, daemon=True).start()
+            page.run_task(install)
 
         def on_cancel(e):
             close_dialog()
@@ -525,49 +473,29 @@ def create_extension_page(page: ft.Page, terminal, ui_event):
             )
             show_dialog(progress_dialog)
 
-            def install():
-                async def update_progress_async(status: str, progress: float):
-                    if cancel_flag["cancelled"]:
-                        return False
-                    status_text.value = status
-                    progress_bar.value = progress
-                    page.update()
-                    return True
-                
-                def update_progress(status: str, progress: float):
-                    if cancel_flag["cancelled"]:
-                        return False
-                    page.run_task(update_progress_async, status, progress)
-                    return True
-                
-                # 检查是否已取消
-                if not update_progress("正在解压文件...", 0.3):
-                    page.run_task(close_dialog_async)
-                    page.run_task(partial(show_snackbar_async, "安装已取消", ft.Colors.ORANGE_600))
-                    return
-                
-                success, message = ext_manager.install_from_zip(
-                    zip_path, ext_type, custom_name
+            async def install():
+                status_text.value = "正在解压文件..."
+                progress_bar.value = 0.3
+                page.update()
+
+                success, message = await asyncio.to_thread(
+                    ext_manager.install_from_zip, zip_path, ext_type, custom_name
                 )
-                
-                # 检查是否已取消（安装完成后）
                 if cancel_flag["cancelled"]:
-                    page.run_task(close_dialog_async)
-                    page.run_task(partial(show_snackbar_async, "安装已取消", ft.Colors.ORANGE_600))
-                    return
-                
-                update_progress("安装完成" if success else "安装失败", 1.0)
-                
-                async def show_result_async():
                     close_dialog()
-                    color = ft.Colors.GREEN_600 if success else ft.Colors.RED_600
-                    show_snackbar(message, color)
-                    if success:
-                        refresh_lists()
-                
-                page.run_task(show_result_async)
-            
-            threading.Thread(target=install, daemon=True).start()
+                    show_snackbar("安装已取消", ft.Colors.ORANGE_600)
+                    return
+
+                status_text.value = "安装完成" if success else "安装失败"
+                progress_bar.value = 1.0
+                page.update()
+                close_dialog()
+                color = ft.Colors.GREEN_600 if success else ft.Colors.RED_600
+                show_snackbar(message, color)
+                if success:
+                    refresh_lists()
+
+            page.run_task(install)
 
         # 文件选择行
         file_pick_row = ft.Row(
