@@ -8,6 +8,7 @@ import secrets
 import flet as ft
 from flet import UrlLauncher
 from config.config_manager import ConfigManager
+from utils.logger import app_logger
 
 
 class WelcomeDialog:
@@ -234,9 +235,101 @@ class WelcomeDialog:
         """
         config_manager = ConfigManager()
         config_manager.set("first_run", False)
-        config_manager.save_config()
+
+        save_error = None
+        try:
+            config_manager.save_config()
+        except Exception as ex:
+            save_error = str(ex)
+            app_logger.error(f"保存首次启动状态时失败: {save_error}", exc_info=True)
+
         # 使用 Flet 的标准 API 关闭对话框
         self.page.pop_dialog()
+
+        # 如果保存失败，弹出提示告知用户
+        if save_error:
+            self._show_save_error_dialog(save_error)
+
+    def _show_save_error_dialog(self, error_message):
+        """
+        显示配置保存失败提示对话框，不可关闭，仅可退出程序
+
+        Args:
+            error_message: 错误详情信息
+        """
+        def _on_exit(e):
+            """退出程序"""
+            async def _exit_async():
+                self.page.window.visible = False
+                self.page.window.prevent_close = False
+                await self.page.window.close()
+            self.page.run_task(_exit_async)
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            barrier_dismissible=False,
+            title=ft.Row([
+                ft.Icon(ft.Icons.ERROR_OUTLINE, size=28, color=ft.Colors.RED_600),
+                ft.Text("配置保存失败", size=18, weight=ft.FontWeight.BOLD),
+            ], spacing=10),
+            content=ft.Container(
+                content=ft.Column([
+                    ft.Text(
+                        "无法将首次启动状态保存到 config.json 文件。",
+                        size=14,
+                        weight=ft.FontWeight.BOLD,
+                        color=ft.Colors.RED_600,
+                    ),
+                    ft.Text(
+                        "config.json 存储启动器关键配置，必须可写入。当前无法写入，程序无法继续运行。",
+                        size=13,
+                        color=ft.Colors.RED_700,
+                    ),
+                    ft.Divider(height=10),
+                    ft.Text(
+                        "请按以下方法排查并修复后重新启动：",
+                        size=13,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+                    ft.Text(
+                        "1. 当前目录没有写入权限，请尝试更换存储位置",
+                        size=13,
+                    ),
+                    ft.Text(
+                        "2. 配置文件被其他程序占用，请关闭相关程序后重新启动",
+                        size=13,
+                    ),
+                    ft.Divider(height=10),
+                    ft.Text(
+                        "错误详情：",
+                        size=12,
+                        weight=ft.FontWeight.BOLD,
+                    ),
+                    ft.Text(
+                        str(error_message)[:500],
+                        size=12,
+                        color=ft.Colors.GREY_700,
+                        selectable=True,
+                    ),
+                ], spacing=5, scroll=ft.ScrollMode.AUTO),
+                width=500,
+                padding=10,
+            ),
+            actions=[
+                ft.Button(
+                    "退出程序",
+                    icon=ft.Icons.EXIT_TO_APP,
+                    bgcolor=ft.Colors.RED_600,
+                    color=ft.Colors.WHITE,
+                    on_click=_on_exit,
+                    style=ft.ButtonStyle(
+                        shape=ft.RoundedRectangleBorder(radius=8),
+                    )
+                )
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        self.page.show_dialog(dialog)
 
     def show(self):
         """显示欢迎对话框"""

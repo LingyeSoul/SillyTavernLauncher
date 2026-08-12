@@ -79,7 +79,10 @@ async def main(page: ft.Page):
         if config.get("first_run", True):
             show_welcome_dialog(page)
             config_manager.set("first_run", False)
-            config_manager.save_config()
+            try:
+                config_manager.save_config()
+            except Exception as ex:
+                app_logger.error(f"首次启动状态保存失败: {str(ex)}", exc_info=True)
     
     # 显示系统环境缺失对话框
     def show_system_env_missing_dialog(missing_items):
