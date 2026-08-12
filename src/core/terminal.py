@@ -1450,6 +1450,11 @@ class AsyncTerminal:
                 except (queue.Empty, queue.Full):
                     app_logger.debug("日志队列繁忙，已丢弃一条终端日志")
 
+            # 停止进程会关闭日志线程，完成提示仍需通过页面事件循环刷新。
+            log_thread = getattr(self, '_log_thread', None)
+            if log_thread is None or not log_thread.is_alive():
+                self._schedule_batch_process()
+
         except (TypeError, IndexError, AttributeError):
             app_logger.exception("日志处理异常")
         except Exception:

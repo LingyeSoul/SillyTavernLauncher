@@ -137,6 +137,22 @@ class UiThreadSafetyTests(unittest.TestCase):
         self.assertFalse(terminal._batch_scheduled)
         self.assertEqual(terminal._log_queue.qsize(), 1)
 
+    def test_terminal_schedules_log_when_worker_is_stopped(self):
+        terminal = AsyncTerminal.__new__(AsyncTerminal)
+        terminal._log_queue = queue.Queue(maxsize=AsyncTerminal.MAX_QUEUE_SIZE)
+        terminal._batch_schedule_lock = threading.Lock()
+        terminal._batch_scheduled = False
+        terminal._log_thread = None
+        terminal._debug_mode = False
+        page = CapturingPage()
+        terminal.view = Mock(page=page)
+        terminal.is_page_valid = Mock(return_value=True)
+
+        terminal.add_log("✓ 所有进程已停止")
+
+        self.assertEqual(terminal._log_queue.qsize(), 1)
+        self.assertEqual(len(page.tasks), 1)
+
     def test_sync_log_mutation_runs_inside_page_task(self):
         sync_ui = DataSyncUI.__new__(DataSyncUI)
         sync_ui.page = CapturingPage()
