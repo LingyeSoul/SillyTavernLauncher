@@ -7,8 +7,11 @@
  */
 import { create } from 'zustand'
 import { getConfigStore } from '../services/configStore'
-import { StConfig } from '../services/stConfig'
+import { getStConfig } from '../services/stConfig'
 import { uiStateActions } from './uiState'
+
+// 单例定义在服务层（stLifecycle 的 auto_proxy 也使用），此处转出口保持既有导入路径
+export { getStConfig } from '../services/stConfig'
 
 export interface SettingsSnapshot {
   // 启动器 config.json
@@ -30,12 +33,6 @@ export interface SettingsSnapshot {
 }
 
 const S = getConfigStore()
-
-let stConfigInstance: StConfig | null = null
-export function getStConfig(): StConfig {
-  if (!stConfigInstance) stConfigInstance = new StConfig()
-  return stConfigInstance
-}
 
 export function readSettings(): SettingsSnapshot {
   const st = getStConfig()
@@ -125,16 +122,17 @@ export const useSettings = create<SettingsState>((set) => ({
   saveStPort: (port) => {
     const st = getStConfig()
     st.port = port
-    st.save()
-    uiStateActions.pushToast('success', '端口已保存，重启酒馆后生效')
+    // save 失败不得弹「已保存」（stConfig.save 现返回是否成功）
+    if (st.save()) uiStateActions.pushToast('success', '端口已保存，重启酒馆后生效')
+    else uiStateActions.pushToast('error', '端口保存失败，请检查 SillyTavern/config.yaml 写入权限')
     set(readSettings())
   },
 
   saveProxyUrl: (url) => {
     const st = getStConfig()
     st.proxyUrl = url
-    st.save()
-    uiStateActions.pushToast('success', '代理URL已保存，重启酒馆后生效')
+    if (st.save()) uiStateActions.pushToast('success', '代理URL已保存，重启酒馆后生效')
+    else uiStateActions.pushToast('error', '代理URL保存失败，请检查 SillyTavern/config.yaml 写入权限')
     set(readSettings())
   },
 

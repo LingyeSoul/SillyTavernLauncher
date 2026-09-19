@@ -146,8 +146,8 @@ export class StConfig {
     }
   }
 
-  /** ← save_config：全部托管键写回 AST（保留注释/未知字段），原子落盘 */
-  save(): void {
+  /** ← save_config：全部托管键写回 AST（保留注释/未知字段），原子落盘；返回是否成功 */
+  save(): boolean {
     try {
       ensureDirSync(dirname(this.configPath))
       const doc = this.doc
@@ -193,8 +193,11 @@ export class StConfig {
       doc.setIn(['privateAddressWhitelist', 'allowedRanges'], this.privateAddressAllowedRanges)
 
       atomicWriteFileSync(this.configPath, doc.toString())
+      return true
     } catch (err) {
+      // 保存失败必须可被调用方感知（原实现吞异常导致 UI 谎报"已保存"）
       console.error(`配置保存失败: ${err instanceof Error ? err.message : String(err)}`)
+      return false
     }
   }
 
@@ -448,4 +451,12 @@ export function isValidIpOrPattern(entry: string): boolean {
     ipv6Cidr.test(entry) ||
     wildcard.test(entry)
   )
+}
+
+let stConfigInstance: StConfig | null = null
+
+/** 模块级单例：进程内共享一份 config.yaml 视图（stores/settings 委托至此，服务层不反向依赖 stores） */
+export function getStConfig(): StConfig {
+  if (!stConfigInstance) stConfigInstance = new StConfig()
+  return stConfigInstance
 }

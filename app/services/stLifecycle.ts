@@ -45,6 +45,7 @@ import {
   type ExecuteProcessOptions,
 } from './processManager'
 import { checkNodeModules, checkStInstalled, resolvePortableEnv, type PortableEnvPaths } from './env'
+import { getStConfig } from './stConfig'
 import { which } from './runtime'
 import { ensureDirSync } from './atomicFs'
 import type { BoolMessage, ProcessInfo, SyncSpawnResult } from './types'
@@ -308,7 +309,7 @@ function iniSetOption(section: IniSection, key: string, value: string): void {
 export interface StProxyConfig {
   proxyEnabled: boolean
   proxyUrl: string
-  save(): void
+  save(): boolean
 }
 
 export interface StLifecycleDeps {
@@ -402,7 +403,15 @@ export class StLifecycle {
     const env = buildProcessEnv(prependDirs)
     // 确保工作目录存在（← os.makedirs(workdir, exist_ok=True)）
     ensureDirSync(workdir)
-    return execute({ command, cwd: workdir, env, kind })
+    // 进程 stdout/stderr 与命令回显接入终端日志（← Python execute_process_async 的 add_log 路径）
+    return execute({
+      command,
+      cwd: workdir,
+      env,
+      kind,
+      onLine: (line) => this.log(line.text),
+      onEvent: (message) => this.log(message),
+    })
   }
 
   private toolchain(): Toolchain {
@@ -537,11 +546,11 @@ export class StLifecycle {
 
   /**
    * ← auto_proxy 检测（DEVIATION: 仅环境变量代理，注册表不读）。
-   * 返回 null 表示未启用或未配置 stConfig。
+   * stConfig 取依赖注入或全局单例；仅在 startSt 检测到 auto_proxy 配置开启时调用。
    */
   private async autoDetectProxy(): Promise<void> {
-    const stCfg = this.deps.stConfig
-    if (!stCfg) return
+    // 生产构造不注入 stConfig 依赖，须懒默认到全局单例（否则 auto_proxy 静默失效）
+    const stCfg = this.deps.stConfig ?? getStConfig()
     const env = process.env
     const candidates = [
       env.HTTPS_PROXY ?? env.https_proxy,
