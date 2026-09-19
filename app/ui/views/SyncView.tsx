@@ -7,11 +7,10 @@
  * DEVIATION: Flet 版首启同步服务器的 30s 倒计时警告对话框未迁移（设计文档 §4.7
  *   对话框总表 12 项中不包含它）；安全提示以视图内红字警示承担（文案照搬）。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { join } from 'node:path'
-import { DataSyncManager } from '../../services/sync/manager'
+import { useCallback, useEffect, useState } from 'react'
 import type { DiscoveredServer } from '../../services/sync/manager'
 import type { SyncLogLevel } from '../../services/sync/server'
+import { getSyncManager, useSyncState, type SyncLogEntry } from '../../stores/syncState'
 import { getLocalIp } from '../../services/network'
 import { layout } from '../../theme'
 import { useTheme } from '../theme'
@@ -63,13 +62,6 @@ const METHOD_ITEMS = [
   { value: 'incremental', label: '增量同步' },
 ]
 
-interface SyncLogEntry {
-  id: number
-  message: string
-  level: SyncLogLevel
-}
-const SYNC_LOG_RING = 50
-
 function statusText(status: string): string {
   const map: Record<string, string> = {
     idle: TEXTS.statusReady,
@@ -82,8 +74,8 @@ function statusText(status: string): string {
 
 export function SyncView() {
   const t = useTheme()
-  const managerRef = useRef<DataSyncManager | null>(null)
-  const abortRef = useRef<AbortController | null>(null)
+  // Bug#2：manager 模块级单例（视图卸载后服务器/同步任务不失联），日志缓冲在 syncState store
+  const logs = useSyncState((s) => s.logs)
 
   const [status, setStatus] = useState<string>('idle')
   const [serverRunning, setServerRunning] = useState(false)
@@ -97,33 +89,13 @@ export function SyncView() {
   const [syncing, setSyncing] = useState(false)
   const [serverToggling, setServerToggling] = useState(false)
   const [discovered, setDiscovered] = useState<DiscoveredServer[] | null>(null)
-  const [logs, setLogs] = useState<SyncLogEntry[]>([])
-  const logIdRef = useRef(1)
-
-  const manager = useCallback((): DataSyncManager => {
-    if (!managerRef.current) {
-      managerRef.current = new DataSyncManager({
-        dataDir: join(process.cwd(), 'SillyTavern', 'data', 'default-user'),
-        log: (message, level) => {
-          setLogs((prev) => {
-            const next = [...prev, { id: logIdRef.current++, message, level }]
-            return next.length > SYNC_LOG_RING ? next.slice(next.length - SYNC_LOG_RING) : next
-          })
-        },
-      })
-    }
-    return managerRef.current
-  }, [])
 
   const syncLog = useCallback((message: string, level: SyncLogLevel = 'info') => {
-    setLogs((prev) => {
-      const next = [...prev, { id: logIdRef.current++, message, level }]
-      return next.length > SYNC_LOG_RING ? next.slice(next.length - SYNC_LOG_RING) : next
-    })
+    useSyncState.getState().appendLog(message, level)
   }, [])
 
   const refreshStatus = useCallback(() => {
-    const m = manager()
+    const m = getSyncManager()
     setStatus(m.syncStatus)
     setServerRunning(m.isServerRunning)
     setServerUrlText(m.isServerRunning ? TEXTS.serverUrlPrefix : TEXTS.serverUrl)
@@ -132,13 +104,13 @@ export function SyncView() {
         setServerUrlText(TEXTS.serverUrlPrefix + url)
       })
     }
-  }, [manager])
+  }, [])
 
   // 初始化：局域网 IP 作默认监听地址（← Flet _get_default_lan_ip）
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const m = manager()
+      const m = getSyncManager()
       await m.initialize()
       setPort(String(m.serverPort))
       if (cancelled) return
@@ -152,10 +124,10 @@ export function SyncView() {
     return () => {
       cancelled = true
     }
-  }, [manager, refreshStatus, syncLog])
+  }, [refreshStatus, syncLog])
 
   const toggleServer = (on: boolean): void => {
-    const m = manager()
+    const m = getSyncManager()
     setServerToggling(true)
     void (async () => {
       try {
@@ -177,7 +149,7 @@ export function SyncView() {
   }
 
   const scanServers = (): void => {
-    const m = manager()
+    const m = getSyncManager()
     setScanning(true)
     setDiscovered(null)
     void (async () => {
@@ -199,23 +171,20 @@ export function SyncView() {
       syncLog(TEXTS.urlMissing, 'warning')
       return
     }
-    const m = manager()
-    const controller = new AbortController()
-    abortRef.current = controller
+    const m = getSyncManager()
     setSyncing(true)
     setStatus('syncing')
     void (async () => {
       try {
+        // 取消句柄由 manager 持有（Bug#2），视图卸载后 stopSync 仍可取消
         const ok = await m.syncFromServer(url, {
           method: method as 'auto' | 'zip' | 'incremental',
           backup,
-          signal: controller.signal,
         })
         syncLog(ok ? TEXTS.syncDone : TEXTS.syncFailed, ok ? 'success' : 'error')
       } catch (err) {
         syncLog(`同步过程中出错: ${err instanceof Error ? err.message : String(err)}`, 'error')
       } finally {
-        abortRef.current = null
         setSyncing(false)
         refreshStatus()
       }
@@ -223,7 +192,7 @@ export function SyncView() {
   }
 
   const stopSync = (): void => {
-    abortRef.current?.abort()
+    getSyncManager().cancelActiveSync()
     syncLog('正在取消同步...', 'warning')
   }
 
@@ -415,10 +384,11 @@ export function SyncView() {
           {logs.length === 0 ? (
             <text style={{ fontSize: 12, fontFamily: t.font.mono, color: t.text.disabled }}>—</text>
           ) : (
-            logs.slice(-8).map((entry) => (
+            // 7 行 × lineHeight 16 = 112 ≤ 容器 120（原 14px 行高裁掉下伸部约 4px）
+            logs.slice(-7).map((entry) => (
               <text
                 key={entry.id}
-                style={{ fontSize: 12, lineHeight: 14, fontFamily: t.font.mono, color: logColor(entry.level) }}>
+                style={{ fontSize: 12, lineHeight: 16, fontFamily: t.font.mono, color: logColor(entry.level) }}>
                 {entry.message}
               </text>
             ))
