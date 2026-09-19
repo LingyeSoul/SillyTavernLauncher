@@ -27,6 +27,20 @@ import {
 import type { ExecuteProcessOptions } from '../services/processManager'
 import type { ProcessInfo, SyncSpawnResult } from '../services/types'
 
+// stConfig 全局单例替换为内存假对象（避免 auto_proxy 懒默认测试写真实 config.yaml）
+const stConfigMock = vi.hoisted(() => ({
+  instance: null as { proxyEnabled: boolean; proxyUrl: string; save: () => boolean } | null,
+}))
+vi.mock('../services/stConfig', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/stConfig')>()),
+  getStConfig: () => {
+    if (!stConfigMock.instance) {
+      stConfigMock.instance = { proxyEnabled: false, proxyUrl: '', save: () => true }
+    }
+    return stConfigMock.instance
+  },
+}))
+
 // ---------------------------------------------------------------------------
 // 测试基建
 // ---------------------------------------------------------------------------
@@ -229,6 +243,67 @@ describe('命令构造（纯函数）', () => {
         customArgs: '--port 8000 --ssl false',
       }),
     ).toBe('"C:/fake/node.exe" server.js --max-old-space-size=4096 --port 8000 --ssl false')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 进程输出接入终端日志 + auto_proxy（Bug#1 / Bug#5）
+// ---------------------------------------------------------------------------
+
+describe('executeCommand 进程输出回调', () => {
+  it('executeCommand 向 processManager 传递 onLine/onEvent，输出进入终端日志', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const lifecycle = makeLifecycle({ deps: harness.deps })
+    await lifecycle.startSt()
+
+    const options = harness.calls[0]
+    expect(typeof options?.onLine).toBe('function')
+    expect(typeof options?.onEvent).toBe('function')
+    options?.onLine?.({ stream: 'stdout', text: 'server listening on port 8000' })
+    options?.onLine?.({ stream: 'stderr', text: 'warn: legacy flag' })
+    options?.onEvent?.('E:/st $ git clone ...')
+    expect(logs).toContain('server listening on port 8000')
+    expect(logs).toContain('warn: legacy flag')
+    expect(logs).toContain('E:/st $ git clone ...')
+  })
+})
+
+describe('autoDetectProxy（auto_proxy 开启时）', () => {
+  beforeEach(() => {
+    stConfigMock.instance = null
+  })
+
+  afterEach(() => {
+    delete process.env.HTTPS_PROXY
+    delete process.env.HTTP_PROXY
+    delete process.env.ALL_PROXY
+  })
+
+  it('deps.stConfig 未注入 → 懒默认全局单例（不再静默失效）', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const config = makeConfig({ auto_proxy: true })
+    const lifecycle = makeLifecycle({ config, deps: harness.deps })
+    process.env.HTTPS_PROXY = 'http://127.0.0.1:7890'
+
+    await lifecycle.startSt()
+
+    expect(stConfigMock.instance?.proxyEnabled).toBe(true)
+    expect(stConfigMock.instance?.proxyUrl).toBe('http://127.0.0.1:7890')
+    expect(logs.some((message) => message.includes('自动设置代理: http://127.0.0.1:7890'))).toBe(true)
+  })
+
+  it('无代理环境变量 → 关闭代理并记录日志', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const config = makeConfig({ auto_proxy: true })
+    const lifecycle = makeLifecycle({ config, deps: harness.deps })
+
+    await lifecycle.startSt()
+
+    expect(stConfigMock.instance?.proxyEnabled).toBe(false)
+    expect(logs.some((message) => message.includes('未检测到有效的系统代理'))).toBe(true)
   })
 })
 
