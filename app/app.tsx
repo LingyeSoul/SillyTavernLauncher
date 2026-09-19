@@ -19,6 +19,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getConfigStore } from './services/configStore'
 import { stopAllProcessesSync } from './services/processManager'
+import { fetchAgreementDocument } from './services/agreement'
 import { checkForUpdates, fetchChangelog, normalizeVersion } from './services/updater'
 import { APP_VERSION } from './version'
 import { ThemeProvider } from './ui/theme'
@@ -55,6 +56,21 @@ function StartupFlow() {
     }
     if (!accepted || acceptedVersion !== cachedDate) {
       uiStateActions.openDialog({ kind: 'eula' })
+    } else if (process.env.STL_SKIP_AGREEMENT_RECHECK !== '1') {
+      // 缓存门通过也要后台核对远端协议版本（Bug#4：原实现只在弹窗时刷新缓存，
+      // 远端更新后已同意用户永不再弹；语义对齐 main.py check_first_launch 步骤2）
+      // STL_SKIP_AGREEMENT_RECHECK=1 供 E2E 种子环境禁用（种子日期 2099-01-01 与远端不符）
+      void (async () => {
+        try {
+          const remote = await fetchAgreementDocument()
+          if (remote && remote.date !== acceptedVersion) {
+            uiStateActions.openDialog({ kind: 'eula' })
+          }
+        } catch (err) {
+          // 已同意用户的核对失败仅记日志（main.py 同样只在无缓存时才弹网络错误）
+          console.error(`[startup] 后台核对协议版本失败: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      })()
     }
 
     // 3. 自动检查启动器更新（← version_checker.run_check）
@@ -122,7 +138,9 @@ process.on('exit', () => {
 const WINDOW_OPTIONS = {
   title: 'SillyTavernLauncher',
   width: 800,
-  height: 644,
+  // E2E 可加高窗口（STL_E2E_WINDOW_HEIGHT）：设置页为长表单，后台自动化模式下
+  // 视口外元素不可点（wheel 亦无效），加高一次性渲染完整表单以驱动开关/端口交互
+  height: Number(process.env.STL_E2E_WINDOW_HEIGHT ?? 644),
   resizable: false,
   // agent 驱动（GPUIX_BACKGROUND=1）时后台开窗，不抢焦点。
   // E2E 走 @gpuix/react/automation 的官方 launch()：stdio 协议在管道时自动监听，
