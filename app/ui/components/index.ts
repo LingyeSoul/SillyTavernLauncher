@@ -1,0 +1,18 @@
+/**
+ * ui/components 出口（barrel）。设计 §5：每个组件经 useTheme() 取 token，禁止内联色值。
+ */
+export { Button, type ButtonProps, type ButtonVariant } from './Button'
+export { Switch, type SwitchProps } from './Switch'
+export { Radio, type RadioProps } from './Radio'
+export { Checkbox, type CheckboxProps } from './Checkbox'
+export { Input, type InputProps } from './Input'
+export { Textarea, type TextareaProps } from './Textarea'
+export { Select, type SelectItem, type SelectProps } from './Select'
+export { Card, SectionTitle, type CardProps } from './Card'
+export { Modal, type ModalProps } from './Modal'
+export { EmptyState, type EmptyStateProps } from './EmptyState'
+export { ProgressBar, type ProgressBarProps } from './ProgressBar'
+export { SkeletonBlock, SkeletonCards } from './Skeleton'
+export { ToastHost } from './Toast'
+export { Tooltip, TooltipProvider } from './Tooltip'
+export { ICONS, type IconName } from './icons'

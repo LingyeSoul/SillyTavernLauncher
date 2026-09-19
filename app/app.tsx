@@ -1,0 +1,134 @@
+/**
+ * SillyTavernLauncher GPUIX 版入口（Phase 2 UI 组装）。
+ *
+ * - render() 结尾（幂等，--hot 安全；禁止 createRenderer()/init()）。
+ * - 800×644 固定窗 + 原生标题栏（D4；resizable: false 已验证存在于 renderer.rs）。
+ * - 启动流程（← main.py check_first_launch）：first_run → 欢迎问答；
+ *   未同意协议/协议版本变化 → EULA；checkupdate → 后台检查启动器更新；
+ *   autostart → 自动启动酒馆（D1 新语义：主窗口正常显示）。
+ *
+ * DEVIATION: GPUIX 0.9.0 无窗口关闭拦截（onClose），窗口 X = 进程直接退出，
+ *   无法挂退出确认。退出保护收敛到侧栏 footer 的"退出启动器"显式入口
+ *   （exitConfirm 确认后 stopAllProcesses + process.exit）；窗口 X 直接退出
+ *   视为已知行为（迁移计划 D1 行为定义第 1 条：关窗 = 停止所有子进程并退出——
+ *   原生退出路径上 processManager 的 exit 钩子仍会同步硬杀子进程）。
+ */
+import { useEffect } from 'react'
+import { render } from '@gpuix/react'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { getConfigStore } from './services/configStore'
+import { stopAllProcessesSync } from './services/processManager'
+import { checkForUpdates, fetchChangelog, normalizeVersion } from './services/updater'
+import { APP_VERSION } from './version'
+import { ThemeProvider } from './ui/theme'
+import { AppShell } from './ui/shell/AppShell'
+import { DialogHost } from './ui/dialogs/DialogHost'
+import { TooltipProvider } from './ui/components/Tooltip'
+import { useStState } from './stores/stState'
+import { uiStateActions } from './stores/uiState'
+
+const RELEASES_URL = 'https://github.com/LingyeSoul/SillyTavernLauncher/releases/latest'
+
+/** ← main.py check_first_launch 的启动对话框序列 */
+function StartupFlow() {
+  useEffect(() => {
+    const config = getConfigStore()
+
+    // 1. 首次运行 → 欢迎问答
+    if (config.get<boolean>('first_run', true)) {
+      uiStateActions.openDialog({ kind: 'welcome' })
+    }
+
+    // 2. 未同意协议 或 协议版本变化 → EULA（缓存日期 vs 已同意版本）
+    const accepted = config.get<boolean>('agreement_accepted', false)
+    const acceptedVersion = config.get<string>('agreement_version', '')
+    let cachedDate = ''
+    try {
+      const cachePath = join(process.cwd(), 'agreement_cache.json')
+      if (existsSync(cachePath)) {
+        const cache = JSON.parse(readFileSync(cachePath, 'utf8')) as { date?: unknown }
+        if (typeof cache.date === 'string') cachedDate = cache.date
+      }
+    } catch {
+      // 缓存损坏按无缓存处理
+    }
+    if (!accepted || acceptedVersion !== cachedDate) {
+      uiStateActions.openDialog({ kind: 'eula' })
+    }
+
+    // 3. 自动检查启动器更新（← version_checker.run_check）
+    if (config.get<boolean>('checkupdate', true)) {
+      void (async () => {
+        try {
+          const current = normalizeVersion(APP_VERSION)
+          const result = await checkForUpdates({ currentVersion: current })
+          if (result.has_error || !result.has_update || result.latest_version === null) return
+          const changelog = await fetchChangelog({ currentVersion: current })
+          uiStateActions.openDialog({
+            kind: 'updateAvailable',
+            currentVersion: current,
+            latestVersion: result.latest_version,
+            changelog,
+            downloadUrl: RELEASES_URL,
+          })
+        } catch (err) {
+          console.error(`[startup] 检查更新失败: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      })()
+    }
+
+    // 4. 自动启动酒馆（D1 新语义：主窗口正常显示）
+    if (config.get<boolean>('autostart', false)) {
+      void useStState.getState().startSt()
+    }
+  }, [])
+  return null
+}
+
+function App() {
+  return (
+    <ThemeProvider>
+      <TooltipProvider>
+        {/* 单一根节点：多个根级兄弟中出现 <anchored>（FloatingLayer）时，
+            GPUI 原生树会只保留浮层子树——外壳必须包在一个根 div 内。
+            position relative 与 Tooltip/Select 的浮层父容器模式保持一致。 */}
+        <div
+          style={{
+            width: '100%',
+            height: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            position: 'relative',
+          }}>
+          <StartupFlow />
+          <AppShell />
+          <DialogHost />
+        </div>
+      </TooltipProvider>
+    </ThemeProvider>
+  )
+}
+
+// 原生退出路径的兜底：窗口 X 直接退出时同步硬杀子进程（← terminal.py 退出钩子语义）
+process.on('exit', () => {
+  try {
+    stopAllProcessesSync()
+  } catch {
+    // 解释器关闭阶段尽力而为
+  }
+})
+
+const WINDOW_OPTIONS = {
+  title: 'SillyTavernLauncher',
+  width: 800,
+  height: 644,
+  resizable: false,
+  // agent 驱动（GPUIX_BACKGROUND=1）时后台开窗，不抢焦点。
+  // E2E 走 @gpuix/react/automation 的官方 launch()：stdio 协议在管道时自动监听，
+  // 应用侧无需任何 automation 分支（曾有的 createRenderer+enableAutomation 路径
+  // 会破坏对话框卸载后的树状态，已移除）。
+  focus: process.env.GPUIX_BACKGROUND !== '1',
+}
+
+render(<App />, WINDOW_OPTIONS)
