@@ -1,24 +1,32 @@
 /**
  * terminalLogs store（D3：完整缓冲 + 上限 10 万行软限制）。
  *
- * - 行级动画限流（§4.1 anti-pattern A4 对策）：append 时给"本批新增"行打 animate 标记；
- *   进程输出速率超过 60 行/秒持续 2 秒进入 flood 模式，全局禁用行级动画直到速率回落。
- * - 同时维护设计文档要求的 animateFromIndex（>= 该索引且 !floodMode 的行动画）与 floodMode。
- * - ANSI 解析 ← src/core/terminal.py parse_ansi_text（语义移植：SGR 颜色码 → 段数组；
- *   Python 的 Flet 色名换成 GPUIX 十六进制等值）。
+ * - 行级动画限流（§4.1 anti-pattern A4 对策）：引擎发射时给"本批新增"行打
+ *   animate 标记；输出速率超过 60 行/秒持续 2 秒进入 flood 模式，全局禁用
+ *   行级动画直到速率回落。同时维护 animateFromIndex 与 floodMode。
+ * - ANSI 解析已移交 services/terminalEngine（@xterm/headless 无头终端，
+ *   方案 B）：appendBatch 把行写入引擎，引擎异步发射"视觉行 + 颜色段"，
+ *   本模块只负责状态管理（id/flood/LRU）。← 旧版 parse_ansi_text 退役。
+ *   DEVIATION: 空文本行不再产生空白行记录（旧版 appendLine('') 会留空行），
+ *   与 readStreamLines 的 if (text) 跳过语义对齐。
  */
 import { create } from 'zustand'
+import {
+  createTerminalEngine,
+  type EngineRow,
+  type EngineSeg,
+} from '../services/terminalEngine'
 
-export interface AnsiSegment {
-  text: string
-  color?: string
-}
+export type { EngineSeg }
 
 export interface TerminalLine {
   id: number
+  /** 行纯文本（引擎段拼接；语义分级兜底与测试断言用） */
   text: string
+  /** 预解析颜色段（渲染数据；无色行由视图按日志级别兜底着色） */
+  segs: EngineSeg[]
   stream: 'stdout' | 'stderr'
-  /** 本行是否播放入场动画（append 时按 flood 状态决定） */
+  /** 本行是否播放入场动画（引擎发射时按 flood 状态决定） */
   animate: boolean
 }
 
@@ -27,50 +35,6 @@ export const MAX_LINES = 100_000
 /** flood 判定：滑动窗口内速率（行/秒）超过该值持续 FLOOD_WINDOW_MS 进入 flood 模式 */
 export const FLOOD_RATE = 60
 export const FLOOD_WINDOW_MS = 2000
-
-const ANSI_COLOR_RE = /\x1b\[([0-9;]*)m/g
-/**
- * 非 SGR 的 CSI 序列：直接剔除，避免日志区出现乱码方块。
- * 终结符取 CSI 全集 0x40-0x7E（含 ?25h/?25l 私有模式、r/d/G 等，修复原 [A-HJKSTfsu]
- * 缺终结符导致 \x1b[?25l 泄漏渲染成乱码）；SGR 终结符 m 用 (?!m) 排除留给彩色解析。
- * 参数字节 0x30-0x3F（含 :;<=>? 私有前缀），中间字节 0x20-0x2F。
- */
-const ANSI_OTHER_CSI_RE = /\x1b\[[0-9:;<=>?]*[ -/]*(?!m)[@-~]/g
-
-/** ← COLOR_MAP 的十六进制转写（深色底可见性优先） */
-const ANSI_COLORS: Record<string, string> = {
-  '30': '#929AA3',
-  '31': '#F18C96', '32': '#89C5A2', '33': '#E3BC75', '34': '#91B9EA',
-  '35': '#D8A8DF', '36': '#8FD4D4', '37': '#EEF0F2',
-  '90': '#929AA3', '91': '#F1A3AC', '92': '#A9DDBF', '93': '#EACD96',
-  '94': '#A9CBEF', '95': '#E2BEE7', '96': '#ACE4E4', '97': '#FFFFFF',
-}
-
-/**
- * 解析 ANSI 文本为带颜色的段数组（← parse_ansi_text）。
- * 复合 SGR（如 1;32）取最后一个被识别的颜色码（DEVIATION: Python 仅精确匹配单码）。
- */
-export function parseAnsiSegments(text: string): AnsiSegment[] {
-  if (!text) return []
-  const cleaned = text.replace(ANSI_OTHER_CSI_RE, '')
-  const segments: AnsiSegment[] = []
-  let currentColor: string | undefined
-  let lastIndex = 0
-  for (const match of cleaned.matchAll(ANSI_COLOR_RE)) {
-    const index = match.index ?? 0
-    const chunk = cleaned.slice(lastIndex, index)
-    if (chunk) segments.push({ text: chunk, color: currentColor })
-    const codes = (match[1] ?? '').split(';')
-    const last = codes[codes.length - 1] ?? ''
-    // '' / 0 = 全重置；39 = 前景恢复默认（49 背景默认未建模，自然为 no-op）
-    if (last === '' || last === '0' || last === '39') currentColor = undefined
-    else if (ANSI_COLORS[last]) currentColor = ANSI_COLORS[last]
-    lastIndex = index + match[0].length
-  }
-  const tail = cleaned.slice(lastIndex)
-  if (tail) segments.push({ text: tail, color: currentColor })
-  return segments
-}
 
 /** 行级语义分级（dt §1.E 日志行类名：error/warn/info/默认） */
 export type LogLevel = 'default' | 'error' | 'warning' | 'info'
@@ -93,56 +57,78 @@ interface TerminalLogsState {
 }
 
 let nextLineId = 1
-/** flood 检测的滑动窗口（append 时间戳） */
+/** flood 检测的滑动窗口（发射时间戳） */
 let appendTimestamps: number[] = []
 let floodUntil = 0
 
-function updateFloodState(): { flood: boolean } {
+function updateFloodState(rowCount: number): { flood: boolean } {
   const now = Date.now()
-  appendTimestamps.push(now)
+  // 每行一个时间戳（对齐旧版 appendLine 逐行计数的粒度，回调批量合并不失真）
+  for (let i = 0; i < rowCount; i++) appendTimestamps.push(now)
   appendTimestamps = appendTimestamps.filter((ts) => now - ts <= FLOOD_WINDOW_MS)
   const rate = appendTimestamps.length / (FLOOD_WINDOW_MS / 1000)
   if (rate > FLOOD_RATE) floodUntil = now + FLOOD_WINDOW_MS
   return { flood: now < floodUntil }
 }
 
-export const useTerminalLogs = create<TerminalLogsState>((set, get) => ({
+/** 引擎发射的视觉行落入 store（flood/LRU/动画契约在此统一收口） */
+function emitRows(rows: EngineRow[]): void {
+  if (rows.length === 0) return
+  const { flood } = updateFloodState(rows.length)
+  const { lines, animateFromIndex } = useTerminalLogs.getState()
+  const startIndex = lines.length
+  const newLines: TerminalLine[] = rows.map((row) => ({
+    id: nextLineId++,
+    text: row.text,
+    segs: row.segs,
+    stream: (row.tag as 'stdout' | 'stderr' | undefined) ?? 'stdout',
+    // flood 模式下本批全部禁用动画（A4 限流）
+    animate: !flood,
+  }))
+  let all = [...lines, ...newLines]
+  // 软限制：超 10 万行从头丢弃
+  if (all.length > MAX_LINES) all = all.slice(all.length - MAX_LINES)
+  useTerminalLogs.setState({
+    lines: all,
+    floodMode: flood,
+    animateFromIndex: flood ? all.length : Math.max(animateFromIndex, startIndex),
+  })
+}
+
+/** 引擎单例（clear/reset 时重建；渲染数据一律经 emitRows 入库） */
+let engine = createTerminalEngine(emitRows)
+
+export const useTerminalLogs = create<TerminalLogsState>(() => ({
   lines: [],
   animateFromIndex: 0,
   floodMode: false,
 
   appendBatch: (items) => {
-    if (items.length === 0) return
-    const { flood } = updateFloodState()
-    const { lines } = get()
-    const startIndex = lines.length
-    const newLines: TerminalLine[] = items.map((item) => ({
-      id: nextLineId++,
-      text: item.text,
-      stream: item.stream ?? 'stdout',
-      // flood 模式下本批全部禁用动画（A4 限流）
-      animate: !flood,
-    }))
-    let all = [...lines, ...newLines]
-    // 软限制：超 10 万行从头丢弃
-    if (all.length > MAX_LINES) all = all.slice(all.length - MAX_LINES)
-    set({
-      lines: all,
-      floodMode: flood,
-      animateFromIndex: flood ? all.length : Math.max(get().animateFromIndex, startIndex),
-    })
+    for (const item of items) {
+      engine.writeLine(item.text, item.stream)
+    }
   },
 
   appendLine: (text, stream = 'stdout') => {
-    get().appendBatch([{ text, stream }])
+    engine.writeLine(text, stream)
   },
 
   clear: () => {
+    engine.reset()
     appendTimestamps = []
     floodUntil = 0
-    set({ lines: [], animateFromIndex: 0, floodMode: false })
+    useTerminalLogs.setState({ lines: [], animateFromIndex: 0, floodMode: false })
   },
 }))
+
+/** 测试隔离：重建引擎 + 清空 store（对齐 configStore 的 __reset*ForTests 模式） */
+export function __resetTerminalLogsForTests(): void {
+  engine = createTerminalEngine(emitRows)
+  appendTimestamps = []
+  floodUntil = 0
+  nextLineId = 1
+  useTerminalLogs.setState({ lines: [], animateFromIndex: 0, floodMode: false })
+}
 
 /** 便捷引用（stLifecycle onLog 回调等非 React 上下文） */
 export const terminalLogsActions = {

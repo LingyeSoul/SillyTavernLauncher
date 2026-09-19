@@ -15,8 +15,8 @@ import { Tooltip } from '../components/Tooltip'
 import type { IconName } from '../components/icons'
 import {
   classifyLogLevel,
-  parseAnsiSegments,
   useTerminalLogs,
+  type EngineSeg,
   type TerminalLine,
 } from '../../stores/terminalLogs'
 import { useStState } from '../../stores/stState'
@@ -42,30 +42,23 @@ const TEXTS = {
   cancelStart: '用户取消启动',
 } as const
 
-interface Seg {
-  text: string
-  color?: string
-  weight?: number
-}
-
-/** 单行渲染：ANSI 段 = 相邻 <text>（合并一行特性）；行级语义色在无 ANSI 色时生效 */
+/** 单行渲染：引擎预解析段 = 相邻 <text>（合并一行特性）；无色行按日志级别兜底着色 */
 const LogRow = memo(function LogRow({ line }: { line: TerminalLine }) {
   const t = useTheme()
   const { enabled: motionEnabled } = useMotion()
-  const segs = useMemo<Seg[]>(() => {
-    const parsed = parseAnsiSegments(line.text)
-    if (parsed.some((s) => s.color !== undefined)) {
-      return parsed
-    }
-    // 无 ANSI 色 → 行级语义着色（dt §1.E）
+  const segs = useMemo<EngineSeg[]>(() => {
+    // 引擎已产出带样式的段 → 直接渲染；纯文本行 → 行级语义着色兜底（dt §1.E，
+    // 与旧版"无 ANSI 色才走级别着色"的行为一致）
+    if (line.segs.some((s) => s.color !== undefined || s.weight !== undefined)) return line.segs
+    if (line.segs.length === 0) return [{ text: line.text }]
     const level = classifyLogLevel(line.text)
-    if (level === 'default') return [{ text: line.text }]
+    if (level === 'default') return line.segs
     const color =
       level === 'error' ? t.status.error
       : level === 'warning' ? t.status.warning
       : t.status.info
     return [{ text: line.text, color, weight: level === 'error' ? 500 : undefined }]
-  }, [line.text, t])
+  }, [line.text, line.segs, t])
 
   const body = segs.map((s, i) => (
     <text
@@ -75,6 +68,7 @@ const LogRow = memo(function LogRow({ line }: { line: TerminalLine }) {
         fontFamily: t.font.mono,
         color: s.color ?? t.text.secondary,
         fontWeight: s.weight,
+        textDecoration: s.underline ? 'underline' : undefined,
       }}>
       {s.text}
     </text>
