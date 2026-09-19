@@ -38,7 +38,18 @@ export function Modal({
   const { width: windowWidth, height: windowHeight } = useWindowSize()
   const panelRef = useRef<PublicInstance | null>(null)
   const restoreRef = useRef<number | null>(null)
+  const closingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [closing, setClosing] = useState(false)
+
+  // 卸载时清掉未触发的退场定时器（避免卸载后仍回调 onClose 误弹掉上层对话框）
+  useEffect(() => {
+    return () => {
+      if (closingTimerRef.current != null) {
+        clearTimeout(closingTimerRef.current)
+        closingTimerRef.current = null
+      }
+    }
+  }, [])
 
   // 打开时记录焦点、关闭时恢复
   useEffect(() => {
@@ -59,12 +70,15 @@ export function Modal({
 
   const requestClose = (): void => {
     if (!onClose) return
+    // 退场中忽略重复触发（双 Escape 连弹两层对话框栈的根因）
+    if (closing) return
     if (!motionEnabled) {
       onClose()
       return
     }
     setClosing(true)
-    setTimeout(() => {
+    closingTimerRef.current = setTimeout(() => {
+      closingTimerRef.current = null
       setClosing(false)
       onClose()
     }, EXIT_MS)
