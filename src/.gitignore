@@ -3,3 +3,4 @@ dist/
 config.json
 config.json.tmp
 agreement_cache.json
+__shots__/
