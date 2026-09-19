@@ -27,10 +27,11 @@ type AppModule = {
   TooltipProvider: (props: { children: ReactNode }) => ReactElement
   useUiState: typeof import('../stores/uiState').useUiState
   useTerminalLogs: typeof import('../stores/terminalLogs').useTerminalLogs
+  useSettings: typeof import('../stores/settings').useSettings
 }
 
 async function loadApp(): Promise<AppModule> {
-  const [{ AppShell }, { DialogHost }, { ThemeProvider }, { TooltipProvider }, { useUiState }, { useTerminalLogs }] =
+  const [{ AppShell }, { DialogHost }, { ThemeProvider }, { TooltipProvider }, { useUiState }, { useTerminalLogs }, { useSettings }] =
     await Promise.all([
       import('../ui/shell/AppShell'),
       import('../ui/dialogs/DialogHost'),
@@ -38,8 +39,9 @@ async function loadApp(): Promise<AppModule> {
       import('../ui/components/Tooltip'),
       import('../stores/uiState'),
       import('../stores/terminalLogs'),
+      import('../stores/settings'),
     ])
-  return { AppShell, DialogHost, ThemeProvider, TooltipProvider, useUiState, useTerminalLogs }
+  return { AppShell, DialogHost, ThemeProvider, TooltipProvider, useUiState, useTerminalLogs, useSettings }
 }
 
 let testRoot: TestRoot
@@ -108,13 +110,17 @@ describe('AppShell 视图切换与终端（smoke）', () => {
     for (const id of ['nav-terminal', 'nav-version', 'nav-sync', 'nav-extensions', 'nav-settings', 'nav-about']) {
       expect(renderer.findByTestId(id)).toBeDefined()
     }
-    expect(renderer.findByText('SillyTavernLauncher')).toBeDefined()
+    // 品牌区已按要求移除：侧栏不再渲染 logo 与软件名（AboutView 仍保留品牌信息）
+    expect(renderer.findByText('SillyTavernLauncher')).toBeUndefined()
   })
 
   it('点击导航切换视图（terminal → settings → about）', async () => {
     expect(app.useUiState.getState().view).toBe('terminal')
     await clickTestId('nav-settings')
     expect(app.useUiState.getState().view).toBe('settings')
+    await settle()
+    // 分 tab 后镜像项在「启动器设置」页（默认激活「环境」页）
+    await clickTestId('settings-tab-launcher')
     await settle()
     expect(renderer.findByTestId('setting-mirror')).toBeDefined()
 
@@ -165,6 +171,97 @@ describe('AppShell 视图切换与终端（smoke）', () => {
     if (!stop) throw new Error('terminal-stop not found')
     // opacity 0.32 = disabled 表现（dt disabled-opacity）
     expect(Number(stop.style.opacity ?? 1)).toBeLessThanOrEqual(0.32 + 1e-9)
+  })
+})
+
+describe('设置页分 tab（smoke）', () => {
+  it('环境/酒馆/启动器三页切换，各自控件渲染且互斥', async () => {
+    await resetUiStack()
+    await clickTestId('nav-settings')
+    await settle()
+    // 默认「环境」页：环境开关与工具在页，酒馆/启动器项不在
+    expect(renderer.findByTestId('setting-use_sys_env')).toBeDefined()
+    expect(renderer.findByTestId('setting-check-env')).toBeDefined()
+    expect(renderer.findByTestId('setting-port')).toBeUndefined()
+
+    // 「酒馆设置」页：启动参数/网络/酒馆更新
+    await clickTestId('settings-tab-st')
+    await settle()
+    expect(renderer.findByTestId('setting-port')).toBeDefined()
+    expect(renderer.findByTestId('setting-custom-args')).toBeDefined()
+    expect(renderer.findByTestId('setting-stcheckupdate')).toBeDefined()
+    expect(renderer.findByTestId('setting-check-env')).toBeUndefined()
+
+    // 「启动器设置」页：更新源/启动器行为/终端
+    await clickTestId('settings-tab-launcher')
+    await settle()
+    expect(renderer.findByTestId('setting-mirror')).toBeDefined()
+    expect(renderer.findByTestId('setting-checkupdate')).toBeDefined()
+    expect(renderer.findByTestId('setting-terminal-font-size')).toBeDefined()
+    expect(renderer.findByTestId('setting-port')).toBeUndefined()
+    await resetUiStack()
+  })
+})
+
+describe('终端字体设置（smoke）', () => {
+  it('设置页渲染终端 section：字号/字体下拉 + 自定义输入 + 预览', async () => {
+    await resetUiStack()
+    await clickTestId('nav-settings')
+    // 终端 section 在「启动器设置」页
+    await clickTestId('settings-tab-launcher')
+    await settle()
+    for (const id of [
+      'setting-terminal-font-size',
+      'setting-terminal-font-family',
+      'setting-terminal-font-custom',
+      'setting-save-terminal-font',
+      'setting-terminal-font-preview',
+    ]) {
+      expect(renderer.findByTestId(id)).toBeDefined()
+    }
+    // 预览行即取即用当前设置（默认 12px / Consolas）
+    const preview = renderer.findByTestId('setting-terminal-font-preview')
+    if (!preview) throw new Error('preview not found')
+    expect(Number(preview.style.fontSize ?? 0)).toBe(12)
+  })
+
+  it('字号/字体族变更 → 日志行样式与渲染高度联动（闭环）', async () => {
+    await clickTestId('nav-terminal')
+    app.useTerminalLogs.getState().clear()
+    await settle()
+    app.useTerminalLogs.getState().appendBatch([{ text: 'font-smoke-line' }])
+    await settle()
+
+    // findByText 命中的是原生文本节点（无 style 记录）→ 行为断言走 bounds：
+    // 默认 12px 下的渲染高度
+    const el12 = renderer.findByText('font-smoke-line')
+    if (!el12) throw new Error('log line not rendered')
+    const bounds12 = renderer.getElementBounds(el12.id)
+    if (!bounds12) throw new Error('log line has no bounds at 12px')
+
+    app.useSettings.getState().update({ terminalFontSize: 18, terminalFontFamily: 'Cascadia Mono' })
+    await settle()
+
+    // 18px 下同一行渲染高度同比增大（字号真实进入布局，而非仅改 props）
+    const el18 = renderer.findByText('font-smoke-line')
+    if (!el18) throw new Error('log line lost after font change')
+    const bounds18 = renderer.getElementBounds(el18.id)
+    if (!bounds18) throw new Error('log line has no bounds at 18px')
+    expect(bounds18.height).toBeGreaterThan(bounds12.height)
+
+    // 样式探针：设置页预览行（<text> 元素本身带 testId，style 可读）
+    await clickTestId('nav-settings')
+    await clickTestId('settings-tab-launcher')
+    await settle()
+    const preview = renderer.findByTestId('setting-terminal-font-preview')
+    if (!preview) throw new Error('preview not found')
+    expect(Number(preview.style.fontSize ?? 0)).toBe(18)
+    expect(String(preview.style.fontFamily ?? '')).toBe('Cascadia Mono')
+
+    // 还原默认，避免污染后续用例；update 的 toast 副产物一并清空（单例槽位）
+    app.useSettings.getState().update({ terminalFontSize: 12, terminalFontFamily: '' })
+    await settle()
+    await resetUiStack()
   })
 })
 

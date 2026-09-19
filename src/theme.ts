@@ -2,7 +2,8 @@
  * src/theme.ts — Forge tokens 的 GPUIX 形态。
  *
  * 数值即契约，来源 docs/plans/2026-09-19-gpuix-ui-design.md §2（token 映射表）。
- * 偏离声明 O1–O5 见同文档 §1.C：侧栏 192、无顶栏、表单 padding 20/24、
+ * 偏离声明 O1–O5 见同文档 §1.C：侧栏 168（DEVIATION: O1 原设计 192，用户要求
+ * 改窄，NavItem/footer 布局预算 168 下均有富余）、无顶栏、表单 padding 20/24、
  * 微软雅黑 + Consolas、无玻璃态。
  */
 
@@ -54,7 +55,7 @@ export const radius = { sm: 4, md: 6, lg: 8, nav: 5, chip: 3 } as const
 export const space = { cardPad: 16, cardGap: 8, sectionGap: 16, navItemGap: 3, fieldGap: 8 } as const
 export const size = { controlH: 34, navItemH: 38, fieldH: 34, emptyMark: 72 } as const
 export const layout = {
-  windowW: 800, windowH: 644, sidebarW: 192,
+  windowW: 800, windowH: 644, sidebarW: 168,
   padFormX: 24, padFormY: 20, padTerminal: 12,
 } as const
 

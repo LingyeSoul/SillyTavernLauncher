@@ -30,11 +30,13 @@ import { logError } from './services/errorLog'
 import { stopAllProcessesSync } from './services/processManager'
 import { fetchAgreementDocument } from './services/agreement'
 import { checkForUpdates, fetchChangelog, normalizeVersion } from './services/updater'
+import { applyWindowIcon } from './services/windowIcon'
 import { APP_VERSION } from './version'
 import { ThemeProvider } from './ui/theme'
 import { AppShell } from './ui/shell/AppShell'
 import { DialogHost } from './ui/dialogs/DialogHost'
 import { TooltipProvider } from './ui/components/Tooltip'
+import { LOGO_DATA_URL } from './ui/assets/logo'
 import { useStState } from './stores/stState'
 import { uiStateActions } from './stores/uiState'
 
@@ -159,3 +161,8 @@ const WINDOW_OPTIONS = {
 }
 
 render(<App />, WINDOW_OPTIONS)
+
+// 原生标题栏/任务栏/Alt-Tab 图标（WM_SETICON）：render() 同步建窗后即可查找。
+// 仅 win32+Bun 生效，其余平台静默空操作；dataURL 解析与投递失败均在
+// applyWindowIcon 内部 catch（logError），不影响主流程。
+void applyWindowIcon(LOGO_DATA_URL, WINDOW_OPTIONS.title)

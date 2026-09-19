@@ -20,6 +20,7 @@ import {
   type TerminalLine,
 } from '../../stores/terminalLogs'
 import { useStState } from '../../stores/stState'
+import { terminalRowHeight, useSettings } from '../../stores/settings'
 import { useUiState } from '../../stores/uiState'
 import { getConfigStore } from '../../services/configStore'
 
@@ -46,6 +47,12 @@ const TEXTS = {
 const LogRow = memo(function LogRow({ line }: { line: TerminalLine }) {
   const t = useTheme()
   const { enabled: motionEnabled } = useMotion()
+  // 终端字体设置（字号/字体族，设置页即时生效）；空字体族回退主题 mono
+  const fontSize = useSettings((s) => s.terminalFontSize)
+  const fontFamilySetting = useSettings((s) => s.terminalFontFamily)
+  const fontFamily = fontFamilySetting || t.font.mono
+  // 行高（settings.terminalRowHeight 唯一来源，virtual-list 估算高度同源）
+  const rowHeight = terminalRowHeight(fontSize)
   const segs = useMemo<EngineSeg[]>(() => {
     // 引擎已产出带样式的段 → 直接渲染；纯文本行 → 行级语义着色兜底（dt §1.E，
     // 与旧版"无 ANSI 色才走级别着色"的行为一致）
@@ -64,8 +71,8 @@ const LogRow = memo(function LogRow({ line }: { line: TerminalLine }) {
     <text
       key={i}
       style={{
-        fontSize: 12,
-        fontFamily: t.font.mono,
+        fontSize,
+        fontFamily,
         color: s.color ?? t.text.secondary,
         fontWeight: s.weight,
         textDecoration: s.underline ? 'underline' : undefined,
@@ -75,7 +82,7 @@ const LogRow = memo(function LogRow({ line }: { line: TerminalLine }) {
   ))
 
   if (!line.animate || !motionEnabled) {
-    return <div style={{ padding: 1, minHeight: 18 }}>{body}</div>
+    return <div style={{ padding: 1, minHeight: rowHeight }}>{body}</div>
   }
   // M2 新日志行入场：200ms easeOut，top 4→0（translateY 等效）
   return (
@@ -83,7 +90,7 @@ const LogRow = memo(function LogRow({ line }: { line: TerminalLine }) {
       initial={{ opacity: 0, top: 4 }}
       animate={{ opacity: 1, top: 0 }}
       transition={{ duration: dur.logEnter, ease: EASE_OUT_QUAD }}
-      style={{ position: 'relative', padding: 1, minHeight: 18 }}>
+      style={{ position: 'relative', padding: 1, minHeight: rowHeight }}>
       {body}
     </motion.div>
   )
@@ -93,6 +100,9 @@ export function TerminalView() {
   const t = useTheme()
   const lines = useTerminalLogs((s) => s.lines)
   const clear = useTerminalLogs((s) => s.clear)
+  // 字号联动 virtual-list 估算高度（与 LogRow 行高同源：terminalRowHeight）
+  const fontSize = useSettings((s) => s.terminalFontSize)
+  const estimatedRowHeight = terminalRowHeight(fontSize)
   const running = useStState((s) => s.running)
   const installed = useStState((s) => s.installed)
   const busy = useStState((s) => s.busy)
@@ -208,7 +218,7 @@ export function TerminalView() {
           <virtual-list
             alignment="bottom"
             followTail
-            estimatedItemHeight={18}
+            estimatedItemHeight={estimatedRowHeight}
             style={{ flexGrow: 1, minHeight: 0, paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4 }}>
             {lines.map((line) => (
               <LogRow key={line.id} line={line} />

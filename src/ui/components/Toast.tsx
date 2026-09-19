@@ -1,7 +1,8 @@
 /**
  * ToastHost（设计 §5.11）：单例 + 队列，窗口右上 inset 12。
  * - 语义色只出现在 2px 左条 + 图标（B2 纪律：语义色表状态，不整面铺色）。
- * - 不自动消失（Forge timeout -1 原值）；进 240ms easeOut 上浮；退场 + 60ms 空档由 store 管理。
+ * - DEVIATION: 自动关闭由 store 按语义分级调度（uiState.TOAST_AUTO_MS）——
+ *   设计 §5.11 原值 timeout -1 仅手动关；进 240ms easeOut 上浮；退场 + 60ms 空档由 store 管理。
  *
  * GPUIX 0.9.0 约束（实测）：anchored surface 若被内容撑成窗口大小，会把基础树
  * 绘制裁剪到只剩 surface 上沿之外（外壳只见 8px 条，Modal 同理被遮罩掩盖）。

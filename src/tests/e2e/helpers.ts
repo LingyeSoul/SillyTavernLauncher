@@ -22,8 +22,9 @@ const HERE = fileURLToPath(new URL('.', import.meta.url))
 /** app.tsx 绝对路径：bun 按文件位置解析 src/node_modules，cwd 仅影响用户数据落盘 */
 export const APP_ENTRY = resolve(HERE, '../..', 'app.tsx')
 
-/** 截图输出目录（仓库内，提交用） */
+/** 截图输出目录（已 gitignore；mkdir 保证新克隆机器首跑截图用例不因缺目录失败 os error 3） */
 export const SHOTS_DIR = join(HERE, '__shots__')
+mkdirSync(SHOTS_DIR, { recursive: true })
 
 /** 预置协议缓存（EULA 离线可显示正文；日期与 setupCompleted 种子的 agreement_version 一致） */
 export const AGREEMENT_DATE = '2099-01-01'

@@ -10,6 +10,7 @@ import { APP_VERSION } from '../../version'
 import { uiStateActions } from '../../stores/uiState'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
+import { LOGO_DATA_URL } from '../assets/logo'
 
 const TEXTS = {
   title: '关于',
@@ -93,21 +94,12 @@ export function AboutView() {
         padding: 24,
       }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 320, gap: 10 }}>
-        {/* DEVIATION: 无 logo 位图资产，48×48 ember 圆角块 + "ST" 替位 */}
-        <div
-          style={{
-            width: 48,
-            height: 48,
-            borderRadius: 6,
-            backgroundColor: t.ember,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}>
-          <text style={{ fontSize: 18, fontWeight: 600, color: t.onPrimary, fontFamily: t.font.sans }}>
-            ST
-          </text>
-        </div>
+        {/* 官方 logo（设计 §4.6：img 48×48 r6） */}
+        <img
+          src={LOGO_DATA_URL}
+          alt="SillyTavernLauncher logo"
+          style={{ width: 48, height: 48, borderRadius: 6 }}
+        />
         <text style={{ fontSize: 20, fontWeight: 600, color: t.text.primary, fontFamily: t.font.sans }}>
           SillyTavernLauncher
         </text>
