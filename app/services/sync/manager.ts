@@ -68,6 +68,8 @@ export class DataSyncManager {
   isServerRunning = false
   syncStatus: SyncStatus = 'idle'
   lastSyncInfo: Record<string, unknown> = {}
+  /** 当前同步任务的取消控制器（存 manager 而非视图，视图卸载后仍可取消） */
+  private activeSyncAbort: AbortController | null = null
 
   serverEnabled = false
   serverPort = 9999
@@ -286,6 +288,14 @@ export class DataSyncManager {
     }
   }
 
+  /** 取消进行中的同步任务；无活动任务返回 false（Bug#2：句柄存 manager） */
+  cancelActiveSync(): boolean {
+    if (!this.activeSyncAbort) return false
+    this.activeSyncAbort.abort()
+    this.activeSyncAbort = null
+    return true
+  }
+
   /** ← sync_from_server */
   async syncFromServer(
     serverUrl: string,
@@ -298,6 +308,20 @@ export class DataSyncManager {
       console.error('[sync-manager] 错误: 服务器正在运行时无法同步数据')
       return false
     }
+    // 重入守卫：同步进行中禁止并发双写（视图卸载重建后尤其容易触发）
+    if (this.syncStatus === 'syncing') {
+      this.log('已有同步任务进行中，请先等待完成或取消', 'warning')
+      return false
+    }
+
+    // 取消句柄存 manager；外部传入的 signal 桥接到内部控制器
+    const internalAbort = new AbortController()
+    this.activeSyncAbort = internalAbort
+    if (options.signal) {
+      if (options.signal.aborted) internalAbort.abort()
+      else options.signal.addEventListener('abort', () => internalAbort.abort(), { once: true })
+    }
+    const signal = internalAbort.signal
 
     try {
       this.syncStatus = 'syncing'
@@ -308,14 +332,14 @@ export class DataSyncManager {
       })
 
       // Check server health
-      if (!(await client.checkServerHealth(options.signal))) {
+      if (!(await client.checkServerHealth(signal))) {
         this.log('无法连接到服务器或服务器不健康', 'error')
         this.syncStatus = 'error'
         return false
       }
 
       // Get server info
-      const serverInfo = await client.getServerInfo(options.signal)
+      const serverInfo = await client.getServerInfo(signal)
       if (serverInfo) {
         const info = serverInfo.server_info ?? { file_count: 0, total_size: 0 }
         this.log('服务器信息:', 'info')
@@ -339,7 +363,7 @@ export class DataSyncManager {
       const success = await client.sync({
         preferZip: method === 'auto' || method === 'zip',
         backup,
-        signal: options.signal,
+        signal,
       })
 
       this.lastSyncInfo = { ...this.lastSyncInfo, success }
@@ -356,6 +380,8 @@ export class DataSyncManager {
       this.log(`数据同步过程中发生错误: ${err instanceof Error ? err.message : String(err)}`, 'error')
       this.syncStatus = 'error'
       return false
+    } finally {
+      this.activeSyncAbort = null
     }
   }
 
