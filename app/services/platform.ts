@@ -154,6 +154,10 @@ export async function copyToClipboard(text: string): Promise<boolean> {
 /**
  * 启动命令行窗口（← event.py start_cmd）：cmd.exe /k + PATH 前置便携 env +
  * chcp 65001。需要新控制台窗口（detached），不收集输出。
+ *
+ * Bug#11：Bun.spawn 无 detached 语义（选项被静默忽略，实测 scripts/verify-detached.ts——
+ * 父进程退出连带杀掉 cmd 窗口）；node:child_process 的 detached 在 Bun 运行时下同样有效，
+ * 故两个运行时统一走 nodeSpawn detached。
  */
 export function launchCommandLine(prependDirs: string[]): boolean {
   const newEnv: Record<string, string | undefined> = { ...process.env }
@@ -164,21 +168,11 @@ export function launchCommandLine(prependDirs: string[]): boolean {
     process.env.COMSPEC ?? `${process.env.SystemRoot ?? 'C:\Windows'}\System32\cmd.exe`
   try {
     const command = 'chcp 65001 >nul && echo 环境变量已设置，欢迎使用！ && cmd /k'
-    if (hasBun) {
-      Bun.spawn([cmdExecutable, '/k', command], {
-        env: newEnv as Record<string, string>,
-        windowsHide: false,
-        stdin: 'ignore',
-        stdout: 'ignore',
-        stderr: 'ignore',
-      })
-    } else {
-      nodeSpawn(
-        cmdExecutable,
-        ['/k', command],
-        { env: newEnv, detached: true, stdio: 'ignore', windowsHide: false },
-      ).unref()
-    }
+    nodeSpawn(
+      cmdExecutable,
+      ['/k', command],
+      { env: newEnv, detached: true, stdio: 'ignore', windowsHide: false },
+    ).unref()
     return true
   } catch (err) {
     console.error(`[platform] 启动命令行失败: ${err instanceof Error ? err.message : String(err)}`)
