@@ -1,2 +1,0 @@
-VERSION = 'v1.3.11测试版3'
-RELEASES_VERSION = 'v1.3.10'
