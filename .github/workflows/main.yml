@@ -1,208 +1,30 @@
-name: Build Windows Flet App
+name: CI
 
 on:
-  release:
-    types: [created]
+  push:
+    branches: [main, dev]
+  pull_request:
   workflow_dispatch:
 
 jobs:
-  build-windows:
+  test:
+    name: Typecheck & Unit Tests (Windows)
     runs-on: windows-latest
-    permissions:
-      contents: write
-    env:
-      APP_NAME: SillyTavernLauncher
-      PRODUCT_NAME: "酒馆启动器"
-      COMPANY_NAME: LingyeSoul
-      ICON_PATH: src/assets/icon.ico
-      DIST_PATH: dist
-      COPYRIGHT: "Copyright (c) 2026 LingyeSoul"
-
+    defaults:
+      run:
+        working-directory: src
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Clean workspace
-        run: |
-          if (Test-Path $env:DIST_PATH) { Remove-Item -Recurse -Force $env:DIST_PATH }
-          if (Test-Path *.zip) { Remove-Item -Force *.zip }
-        shell: pwsh
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
 
-      - name: Cache GitVersion
-        uses: actions/cache@v4
-        with:
-          path: C:\GitVersion
-          key: gitversion-5.x
-          restore-keys: gitversion-
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
-      - name: Install GitVersion
-        uses: gittools/actions/gitversion/setup@v0.9.13
-        with:
-          versionSpec: '5.x'
+      - name: Typecheck
+        run: bun run typecheck
 
-      - name: Get version number
-        id: gitversion
-        uses: gittools/actions/gitversion/execute@v0.9.13
-
-      - name: Extract version info
-        run: |
-          echo "SEMVER=${{ steps.gitversion.outputs.SemVer }}" >> $GITHUB_ENV
-          echo "MAJOR=${{ steps.gitversion.outputs.Major }}" >> $GITHUB_ENV
-          echo "MINOR=${{ steps.gitversion.outputs.Minor }}" >> $GITHUB_ENV
-          echo "PATCH=${{ steps.gitversion.outputs.Patch }}" >> $GITHUB_ENV
-        shell: bash
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Upgrade pip and install dependencies
-        run: |
-          # Upgrade pip
-          python -m pip install --upgrade pip
-
-          # Install packages from requirements.txt
-          pip install -r requirements.txt
-
-          # Install custom flet-cli
-          pip install git+https://github.com/LingyeSoul/flet_cli.git@main
-
-          # Install flet-desktop
-          pip install flet-desktop==0.82.2
-
-          # Install Nuitka and dependencies
-          pip install -U Nuitka==2.8.10 pefile pyinstaller
-
-          # Verify installation
-          echo "=== Installed flet-cli info ==="
-          pip show flet-cli
-          echo "=== Verifying flet command ==="
-          flet --version
-          flet pack --help
-        shell: pwsh
-
-      - name: Package application
-        run: |
-          flet packn src/main.py `
-            --icon "$env:ICON_PATH" `
-            --name "$env:APP_NAME" `
-            --product-name "$env:PRODUCT_NAME" `
-            --file-description "$env:APP_NAME $env:PRODUCT_NAME" `
-            --product-version "$env:SEMVER" `
-            --copyright "$env:COPYRIGHT" `
-            --distpath "$env:DIST_PATH" `
-            --yes
-        shell: pwsh
-
-      - name: Check packaging results
-        run: |
-          Write-Host "=== Check dist directory structure ==="
-          if (Test-Path $env:DIST_PATH) {
-            Get-ChildItem -Path $env:DIST_PATH -Recurse | ForEach-Object { Write-Host $_.FullName }
-            
-            # Check if main.dist directory exists
-            $mainDistPath = Join-Path $env:DIST_PATH "main.dist"
-            if (Test-Path $mainDistPath) {
-              Write-Host "✅ Found main.dist directory"
-              Write-Host "=== main.dist directory contents ==="
-              Get-ChildItem -Path $mainDistPath | ForEach-Object { Write-Host $_.Name }
-            } else {
-              Write-Host "❌ main.dist directory not found"
-              Write-Host "=== Direct contents of dist directory ==="
-              Get-ChildItem -Path $env:DIST_PATH | ForEach-Object { Write-Host $_.Name }
-            }
-          } else {
-            Write-Host "❌ dist directory does not exist"
-          }
-        shell: pwsh
-
-      - name: Compress dist to ZIP (handle Nuitka output)
-        id: compress_dist
-        run: |
-          $zipName = "$env:APP_NAME-win-v${{ env.SEMVER }}.zip"
-          
-          # Check packaging structure and compress accordingly
-          $mainDistPath = Join-Path $env:DIST_PATH "main.dist"
-          if (Test-Path $mainDistPath) {
-            Write-Host "📦 Detected Nuitka packaging structure, compressing main.dist directory"
-            Compress-Archive -Path "$mainDistPath\*" -DestinationPath $zipName -Force
-          } else {
-            Write-Host "📦 Standard packaging structure, compressing entire dist directory"
-            Compress-Archive -Path "$env:DIST_PATH\*" -DestinationPath $zipName -Force
-          }
-          
-          "zip_name=$zipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          Write-Host "✅ ZIP file created: $zipName"
-        shell: pwsh
-
-      - name: Validate ZIP file
-        run: |
-          $path = "${{ steps.compress_dist.outputs.zip_name }}"
-          if (-Not (Test-Path $path)) {
-              throw "❌ ZIP file not generated: $path"
-          }
-          $size = (Get-Item $path).Length / 1MB
-          Write-Host "✅ ZIP file exists: $path (Size: $([math]::Round($size, 2)) MB)"
-          
-          # Optional: Check ZIP file contents
-          Write-Host "=== ZIP file contents ==="
-          try {
-            Add-Type -AssemblyName System.IO.Compression.FileSystem
-            $zip = [System.IO.Compression.ZipFile]::OpenRead($path)
-            $zip.Entries | ForEach-Object { Write-Host $_.FullName }
-            $zip.Dispose()
-          } catch {
-            Write-Host "⚠️ Unable to inspect ZIP contents in detail, but file exists"
-          }
-        shell: pwsh
-
-      - name: Get current time (Shanghai timezone, Chinese format)
-        id: timestamp
-        run: |
-          $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById("China Standard Time")
-          $now = [System.TimeZoneInfo]::ConvertTimeFromUtc((Get-Date).ToUniversalTime(), $tz)
-          $formatted = $now.ToString("yyyy年MM月dd日 HH时mm分ss秒")
-          "now=$formatted" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-        shell: pwsh
-
-      - name: Generate changelog with commit links (last 5 commits)
-        id: changelog
-        run: |
-          $repo = "${{ github.repository }}"
-          $log = git log --pretty=format:"* [`%h`](https://github.com/$repo/commit/%H) %s (%an)" -n 5
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "log<<EOF"
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "$log"
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "EOF"
-        shell: pwsh
-
-      - name: Create Release and upload ZIP (only on release trigger)
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ steps.compress_dist.outputs.zip_name }}
-          tag_name: v${{ env.SEMVER }}
-          name: 🚀 酒馆启动器 v${{ env.SEMVER }}
-          generate_release_notes: false
-          body: |
-            ## 📦 构建信息
-            - **版本号**: v${{ env.SEMVER }}
-            - **打包时间**: ${{ steps.timestamp.outputs.now }}
-            - **构建平台**: Windows (GitHub Actions)
-            - **打包工具**: Flet + Nuitka via custom flet-cli
-
-            ## 🛠️ 最近更新（最近 5 条提交）
-            ${{ steps.changelog.outputs.log }}
-
-            > 💡 如需完整变更日志，请查看 [commit 历史](https://github.com/${{ github.repository }}/commits/main)。
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Artifact (for debugging or download)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.APP_NAME }}-windows-v${{ env.SEMVER }}
-          path: ${{ steps.compress_dist.outputs.zip_name }}
-          if-no-files-found: error
+      - name: Unit tests
+        run: bunx vitest run --project unit
