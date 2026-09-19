@@ -20,8 +20,6 @@ export interface TerminalLine {
   stream: 'stdout' | 'stderr'
   /** 本行是否播放入场动画（append 时按 flood 状态决定） */
   animate: boolean
-  /** ANSI 解析后的段（null = 未解析，渲染时惰性解析） */
-  segments: AnsiSegment[] | null
 }
 
 /** ← terminal.py 的软限制等价物：内存完整缓冲，10 万行 LRU */
@@ -31,8 +29,13 @@ export const FLOOD_RATE = 60
 export const FLOOD_WINDOW_MS = 2000
 
 const ANSI_COLOR_RE = /\x1b\[([0-9;]*)m/g
-/** 非 SGR 的 CSI 序列（光标移动等）：直接剔除，避免日志区出现乱码方块 */
-const ANSI_OTHER_CSI_RE = /\x1b\[[0-9;?]*[A-HJKSTfsu]/g
+/**
+ * 非 SGR 的 CSI 序列：直接剔除，避免日志区出现乱码方块。
+ * 终结符取 CSI 全集 0x40-0x7E（含 ?25h/?25l 私有模式、r/d/G 等，修复原 [A-HJKSTfsu]
+ * 缺终结符导致 \x1b[?25l 泄漏渲染成乱码）；SGR 终结符 m 用 (?!m) 排除留给彩色解析。
+ * 参数字节 0x30-0x3F（含 :;<=>? 私有前缀），中间字节 0x20-0x2F。
+ */
+const ANSI_OTHER_CSI_RE = /\x1b\[[0-9:;<=>?]*[ -/]*(?!m)[@-~]/g
 
 /** ← COLOR_MAP 的十六进制转写（深色底可见性优先） */
 const ANSI_COLORS: Record<string, string> = {
@@ -59,7 +62,8 @@ export function parseAnsiSegments(text: string): AnsiSegment[] {
     if (chunk) segments.push({ text: chunk, color: currentColor })
     const codes = (match[1] ?? '').split(';')
     const last = codes[codes.length - 1] ?? ''
-    if (last === '' || last === '0') currentColor = undefined // 重置
+    // '' / 0 = 全重置；39 = 前景恢复默认（49 背景默认未建模，自然为 no-op）
+    if (last === '' || last === '0' || last === '39') currentColor = undefined
     else if (ANSI_COLORS[last]) currentColor = ANSI_COLORS[last]
     lastIndex = index + match[0].length
   }
@@ -118,7 +122,6 @@ export const useTerminalLogs = create<TerminalLogsState>((set, get) => ({
       stream: item.stream ?? 'stdout',
       // flood 模式下本批全部禁用动画（A4 限流）
       animate: !flood,
-      segments: null,
     }))
     let all = [...lines, ...newLines]
     // 软限制：超 10 万行从头丢弃
