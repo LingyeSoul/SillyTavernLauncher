@@ -18,13 +18,9 @@ afterEach(async () => {
 })
 
 describe('终端按钮异常路径（无 SillyTavern 环境）', () => {
-  // BUG-T1（未决）：年龄确认流程通过（age-confirm 弹出/勾选/确认均成功，
-  // has_started_st 落盘验证见用例后半段），但之后「SillyTavern未安装」反馈 10s 未出现。
-  // 静态链路正确（checkAndStartSt not-installed → log + pushToast warning）；
-  // 怀疑 ageConfirm 的 onConfirm 未接 startSt，或 checkForStUpdate 在无 ST 目录时
-  // 挂起（setupCompleted 种子 stcheckupdate=false 应走 startSt 直启路径）。
-  // 下轮排查：在 age-confirm click 后轮询 toast 区域 + 终端日志行文本。
-  it.skip('启动 → 年龄确认 → 未安装错误反馈（不崩溃）；安装 → 确认框 → 取消留痕（BUG-T1）', async () => {
+  // BUG-T1 复核：静态链路完整（onConfirm → has_started_st 落盘 → startSt →
+  // not-installed 日志 + toast；getByText 为子串匹配）。取消 skip 实跑验证。
+  it('启动 → 年龄确认 → 未安装错误反馈（不崩溃）；安装 → 确认框 → 取消留痕（BUG-T1）', async () => {
     session = await launchE2E({ setupCompleted: true })
     const app = session.app
 

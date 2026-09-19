@@ -108,7 +108,9 @@ function seedConfig(): Record<string, unknown> {
  * 启动被测应用。断言失败/超时都会先 cleanup 再抛出（由调用方 afterEach 兜底）。
  */
 export async function launchE2E(options: LaunchOptions = {}): Promise<E2ESession> {
-  const tempDir = mkdtempSync(join(tmpdir(), 'stl-e2e-'))
+  // 前缀禁用连字符：validatePathForNpm 把 '-' 列为 NPM 不支持字符（1:1 移植 Python），
+  // 带连字符的临时 cwd 会让 startSt/installSt 走路径校验失败分支（BUG-T1 根因）
+  const tempDir = mkdtempSync(join(tmpdir(), 'stle2e'))
   const configPath = join(tempDir, 'config.json')
   const agreementCachePath = join(tempDir, 'agreement_cache.json')
   const stConfigPath = join(tempDir, 'SillyTavern', 'config.yaml')
@@ -134,6 +136,9 @@ export async function launchE2E(options: LaunchOptions = {}): Promise<E2ESession
       cwd: tempDir,
       env: {
         GPUIX_BACKGROUND: '1',
+        // 禁用已同意用户的远端协议核对：种子日期 2099-01-01 与真实远端不符，
+        // 否则核对命中差异会在测试中途弹出 EULA 遮挡交互（与首启 EULA 流程无关）
+        STL_SKIP_AGREEMENT_RECHECK: '1',
         ...options.env,
       },
     }),

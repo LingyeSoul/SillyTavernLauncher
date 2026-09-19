@@ -35,12 +35,15 @@ async function expectToast(session: E2ESession, text: string, timeoutMs = 8_000)
 }
 
 describe('设置页交互', () => {
-  // BUG-S1（未决）：镜像切换的 toast「镜像配置已更新」可出现且可 dismiss，
-  // 但第 2 步切开关后「设置已保存」8s 未出现。怀疑 saveLauncherConfig() 失败走了
-  // 「配置保存失败，请检查文件写入权限」分支（stores/settings.ts:106 → :66），
-  // 或 toggle click 未生效。下轮排查：expectToast 超时时打印当前可见 toast 文案对比。
-  it.skip('切镜像/切开关/改端口保存 → 临时目录配置文件变化（BUG-S1）', async () => {
-    session = await launchE2E({ setupCompleted: true })
+  // BUG-S1 复核：取消 skip 实跑验证（saveLauncherConfig 走 configStore.save，
+  // 临时目录可写；toast 队列 300ms 衔接已由 expectToast 的 dismiss+400ms 处理）。
+  it('切镜像/切开关/改端口保存 → 临时目录配置文件变化（BUG-S1）', async () => {
+    // BUG-S1 根因是 Switch 轨道吞点击（已修 ui/components/Switch.tsx）；另需加高窗口：
+    // 设置页为长表单，644 高度下 checkupdate/端口行在视口外，后台自动化无法点击
+    session = await launchE2E({
+      setupCompleted: true,
+      env: { STL_E2E_WINDOW_HEIGHT: '1600' },
+    })
     const app = session.app
 
     await app.getByTestId('nav-settings').click()

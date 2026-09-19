@@ -1,6 +1,8 @@
 /**
  * Toggle / Switch（设计 §5.1）：轨道 32×18 · 圆点 14 · on=ember / off=bg-hover+1px subtle。
- * 圆点 pointerEvents:'none'（填充子元素铁律）；圆点滑动 = motion.div animate left（M3, 140ms）。
+ * 轨道/圆点 pointerEvents:'none'（填充子元素铁律）——修复 BUG-S1：GPUIX 命中测试解析到
+ * 最深可命中盒子，轨道 div 会吞掉点击（text/svg 会被跳过，div 盒子不会），事件到不了根
+ * 节点 onClick；轨道穿透后命中落在持有 onClick 的根节点。圆点滑动 = motion.div（M3）。
  */
 import { motion } from '@gpuix/react'
 import { useMotion, useTheme } from '../theme'
@@ -37,6 +39,7 @@ export function Switch({ on, onChange, label, disabled = false, testId }: Switch
           width: 32,
           height: 18,
           borderRadius: 9,
+          pointerEvents: 'none',
           backgroundColor: on ? t.ember : t.bg.hover,
           borderWidth: 1,
           borderColor: on ? t.ember : t.border.subtle,
