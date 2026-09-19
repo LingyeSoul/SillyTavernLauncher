@@ -23,7 +23,8 @@ const VIEW_MARKERS: Array<{ nav: string; marker: string; shot: string }> = [
   { nav: 'version', marker: 'version-refresh', shot: 'view-version.png' },
   { nav: 'sync', marker: 'sync-method', shot: 'view-sync.png' },
   { nav: 'extensions', marker: 'ext-git-install', shot: 'view-extensions.png' },
-  { nav: 'settings', marker: 'setting-mirror', shot: 'view-settings.png' },
+  // 分 tab 后默认「环境」页，以环境体检按钮为设置页标志元素
+  { nav: 'settings', marker: 'setting-check-env', shot: 'view-settings.png' },
   { nav: 'about', marker: 'about-check-update', shot: 'view-about.png' },
 ]
 

@@ -17,7 +17,8 @@ afterEach(async () => {
   }
 })
 
-/** 等待 toast 文案出现；出现后点关闭为下一条腾位（toast 单例排队且不自动消失） */
+/** 等待 toast 文案出现；出现后点关闭为下一条腾位（toast 单例排队；最短 4s 自动
+ *  驻留 > 250ms 轮询周期，断言必先于自动关闭命中。dismiss 若撞上自动到期仅无效） */
 async function expectToast(session: E2ESession, text: string, timeoutMs = 8_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
@@ -34,6 +35,25 @@ async function expectToast(session: E2ESession, text: string, timeoutMs = 8_000)
   }
 }
 
+/** 终端 section 在「启动器设置」tab 底部：窗口高度被屏幕钳制（如 1600 请求被压到
+ *  ~1047 逻辑高）时元素可能在视口外，click 的窗口坐标落空。先在主区滚动容器上定点
+ *  滚轮（固定窗口坐标，不依赖可能已滚出视口的元素；实测 deltaY 为负才向下滚），
+ *  直到目标 bounds 进入视口带（y≤700）。 */
+async function scrollSettingsIntoView(session: E2ESession, testId: string): Promise<void> {
+  let prevY = Number.POSITIVE_INFINITY
+  for (let i = 0; i < 12; i++) {
+    const b = await session.app.getByTestId(testId).bounds()
+    if (!b) throw new Error(`${testId} not found`)
+    if (b.y >= 0 && b.y <= 700) return
+    if (b.y >= prevY) throw new Error(`${testId} 滚动后 bounds 未收敛（y=${b.y}），wheel 可能未生效`)
+    prevY = b.y
+    // 主区内容固定点（侧栏 168 右侧、窗口中部），滚轮事件由 overflow:scroll 容器承接
+    await session.app.mouse.wheel({ x: 600, y: 500 }, 0, -500)
+    await sleep(250)
+  }
+  throw new Error(`${testId} 多次滚动后仍未进入视口`)
+}
+
 describe('设置页交互', () => {
   // BUG-S1 复核：取消 skip 实跑验证（saveLauncherConfig 走 configStore.save，
   // 临时目录可写；toast 队列 300ms 衔接已由 expectToast 的 dismiss+400ms 处理）。
@@ -47,6 +67,8 @@ describe('设置页交互', () => {
     const app = session.app
 
     await app.getByTestId('nav-settings').click()
+    // 镜像/更新检查在「启动器设置」tab（默认激活「环境」tab），先切 tab
+    await app.getByTestId('settings-tab-launcher').click()
     await app.getByTestId('setting-mirror').waitFor({ timeoutMs: 10_000 })
 
     // --- 1. 切镜像下拉：github → gh-proxy.org ---
@@ -66,7 +88,8 @@ describe('设置页交互', () => {
     cfg = session.readConfig()
     expect(cfg?.checkupdate, 'config.json checkupdate 应为 true').toBe(true)
 
-    // --- 3. 改端口并保存：8000 → 8123（落 ST 侧 config.yaml）---
+    // --- 3. 改端口并保存：8000 → 8123（落 ST 侧 config.yaml；端口在「酒馆设置」tab）---
+    await app.getByTestId('settings-tab-st').click()
     await app.getByTestId('setting-port').fill('8123')
     await app.getByTestId('setting-save-port').click()
     await expectToast(session, '端口已保存，重启酒馆后生效')
@@ -86,5 +109,47 @@ describe('设置页交互', () => {
     await app.getByTestId('error-close').click().catch(() => undefined)
 
     await app.screenshot({ path: join(SHOTS_DIR, 'settings-after.png') })
+  }, 120_000)
+
+  it('终端字体：字号下拉 + 自定义字体名保存 → config.json terminal.* 变化', async () => {
+    session = await launchE2E({
+      setupCompleted: true,
+      env: { STL_E2E_WINDOW_HEIGHT: '1600' },
+    })
+    const app = session.app
+
+    await app.getByTestId('nav-settings').click()
+    // 终端 section 在「启动器设置」tab，先切 tab
+    await app.getByTestId('settings-tab-launcher').click()
+    await app.getByTestId('setting-terminal-font-size').waitFor({ timeoutMs: 10_000 })
+
+    // --- 1. 字号下拉：默认 → 18 px（先滚入视口再交互）---
+    await scrollSettingsIntoView(session, 'setting-terminal-font-size')
+    await app.getByTestId('setting-terminal-font-size').click()
+    await app.getByText('18 px').waitFor({ timeoutMs: 5_000 })
+    await app.getByText('18 px').click()
+    await expectToast(session, '设置已保存')
+    let cfg = session.readConfig()
+    let terminal = cfg?.terminal as Record<string, unknown> | undefined
+    expect(terminal?.font_size, 'config.json terminal.font_size 应为 18').toBe(18)
+
+    // --- 2. 自定义字体名：JetBrains Mono 落盘 ---
+    await app.getByTestId('setting-terminal-font-custom').fill('JetBrains Mono')
+    await app.getByTestId('setting-save-terminal-font').click()
+    await expectToast(session, '设置已保存')
+    cfg = session.readConfig()
+    terminal = cfg?.terminal as Record<string, unknown> | undefined
+    expect(terminal?.font_family, 'config.json terminal.font_family 应为 JetBrains Mono').toBe('JetBrains Mono')
+
+    // --- 3. 空字体名被拦截（错误对话框，不落盘）---
+    await app.getByTestId('setting-terminal-font-custom').fill('   ')
+    await app.getByTestId('setting-save-terminal-font').click()
+    await app.getByText('字体名称不能为空').waitFor({ timeoutMs: 5_000 })
+    cfg = session.readConfig()
+    terminal = cfg?.terminal as Record<string, unknown> | undefined
+    expect(terminal?.font_family, '空字体名不得落盘').toBe('JetBrains Mono')
+    await app.getByTestId('error-close').click().catch(() => undefined)
+
+    await app.screenshot({ path: join(SHOTS_DIR, 'settings-terminal-font.png') })
   }, 120_000)
 })

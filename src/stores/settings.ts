@@ -24,12 +24,51 @@ export interface SettingsSnapshot {
   stcheckupdate: boolean
   autostart: boolean
   mirror: string
+  // 终端字体（config.json terminal.*，立即生效）
+  terminalFontSize: number
+  terminalFontFamily: string
   // SillyTavern config.yaml（stcfg 托管）
   listen: boolean
   stPort: number
   proxyUrl: string
   hostWhitelistEnabled: boolean
   unifiedWhitelist: boolean
+}
+
+// —— 终端字体设置域 ——
+
+/** 字号下拉预设（px）；UI 只出预设值，杜绝非法字号态 */
+export const TERMINAL_FONT_SIZE_PRESETS = [10, 11, 12, 13, 14, 16, 18] as const
+
+/** config.json 手改/损坏时的字号兜底窗口 */
+const TERMINAL_FONT_SIZE_MIN = 8
+const TERMINAL_FONT_SIZE_MAX = 32
+
+/** 自定义字体名长度上限（系统字体族名远短于此） */
+const TERMINAL_FONT_FAMILY_MAX = 64
+
+/** 脏值（NaN/越界/类型错）回退默认 12，防 minHeight NaN 打爆布局 */
+export function sanitizeTerminalFontSize(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n) || n < TERMINAL_FONT_SIZE_MIN || n > TERMINAL_FONT_SIZE_MAX) return 12
+  return Math.round(n)
+}
+
+/** 终端行高 = 字号 × 1.5 四舍五入（契约同默认 12→18）；LogRow 实际行高与 virtual-list 估算高度的唯一来源 */
+export function terminalRowHeight(fontSize: number): number {
+  return Math.round(fontSize * 1.5)
+}
+
+/** 自定义终端字体名校验：去首尾空白，非空且 ≤64 字符（允许空格/括号/中日文名） */
+export function validateTerminalFontFamily(
+  name: string,
+): { ok: true; value: string } | { ok: false; message: string } {
+  const trimmed = name.trim()
+  if (trimmed.length === 0) return { ok: false, message: '字体名称不能为空' }
+  if (trimmed.length > TERMINAL_FONT_FAMILY_MAX) {
+    return { ok: false, message: `字体名称过长（最多 ${TERMINAL_FONT_FAMILY_MAX} 个字符）` }
+  }
+  return { ok: true, value: trimmed }
 }
 
 const S = getConfigStore()
@@ -46,6 +85,8 @@ export function readSettings(): SettingsSnapshot {
     stcheckupdate: S.get<boolean>('stcheckupdate', true),
     autostart: S.get<boolean>('autostart', false),
     mirror: S.get<string>('github.mirror', 'github'),
+    terminalFontSize: sanitizeTerminalFontSize(S.get('terminal.font_size', 12)),
+    terminalFontFamily: S.get<string>('terminal.font_family', ''),
     listen: st.listen,
     stPort: st.port,
     proxyUrl: st.proxyUrl,
@@ -89,6 +130,8 @@ export const useSettings = create<SettingsState>((set) => ({
       stcheckupdate: 'stcheckupdate',
       autostart: 'autostart',
       mirror: 'github.mirror',
+      terminalFontSize: 'terminal.font_size',
+      terminalFontFamily: 'terminal.font_family',
       listen: null,
       stPort: null,
       proxyUrl: null,

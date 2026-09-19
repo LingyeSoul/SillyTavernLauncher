@@ -1,6 +1,7 @@
 /**
- * AppShell（设计 §3）：侧栏 192px（bg-deep + 右 1px border-subtle）+ 主区两种形态
- * （终端自管滚动 / 其余单滚动容器；全应用任何时刻只有一个垂直滚动容器，铁律）。
+ * AppShell（设计 §3）：侧栏 168px（DEVIATION: 原设计 192，用户要求改窄；bg-deep + 右 1px border-subtle）+ 主区三种形态
+ * （终端自管滚动 / 设置页自管滚动：标题+tab 栏固定、仅 tab 内容区滚动 / 其余单滚动
+ * 容器；全应用任何时刻只有一个垂直滚动容器，铁律——自管视图的外层不得再包 overflow:scroll）。
  * - footer：ST 状态芯片（运行中呼吸微光 = 全应用唯一无限动画实例 M7）+ 主题切换
  *   + 退出启动器入口（DEVIATION: GPUIX 无 onClose 拦截，窗口 X 直接退出为已知行为，
  *     退出保护收敛到主界面的显式入口走 exitConfirm）。
@@ -79,6 +80,17 @@ export function AppShell() {
         }}>
         {view === 'terminal' ? (
           <TerminalView />
+        ) : view === 'settings' ? (
+          // 设置页自管滚动（标题+tab 栏固定、仅 tab 内容滚动）：外层不包滚动容器
+          // （嵌套滚动禁止），M1 入场动画保留
+          <motion.div
+            key={view}
+            initial={{ opacity: 0, top: 6 }}
+            animate={{ opacity: 1, top: 0 }}
+            transition={{ duration: dur.enter, ease: EASE_OUT_QUAD }}
+            style={{ position: 'relative', flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            <SettingsView />
+          </motion.div>
         ) : (
           <div
             style={{
@@ -132,47 +144,15 @@ function Sidebar() {
         flexDirection: 'column',
         flexShrink: 0,
       }}>
-      {/* 品牌区（dt §1.A workspace-brand）：高 80 */}
-      <div
-        style={{
-          height: 80,
-          paddingLeft: 12,
-          display: 'flex',
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 10,
-        }}>
-        {/* DEVIATION: 仓库内无 logo 位图资产，用 32×32 ember 圆角块 + "ST" 字替位 */}
-        <div
-          style={{
-            width: 32,
-            height: 32,
-            borderRadius: 6,
-            backgroundColor: t.ember,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}>
-          <text style={{ fontSize: 13, fontWeight: 600, color: t.onPrimary, fontFamily: t.font.sans }}>
-            ST
-          </text>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <text style={{ fontSize: 17, fontWeight: 600, color: t.text.primary, fontFamily: t.font.sans }}>
-            SillyTavernLauncher
-          </text>
-          <text style={{ fontSize: 11, color: t.text.muted, fontFamily: t.font.sans }}>
-            启动器
-          </text>
-        </div>
-      </div>
-
+      {/* DEVIATION: 移除 dt §1.A workspace-brand 品牌区（logo + 软件名，高 80）——用户要求
+          侧栏左上角不放品牌标识；导航顶部以 14px 内边距代替原品牌区留白 */}
       {/* 导航（6 项单组，无分组标签） */}
       <div
         style={{
           display: 'flex',
           flexDirection: 'column',
           gap: 3,
+          paddingTop: 14,
           paddingLeft: 6,
           paddingRight: 6,
         }}>
