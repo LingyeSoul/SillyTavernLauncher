@@ -137,7 +137,7 @@ export function VersionView() {
 
       {error && (
         <text style={{ fontSize: 13, color: t.status.error, fontFamily: t.font.sans, marginBottom: 8 }}>
-          {TEXTS.loadFailed}: {error}
+          {`${TEXTS.loadFailed}: ${error}`}
         </text>
       )}
       <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 8 }}>
@@ -183,7 +183,7 @@ function VersionCard({ entry, current }: { entry: VersionEntry; current: boolean
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        height: 64,
+        minHeight: 64,
         paddingLeft: 16,
         paddingRight: 12,
         marginBottom: t.space.cardGap,
@@ -208,15 +208,17 @@ function VersionCard({ entry, current }: { entry: VersionEntry; current: boolean
           }}
         />
       )}
+      {/* GPUIX text 的多个字符串子节点会各生成独立文本节点纵向堆叠（无内联 run），
+          拼接文案必须合成单个模板字面量子节点，否则行数翻倍撑破卡片 */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
           <text style={{ fontSize: 13, fontWeight: 600, fontFamily: t.font.mono, color: t.text.primary }}>
-            v{entry.version}
+            {`v${entry.version}`}
           </text>
           <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>{date}</text>
         </div>
         <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>
-          {TEXTS.sourcePrefix} tag {entry.tag.tag_name}
+          {`${TEXTS.sourcePrefix} tag ${entry.tag.tag_name}`}
         </text>
       </div>
       <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 }}>

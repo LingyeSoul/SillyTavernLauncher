@@ -63,4 +63,20 @@ describe('六视图切换', () => {
     await app.getByTestId('nav-terminal').click()
     await app.getByTestId('terminal-start').waitFor({ timeoutMs: 5_000 })
   }, 120_000)
+
+  it('种子 git 仓库下版本视图渲染版本卡片', async () => {
+    session = await launchE2E({ setupCompleted: true, seedSt: true })
+    const app = session.app
+
+    await app.getByTestId('nav-version').click()
+    // 卡片渲染 = getStTags 成功（错误路径下只有 EmptyState，无 switch 按钮）。
+    // HEAD 携带 v1.18.0 → describe 判其为当前版本卡（[当前] 芯片，无 switch 按钮），
+    // 故断言另两张卡的 switch 按钮。
+    await app.getByTestId('version-switch-1.17.0').waitFor({ timeoutMs: 10_000 })
+    await app.getByTestId('version-switch-1.16.0').waitFor({ timeoutMs: 5_000 })
+
+    await sleep(300) // 视图入场动画（240ms）后截图
+    await app.screenshot({ path: join(SHOTS_DIR, 'view-version-cards.png') })
+    expectShotExists('view-version-cards.png')
+  }, 120_000)
 })

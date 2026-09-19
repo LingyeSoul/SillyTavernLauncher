@@ -8,7 +8,8 @@
  * - 子进程 pid 通过二次 initialize 握手获取（协议幂等，实测可用），
  *   用于退出检测与 cleanup 前的死亡确认（Windows 下子进程 cwd 会锁住临时目录）。
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -41,6 +42,13 @@ export interface LaunchOptions {
    * 只弹欢迎问答（欢迎对话框独占可见，便于单独截图/断言）。
    */
   welcomeOnly?: boolean
+  /**
+   * true → 在临时目录种一个带语义化 tag 的最小 SillyTavern git 仓库
+   * （v1.18.0/v1.17.0/v1.16.0 空提交 tag），版本视图据此渲染真实版本卡片；
+   * 同时把种子 config 的 use_sys_env 置 true（临时目录无便携 env/cmd/git.exe，
+   * 便携解析下所有 git 调用会失败走 EmptyState）。
+   */
+  seedSt?: boolean
   /** 追加子进程环境变量（如 EULA_COUNTDOWN_SECONDS=2 缩短倒计时） */
   env?: Record<string, string>
 }
@@ -105,6 +113,23 @@ function seedConfig(): Record<string, unknown> {
 }
 
 /**
+ * 在 tempDir/SillyTavern 下种最小 git 仓库（getStTags 仅要求 .git 存在 +
+ * git tag -l / git show 可用）。-c 内联身份与禁签名：不依赖宿主全局 git 配置。
+ * 三个 tag 各在链式提交上（而非同指一个 commit）：同 commit 多 tag 时
+ * describe --abbrev=0 返回字典序最小的 tag，会让"当前版本"卡不确定。
+ */
+function seedStRepo(tempDir: string): void {
+  const stDir = join(tempDir, 'SillyTavern')
+  mkdirSync(stDir, { recursive: true })
+  const identity = ['-c', 'user.name=stl-e2e', '-c', 'user.email=stl-e2e@test.local', '-c', 'commit.gpgsign=false']
+  execFileSync('git', ['init', '-q'], { cwd: stDir })
+  ;['v1.16.0', 'v1.17.0', 'v1.18.0'].forEach((tag, i) => {
+    execFileSync('git', [...identity, 'commit', '--allow-empty', '-q', '-m', `e2e seed ${i + 1}`], { cwd: stDir })
+    execFileSync('git', ['tag', tag], { cwd: stDir })
+  })
+}
+
+/**
  * 启动被测应用。断言失败/超时都会先 cleanup 再抛出（由调用方 afterEach 兜底）。
  */
 export async function launchE2E(options: LaunchOptions = {}): Promise<E2ESession> {
@@ -126,8 +151,10 @@ export async function launchE2E(options: LaunchOptions = {}): Promise<E2ESession
   if (options.setupCompleted) {
     const seed = seedConfig()
     if (options.welcomeOnly) seed.first_run = true
+    if (options.seedSt) seed.use_sys_env = true
     writeFileSync(configPath, JSON.stringify(seed, null, 4))
   }
+  if (options.seedSt) seedStRepo(tempDir)
 
   const app = await Promise.race([
     launch({

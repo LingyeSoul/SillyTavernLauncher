@@ -189,7 +189,7 @@ function ExtensionCard({ ext, onChanged }: { ext: ExtensionInfo; onChanged: () =
             {fields.displayName}
           </text>
           <text style={{ fontSize: 11, color: t.text.muted, fontFamily: t.font.mono }}>
-            v{fields.version}
+            {`v${fields.version}`}
           </text>
           {!ext.isValid && (
             <text style={{ fontSize: 11, color: t.status.warning, fontFamily: t.font.sans }}>
