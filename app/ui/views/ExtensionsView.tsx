@@ -9,7 +9,8 @@ import {
   getExtensionManager,
   type ExtensionInfo,
 } from '../../services/extensions'
-import { uiStateActions } from '../../stores/uiState'
+import { useTerminalLogs } from '../../stores/terminalLogs'
+import { uiStateActions, useUiState } from '../../stores/uiState'
 import { layout } from '../../theme'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
@@ -43,10 +44,13 @@ export function ExtensionsView() {
   const t = useTheme()
   const [globalExts, setGlobalExts] = useState<ExtensionInfo[]>([])
   const [userExts, setUserExts] = useState<ExtensionInfo[]>([])
+  // 安装/删除对话框完成后 bump 此计数，驱动本视图重扫（Bug#3：列表不刷新）
+  const extensionsVersion = useUiState((s) => s.extensionsVersion)
 
   const refresh = useCallback(() => {
+    // 日志统一进终端（Bug#7：原先只进 console）
     const manager = getExtensionManager({
-      log: (message) => console.log(`[extensions] ${message}`),
+      log: (message) => useTerminalLogs.getState().appendLine(message),
     })
     const all = manager.getAllExtensions()
     setGlobalExts(all.global)
@@ -55,7 +59,7 @@ export function ExtensionsView() {
 
   useEffect(() => {
     refresh()
-  }, [refresh])
+  }, [refresh, extensionsVersion])
 
   return (
     <div

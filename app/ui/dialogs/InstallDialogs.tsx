@@ -60,14 +60,17 @@ export function GitInstallDialog() {
       return
     }
     const extType: ExtensionType = target === 'global' ? 'global' : 'user'
+    // busy 态期间保持对话框可见（原实现先 closeTop，"安装中"反馈永不可见）
     setInstalling(true)
-    closeTop()
     void (async () => {
       const manager = getExtensionManager({
         log: (message) => useTerminalLogs.getState().appendLine(message),
       })
       const result = await manager.installFromGit(trimmed, extType)
       uiStateActions.pushToast(result.ok ? 'success' : 'error', result.message)
+      // 安装完成后 bump 计数驱动 ExtensionsView 重扫，再收起对话框
+      uiStateActions.bumpExtensions()
+      closeTop()
     })()
   }
 
@@ -76,10 +79,10 @@ export function GitInstallDialog() {
       open
       width={480}
       title={TEXTS.gitTitle}
-      onClose={closeTop}
+      onClose={installing ? undefined : closeTop}
       actions={
         <>
-          <Button variant="quiet" onClick={closeTop} testId="git-install-cancel">
+          <Button variant="quiet" disabled={installing} onClick={closeTop} testId="git-install-cancel">
             {TEXTS.cancel}
           </Button>
           <Button variant="primary" icon="download" disabled={installing} onClick={handleInstall} testId="git-install-confirm">
@@ -125,14 +128,16 @@ export function ZipInstallDialog() {
       return
     }
     const extType: ExtensionType = target === 'global' ? 'global' : 'user'
+    // busy 态期间保持对话框可见（同 Git 安装）
     setInstalling(true)
-    closeTop()
     void (async () => {
       const manager = getExtensionManager({
         log: (message) => useTerminalLogs.getState().appendLine(message),
       })
       const result = await manager.installFromZip(trimmed, extType)
       uiStateActions.pushToast(result.ok ? 'success' : 'error', result.message)
+      uiStateActions.bumpExtensions()
+      closeTop()
     })()
   }
 
@@ -141,10 +146,10 @@ export function ZipInstallDialog() {
       open
       width={480}
       title={TEXTS.zipTitle}
-      onClose={closeTop}
+      onClose={installing ? undefined : closeTop}
       actions={
         <>
-          <Button variant="quiet" onClick={closeTop} testId="zip-install-cancel">
+          <Button variant="quiet" disabled={installing} onClick={closeTop} testId="zip-install-cancel">
             {TEXTS.cancel}
           </Button>
           <Button variant="primary" icon="archive" disabled={installing} onClick={handleInstall} testId="zip-install-confirm">
