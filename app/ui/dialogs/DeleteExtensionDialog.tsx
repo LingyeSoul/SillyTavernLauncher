@@ -35,6 +35,8 @@ export function DeleteExtensionDialog({ ext }: DeleteExtensionDialogProps) {
     })
     const result = manager.deleteExtension(ext)
     uiStateActions.pushToast(result.ok ? 'success' : 'error', result.message)
+    // 删除完成后 bump 计数驱动 ExtensionsView 重扫
+    uiStateActions.bumpExtensions()
   }
 
   return (

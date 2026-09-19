@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   EXTENSION_NAME_RE,
   ExtensionManager,
+  __resetExtensionManagerForTests,
+  getExtensionManager,
   isPathUnder,
   safeExtensionPath,
   validateExtensionName,
@@ -394,5 +396,30 @@ describe('真实 fflate 往返（与 sync server 共用管线）', () => {
     const zipped = zipSync({ 'dir/file.txt': Buffer.from('hello 中文', 'utf8') })
     const unzipped = unzipSync(zipped)
     expect(Buffer.from(unzipped['dir/file.txt'] as Uint8Array).toString('utf8')).toBe('hello 中文')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 单例 getExtensionManager：晚到的 log 选项生效（Bug#7：first-wins 吞日志）
+// ---------------------------------------------------------------------------
+
+describe('getExtensionManager 单例（晚到 log 选项）', () => {
+  afterEach(() => {
+    __resetExtensionManagerForTests()
+  })
+
+  it('先以无 log 创建，再传 log → 后续操作日志进新回调', () => {
+    setupInstalledSt()
+    // 首次创建（无 log，模拟视图先到）；随后对话框传入 log
+    const first = getExtensionManager({ baseDir })
+    const messages: string[] = []
+    const second = getExtensionManager({ baseDir, log: (message) => messages.push(message) })
+    expect(second).toBe(first)
+
+    mkdirSync(join(second.getUserExtPath(), 'late-log'), { recursive: true })
+    writeFileSync(join(second.getUserExtPath(), 'late-log/index.js'), '// x', 'utf8')
+    const [ext] = second.scanExtensions('user')
+    expect(second.deleteExtension(ext as never).ok).toBe(true)
+    expect(messages.some((message) => message.includes('已删除扩展: late-log'))).toBe(true)
   })
 })

@@ -65,6 +65,10 @@ interface UiState {
   dialogs: DialogDescriptor[]
   openDialog: (dialog: DialogDescriptor) => void
   closeTopDialog: () => void
+
+  /** 扩展列表变更计数（安装/删除/移动后 bump，驱动 ExtensionsView 重扫） */
+  extensionsVersion: number
+  bumpExtensions: () => void
 }
 
 let nextToastId = 1
@@ -132,6 +136,9 @@ export const useUiState = create<UiState>((set, get) => ({
   dialogs: [],
   openDialog: (dialog) => set((s) => ({ dialogs: [...s.dialogs, dialog] })),
   closeTopDialog: () => set((s) => ({ dialogs: s.dialogs.slice(0, -1) })),
+
+  extensionsVersion: 0,
+  bumpExtensions: () => set((s) => ({ extensionsVersion: s.extensionsVersion + 1 })),
 }))
 
 /** 便捷引用（非 React 上下文内使用，如 store/service 回调） */
@@ -139,4 +146,5 @@ export const uiStateActions = {
   pushToast: (kind: ToastKind, message: string) => useUiState.getState().pushToast(kind, message),
   openDialog: (d: DialogDescriptor) => useUiState.getState().openDialog(d),
   closeTopDialog: () => useUiState.getState().closeTopDialog(),
+  bumpExtensions: () => useUiState.getState().bumpExtensions(),
 }

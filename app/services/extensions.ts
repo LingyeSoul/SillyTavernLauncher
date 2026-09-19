@@ -265,7 +265,7 @@ export interface ExtensionManagerOptions {
 export class ExtensionManager {
   private readonly baseDir: string
   private readonly getMirror: () => string
-  private readonly logFn: (message: string) => void
+  private logFn: (message: string) => void
   private readonly gitRunner: GitRunner
 
   constructor(options: ExtensionManagerOptions = {}) {
@@ -274,6 +274,11 @@ export class ExtensionManager {
       options.getMirror ?? (() => getConfigStore().get<string>('github.mirror', 'github'))
     this.logFn = options.log ?? (() => undefined)
     this.gitRunner = options.gitRunner ?? defaultGitRunner
+  }
+
+  /** 单例晚到的 log 选项也能生效（原 first-wins 会把后续回调静默丢弃） */
+  setLogFn(fn: (message: string) => void): void {
+    this.logFn = fn
   }
 
   private log(message: string): void {
@@ -792,10 +797,12 @@ export function lastIndexOfSignature(buf: Uint8Array, sig: number[]): number {
 
 let managerInstance: ExtensionManager | null = null
 
-/** ← get_extension_manager（单例；JS 单线程免锁） */
+/** ← get_extension_manager（单例；JS 单线程免锁）。晚到的 log 选项更新到现有实例 */
 export function getExtensionManager(options?: ExtensionManagerOptions): ExtensionManager {
   if (!managerInstance) {
     managerInstance = new ExtensionManager(options)
+  } else if (options?.log) {
+    managerInstance.setLogFn(options.log)
   }
   return managerInstance
 }
