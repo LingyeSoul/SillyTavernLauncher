@@ -154,6 +154,63 @@ describe('StConfig（← st/config.py stcfg）', () => {
     expect(saved.allowedRanges).not.toContain('192.168.42.*')
   })
 
+  it('ensurePrivateFilterForListen：listen 未开启 → ok 且不落盘（适配 ST private request filter）', async () => {
+    writeConfig('listen: false\n')
+    const config = new StConfig({ baseDir })
+    const before = readConfigText()
+    await expect(config.ensurePrivateFilterForListen()).resolves.toBe('ok')
+    expect(readConfigText()).toBe(before)
+  })
+
+  it('ensurePrivateFilterForListen：listen 开 + 过滤关（存量配置）→ 补开并补齐回环段，healed', async () => {
+    writeConfig(
+      ['listen: true', 'privateAddressWhitelist:', '  enabled: false', '  allowedRanges:', '    - 10.0.0.0/8', ''].join(
+        '\n',
+      ),
+    )
+    const config = new StConfig({ baseDir, getLocalIp: fakeIp('192.168.42.17') })
+
+    await expect(config.ensurePrivateFilterForListen()).resolves.toBe('healed')
+    expect(config.privateAddressWhitelistEnabled).toBe(true)
+    // 已有网段保留、回环段补齐；沿用最小权限语义，不自动加当前网段
+    expect(config.privateAddressAllowedRanges).toEqual(['10.0.0.0/8', ...DEFAULT_PRIVATE_ADDRESS_RANGES])
+
+    const saved = readConfigRoot().privateAddressWhitelist as Record<string, unknown>
+    expect(saved.enabled).toBe(true)
+    expect(saved.allowedRanges).toEqual(['10.0.0.0/8', ...DEFAULT_PRIVATE_ADDRESS_RANGES])
+  })
+
+  it('ensurePrivateFilterForListen：过滤已开启 → ok 且不落盘', async () => {
+    writeConfig(['listen: true', 'privateAddressWhitelist:', '  enabled: true', ''].join('\n'))
+    const config = new StConfig({ baseDir })
+    const before = readConfigText()
+    await expect(config.ensurePrivateFilterForListen()).resolves.toBe('ok')
+    expect(readConfigText()).toBe(before)
+  })
+
+  it('ensurePrivateFilterForListen：保存失败（目录不可创建）→ save-failed 且状态已置开', async () => {
+    // 挡路文件占住父路径：ensureDirSync 抛错 → save() 返回 false（不依赖 mock）
+    const blocker = join(tempDir, 'blocker')
+    writeFileSync(blocker, 'x', 'utf8')
+    const config = new StConfig({ baseDir: join(blocker, 'SillyTavern') })
+    config.listen = true
+
+    await expect(config.ensurePrivateFilterForListen()).resolves.toBe('save-failed')
+    expect(config.privateAddressWhitelistEnabled).toBe(true)
+  })
+
+  it('ensureLoopbackRanges：缺失补齐、已存在不重复', () => {
+    writeConfig(
+      ['privateAddressWhitelist:', '  allowedRanges:', '    - 127.0.0.0/8', ''].join('\n'),
+    )
+    const config = new StConfig({ baseDir })
+    expect(config.privateAddressAllowedRanges).toEqual(['127.0.0.0/8'])
+    expect(config.ensureLoopbackRanges()).toBe(true)
+    expect(config.privateAddressAllowedRanges).toEqual([...DEFAULT_PRIVATE_ADDRESS_RANGES])
+    expect(config.ensureLoopbackRanges()).toBe(false)
+    expect(config.privateAddressAllowedRanges).toEqual([...DEFAULT_PRIVATE_ADDRESS_RANGES])
+  })
+
   it('getSubnetFromIp：IPv4 三段通配 / IPv6 两段通配（← _get_subnet_from_ip）', () => {
     const config = new StConfig({ baseDir })
     expect(config.getSubnetFromIp('192.168.42.17')).toBe('192.168.42.*')

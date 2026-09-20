@@ -45,7 +45,7 @@ import {
   type ExecuteProcessOptions,
 } from './processManager'
 import { checkNodeModules, checkStInstalled, resolvePortableEnv, type PortableEnvPaths } from './env'
-import { getStConfig } from './stConfig'
+import { getStConfig, type PrivateFilterHealResult } from './stConfig'
 import { IS_WINDOWS, spawnSyncCmd, which } from './runtime'
 import { ensureDirSync } from './atomicFs'
 import type { BoolMessage, ProcessInfo, SyncSpawnResult } from './types'
@@ -362,6 +362,10 @@ export interface StProxyConfig {
   proxyEnabled: boolean
   proxyUrl: string
   save(): boolean
+  /** ST 私网请求过滤（SSRF 防护）启动自愈；可选成员兼容仅代理语义的测试替身 */
+  ensurePrivateFilterForListen?: () => Promise<PrivateFilterHealResult>
+  /** 自愈成功时的放行网段（日志展示用）；可选成员，理由同上 */
+  privateAddressAllowedRanges?: readonly string[]
 }
 
 export interface StLifecycleDeps {
@@ -627,6 +631,33 @@ export class StLifecycle {
     this.log(`自动设置代理: ${proxyUrl}`)
   }
 
+  /**
+   * SSRF 防护自愈（startSt/restartSt 共用，← 适配 ST 新增 private request filter）：
+   * listen 已开启但私网请求过滤未开启（存量配置）时自动补开，
+   * 消除新版 ST 的 "listen is enabled but private request filter is disabled" 警告。
+   * 失败不阻断启动——ST 侧仍会打警告提示风险，config.yaml 写入失败另有 errorLog。
+   */
+  private async healPrivateFilter(): Promise<void> {
+    try {
+      const stCfg = this.deps.stConfig ?? getStConfig()
+      const heal = await stCfg.ensurePrivateFilterForListen?.()
+      if (heal === 'healed') {
+        const ranges = stCfg.privateAddressAllowedRanges?.join(', ')
+        this.log(
+          ranges
+            ? `已自动开启私网请求过滤（SSRF 防护），放行网段: ${ranges}`
+            : '已自动开启私网请求过滤（SSRF 防护）',
+        )
+      } else if (heal === 'save-failed') {
+        this.log('警告: 私网请求过滤自动开启失败（config.yaml 写入失败），本次启动仍会提示 SSRF 风险')
+      }
+    } catch (err) {
+      const message = `私网请求过滤自愈时出错: ${err instanceof Error ? err.message : String(err)}`
+      this.log(`警告: ${message}`)
+      console.error(`[stLifecycle] ${message}`)
+    }
+  }
+
   /** ← start_sillytavern（首次启动确认对话框由 UI 层处理 has_started_st） */
   async startSt(): Promise<StartStResult> {
     try {
@@ -664,6 +695,9 @@ export class StLifecycle {
         this.log('未找到nodejs')
         return { ok: false, message: '未找到nodejs', proc: null }
       }
+
+      // SSRF 防护自愈：listen 开启但私网过滤未开（存量配置）时补开（须在 spawn 前写 config.yaml）
+      await this.healPrivateFilter()
 
       // 自定义参数安全性校验（防御性编程）
       let customArgs = this.config.get<string>('custom_args', '')
@@ -755,6 +789,9 @@ export class StLifecycle {
         this.log('未找到nodejs')
         return { ok: false, message: '未找到nodejs', proc: null }
       }
+
+      // SSRF 防护自愈（与 startSt 同语义，restartSt 不经 startSt 需单独挂）
+      await this.healPrivateFilter()
 
       let customArgs = this.config.get<string>('custom_args', '')
       if (customArgs) {

@@ -21,6 +21,7 @@ import { checkEnv, resolvePortableEnv, probeSystemGit, probeSystemNode } from '.
 import { validateCustomArgs } from '../../services/processManager'
 import { launchCommandLine } from '../../services/platform'
 import { getStConfig, useSettings, TERMINAL_FONT_SIZE_PRESETS, validateTerminalFontFamily } from '../../stores/settings'
+import { DEFAULT_PRIVATE_ADDRESS_RANGES } from '../../services/stConfig'
 import { useTerminalLogs } from '../../stores/terminalLogs'
 import { uiStateActions } from '../../stores/uiState'
 import { useThemeContext } from '../theme'
@@ -63,6 +64,12 @@ const TEXTS = {
   listen: '启用局域网访问',
   listenDesc: '开启后允许局域网设备访问，并自动启用私有地址请求保护',
   editIpWhitelist: '编辑网络白名单',
+  privateFilter: '私网请求过滤 (SSRF 防护)',
+  privateFilterDesc: '阻止酒馆向局域网/内网地址发起请求，防范 SSRF 攻击；开启局域网访问时建议保持开启',
+  editPrivateRanges: '编辑放行网段',
+  privateFilterOn: '私网请求过滤已开启，重启酒馆后生效',
+  privateFilterOff: '私网请求过滤已关闭，重启酒馆后生效',
+  privateFilterFail: '私网请求过滤设置失败，请检查 SillyTavern/config.yaml 写入权限',
   autoProxy: '自动设置请求代理',
   autoProxyDesc: '开启后酒馆的请求会走启动器自动识别的系统代理',
   portLabel: '监听端口',
@@ -211,6 +218,18 @@ export function SettingsView() {
     }
     st.save()
     uiStateActions.pushToast('success', TEXTS.savedToast)
+    settings.reload()
+  }
+
+  /** 私网请求过滤开关：开启时补回环放行段（对齐 createWhitelist 最小权限默认），失败不谎报 */
+  const handlePrivateFilter = (v: boolean): void => {
+    st.privateAddressWhitelistEnabled = v
+    if (v) st.ensureLoopbackRanges()
+    if (st.save()) {
+      uiStateActions.pushToast('success', v ? TEXTS.privateFilterOn : TEXTS.privateFilterOff)
+    } else {
+      uiStateActions.pushToast('error', TEXTS.privateFilterFail)
+    }
     settings.reload()
   }
 
@@ -477,6 +496,15 @@ export function SettingsView() {
               </div>
               <Button variant="quiet" icon="edit" onClick={() => uiStateActions.openDialog({ kind: 'ipWhitelist' })} testId="setting-edit-ip-whitelist">
                 {TEXTS.editIpWhitelist}
+              </Button>
+            </div>
+            {/* 私网请求过滤：listen 的自动联动项（存量配置由启动自愈兜底），行形态与 listen 一致 */}
+            <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', minHeight: 40, gap: 12 }}>
+              <div style={{ flexGrow: 1, minWidth: 0 }}>
+                {switchRow('private_filter', TEXTS.privateFilter, TEXTS.privateFilterDesc, settings.privateAddressWhitelistEnabled, handlePrivateFilter)}
+              </div>
+              <Button variant="quiet" icon="edit" onClick={() => uiStateActions.openDialog({ kind: 'privateRanges' })} testId="setting-edit-private-ranges">
+                {TEXTS.editPrivateRanges}
               </Button>
             </div>
             {switchRow('auto_proxy', TEXTS.autoProxy, TEXTS.autoProxyDesc, settings.autoProxy, (v) => settings.update({ autoProxy: v }))}
