@@ -6,13 +6,14 @@
  * - 当前版本卡：glow.ember 底 + 左 2px ember 条 + [当前] 芯片。
  * - 刷新中显示 5 张骨架卡（§5.9，D3：禁 spinner 顶替）。
  * - 版本数据来自 services/git.getStTags（视图经 hook 消费服务，不绕过）。
+ * - 列表/加载/错误状态暂存于 stores/versionState（2026-09-20）：切页卸载不丢
+ *   缓存，切回直接渲染已暂存数据，不再重走骨架动画与重复 git 扫描；手动刷新
+ *   按钮走 reloadVersions 强制重拉。挂载时静默 refreshVersion（本地 git describe）
+ *   保证「当前」芯片在终端页更新/切版本后仍准确。
  */
-import { useCallback, useEffect, useState } from 'react'
-import { compareVersions } from '../../services/env'
-import { getStTags } from '../../services/git'
-import type { GitTag } from '../../services/types'
+import { useEffect } from 'react'
 import { getStLifecycle, useStState } from '../../stores/stState'
-import { useTerminalLogs } from '../../stores/terminalLogs'
+import { useVersionState, type VersionEntry } from '../../stores/versionState'
 import { uiStateActions } from '../../stores/uiState'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
@@ -30,7 +31,6 @@ const TEXTS = {
   subtitlePrefix: '当前',
   subtitleNone: '未安装',
   refreshTip: '刷新版本列表',
-  refreshing: '正在刷新版本信息...',
   currentChip: '当前',
   switchTo: '切换到此版本',
   sourcePrefix: '来源:',
@@ -38,52 +38,26 @@ const TEXTS = {
   emptyTitle: '暂无可用版本',
   emptyHint: '请先安装 SillyTavern 或点击刷新获取版本列表',
   loadFailed: '获取版本列表失败',
+  refresh: '刷新',
 } as const
-
-interface VersionEntry {
-  version: string
-  tag: GitTag
-}
 
 export function VersionView() {
   const t = useTheme()
   const currentVersion = useStState((s) => s.currentVersion)
   const refreshVersion = useStState((s) => s.refreshVersion)
-  const [versions, setVersions] = useState<VersionEntry[] | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const loadVersions = useCallback(async () => {
-    if (loading) return
-    setLoading(true)
-    setError(null)
-    useTerminalLogs.getState().appendLine(TEXTS.refreshing)
-    try {
-      await refreshVersion()
-      const result = await getStTags()
-      if (!result.ok || !result.data) {
-        setError(result.message)
-        setVersions([])
-        return
-      }
-      const entries = Object.entries(result.data.versions)
-        .map(([version, tag]) => ({ version, tag }))
-        .sort((a, b) => compareVersions(b.version, a.version))
-      setVersions(entries)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      setError(message)
-      setVersions([])
-    } finally {
-      setLoading(false)
-    }
-  }, [loading, refreshVersion])
+  const versions = useVersionState((s) => s.versions)
+  const loading = useVersionState((s) => s.loading)
+  const error = useVersionState((s) => s.error)
+  const ensureVersions = useVersionState((s) => s.ensureVersions)
+  const reloadVersions = useVersionState((s) => s.reloadVersions)
 
   useEffect(() => {
-    void loadVersions()
-    // 仅挂载时加载一次
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    void (async () => {
+      // 先刷当前版本（本地 git describe，快）再拉列表：保证卡片渲染时「当前」芯片就绪
+      await refreshVersion()
+      await ensureVersions()
+    })()
+  }, [refreshVersion, ensureVersions])
 
   const subtitle = currentVersion
     ? `${TEXTS.subtitlePrefix} ${currentVersion.version ?? ''}${
@@ -108,7 +82,7 @@ export function VersionView() {
                   size={32}
                   label={TEXTS.refreshTip}
                   disabled={loading}
-                  onClick={() => void loadVersions()}
+                  onClick={() => void reloadVersions()}
                   testId="version-refresh"
                 />
               </Tooltip>
@@ -133,8 +107,8 @@ export function VersionView() {
           title={TEXTS.emptyTitle}
           hint={TEXTS.emptyHint}
           action={
-            <Button variant="primary" icon="refresh" onClick={() => void loadVersions()} testId="version-empty-refresh">
-              刷新
+            <Button variant="primary" icon="refresh" onClick={() => void reloadVersions()} testId="version-empty-refresh">
+              {TEXTS.refresh}
             </Button>
           }
         />

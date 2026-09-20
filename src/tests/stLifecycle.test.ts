@@ -4,7 +4,7 @@
  * package-lock 冲突恢复 ≤2 重试与 node_modules 重装重试链、
  * checkAndStart、版本切换、镜像 insteadOf 管理（utf-8 容错读写）。
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -47,12 +47,25 @@ vi.mock('../services/stConfig', async (importOriginal) => ({
 // 测试基建
 // ---------------------------------------------------------------------------
 
+/** CI（GitHub Windows Runner）的 tmpdir() 是 8.3 短路径（C:\Users\RUNNER~1\...），
+ *  其中的 '~' 会被 validatePathForNpm 判为 NPM 不支持字符，导致 install/start 全量
+ *  用例被产品路径校验提前拦截。先经 realpathSync.native 展开短名为真实长路径再建
+ *  临时目录（仅测试基建治"选了非法基座"，产品校验语义不变；展开失败原样回退）。 */
+const TMP_ROOT = (() => {
+  const raw = tmpdir()
+  try {
+    return realpathSync.native(raw)
+  } catch {
+    return raw
+  }
+})()
+
 let root: string
 let configPath: string
 let logs: string[]
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'stllife'))
+  root = mkdtempSync(join(TMP_ROOT, 'stllife'))
   configPath = join(root, 'config.json')
   logs = []
 })
@@ -616,7 +629,7 @@ describe('stopSt（← stop_sillytavern）', () => {
 describe('restartSt（← restart_sillytavern，仅中文/空格检查）', () => {
   it('路径含中文 → 拒绝重启', async () => {
     setupSt({ nodeModules: true })
-    const chineseRoot = mkdtempSync(join(tmpdir(), 'stl-重启-'))
+    const chineseRoot = mkdtempSync(join(TMP_ROOT, 'stl-重启-'))
     try {
       const harness = makeExecHarness(() => 0)
       const lifecycle = new StLifecycle({

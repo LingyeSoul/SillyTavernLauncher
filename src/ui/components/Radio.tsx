@@ -28,7 +28,9 @@ export function Radio({ checked, label, onChange, testId }: RadioProps) {
         display: 'flex',
         alignItems: 'center',
         gap: 8,
-        height: 36,
+        // DEVIATION: 设计 §5.2/§4.7 行高 36 定高放宽为最小高——长标签折行后
+        // 定高容器纵向溢出会盖住相邻行；单行场景视觉与定高一致
+        minHeight: 36,
         cursor: 'pointer',
         userSelect: 'none',
       }}>
@@ -58,12 +60,17 @@ export function Radio({ checked, label, onChange, testId }: RadioProps) {
           />
         )}
       </div>
+      {/* 标签须可收缩折行：text 作 flex 子项时 auto min-size = 整行不折行宽度，
+          缺 minWidth:0 会把定宽容器（Modal）撑爆画出边界（GPUIX 规则 8） */}
       {label && (
         <text
           style={{
             fontSize: t.fs.field,
             color: checked ? t.text.primary : t.text.secondary,
             fontFamily: t.font.sans,
+            flexGrow: 1,
+            minWidth: 0,
+            whiteSpace: 'normal',
           }}>
           {label}
         </text>
