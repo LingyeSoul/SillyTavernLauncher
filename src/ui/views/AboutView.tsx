@@ -10,6 +10,7 @@ import { APP_VERSION } from '../../version'
 import { uiStateActions } from '../../stores/uiState'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
+import { Chip } from '../components/Chip'
 import { LOGO_DATA_URL } from '../assets/logo'
 
 const TEXTS = {
@@ -100,26 +101,12 @@ export function AboutView() {
           alt="SillyTavernLauncher logo"
           style={{ width: 48, height: 48, borderRadius: 6 }}
         />
-        <text style={{ fontSize: 20, fontWeight: 600, color: t.text.primary, fontFamily: t.font.sans }}>
+        <text style={{ fontSize: t.fs.h2, fontWeight: 600, color: t.text.primary, fontFamily: t.font.sans }}>
           SillyTavernLauncher
         </text>
-        {/* D5 规范化版本芯片 */}
-        <div
-          style={{
-            display: 'flex',
-            paddingLeft: 6,
-            paddingRight: 6,
-            paddingTop: 2,
-            paddingBottom: 2,
-            borderWidth: 1,
-            borderColor: t.border.default,
-            borderRadius: 3,
-          }}>
-          <text style={{ fontSize: 11, fontFamily: t.font.mono, color: t.text.secondary }}>
-            {`v${normalizeVersion(APP_VERSION)}`}
-          </text>
-        </div>
-        <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>
+        {/* D5 规范化版本芯片（Chip 收口） */}
+        <Chip>{`v${normalizeVersion(APP_VERSION)}`}</Chip>
+        <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
           {TEXTS.author}
         </text>
 
@@ -142,7 +129,7 @@ export function AboutView() {
         </div>
 
         <div style={{ height: 24 }} />
-        <text style={{ fontSize: 11, color: t.text.muted, fontFamily: t.font.sans }}>
+        <text style={{ fontSize: t.fs.micro, color: t.text.muted, fontFamily: t.font.sans }}>
           {TEXTS.platformLine}
         </text>
       </div>

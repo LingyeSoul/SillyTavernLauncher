@@ -151,7 +151,7 @@ export function Modal({
             {title !== undefined && (
               <text
                 style={{
-                  fontSize: 16,
+                  fontSize: t.fs.h3,
                   fontWeight: 600,
                   color: t.text.primary,
                   fontFamily: t.font.sans,

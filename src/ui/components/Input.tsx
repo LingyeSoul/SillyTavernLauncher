@@ -61,7 +61,7 @@ export function Input({
           minWidth: 0,
           paddingLeft: 10,
           paddingRight: 10,
-          fontSize: 13,
+          fontSize: t.fs.field,
           fontFamily: mono ? t.font.mono : t.font.sans,
           color: t.text.primary,
         }}

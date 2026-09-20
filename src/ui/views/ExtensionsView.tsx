@@ -15,6 +15,7 @@ import { layout } from '../../theme'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
 import { EmptyState } from '../components/EmptyState'
+import { PageHeader } from '../components/PageHeader'
 import { SectionTitle } from '../components/Card'
 import { Tooltip } from '../components/Tooltip'
 
@@ -71,37 +72,26 @@ export function ExtensionsView() {
         paddingLeft: layout.padFormX,
         paddingRight: layout.padFormX,
       }}>
-      {/* workspace-heading + 安装按钮 */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: 16,
-        }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <text style={{ fontSize: 26, fontWeight: 600, color: t.text.primary, fontFamily: t.font.sans }}>
-            {TEXTS.title}
-          </text>
-          <text style={{ fontSize: 13, color: t.text.muted, fontFamily: t.font.sans }}>
-            {TEXTS.subtitle}
-          </text>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'row', gap: 8 }}>
-          <Button variant="primary" icon="box" onClick={() => uiStateActions.openDialog({ kind: 'gitInstall' })} testId="ext-git-install">
-            {TEXTS.gitInstall}
-          </Button>
-          <Button variant="default" icon="archive" onClick={() => uiStateActions.openDialog({ kind: 'zipInstall' })} testId="ext-zip-install">
-            {TEXTS.zipInstall}
-          </Button>
-        </div>
-      </div>
+      {/* workspace-heading（PageHeader 收口）+ 安装按钮 */}
+      <PageHeader
+        title={TEXTS.title}
+        subtitle={TEXTS.subtitle}
+        actions={
+          <div style={{ display: 'flex', flexDirection: 'row', gap: 8 }}>
+            <Button variant="primary" icon="box" onClick={() => uiStateActions.openDialog({ kind: 'gitInstall' })} testId="ext-git-install">
+              {TEXTS.gitInstall}
+            </Button>
+            <Button variant="default" icon="archive" onClick={() => uiStateActions.openDialog({ kind: 'zipInstall' })} testId="ext-zip-install">
+              {TEXTS.zipInstall}
+            </Button>
+          </div>
+        }
+      />
 
-      {/* 全局扩展 */}
+      {/* 全局扩展（列表型 section 不包 Card：行自身即卡片，同 SyncView 发现列表先例） */}
       <div style={{ marginBottom: layout.padFormY }}>
         <SectionTitle title={TEXTS.globalSection} count={globalExts.length} />
-        <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 8 }}>
+        <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 8 }}>
           {TEXTS.globalPathHint}
         </text>
         {globalExts.length === 0 ? (
@@ -114,7 +104,7 @@ export function ExtensionsView() {
       {/* 用户扩展 */}
       <div>
         <SectionTitle title={TEXTS.userSection} count={userExts.length} />
-        <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 8 }}>
+        <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 8 }}>
           {TEXTS.userPathHint}
         </text>
         {userExts.length === 0 ? (
@@ -172,7 +162,7 @@ function ExtensionCard({ ext, onChanged }: { ext: ExtensionInfo; onChanged: () =
           justifyContent: 'center',
           flexShrink: 0,
         }}>
-        <text style={{ fontSize: 13, fontWeight: 600, color: t.text.secondary, fontFamily: t.font.sans }}>
+        <text style={{ fontSize: t.fs.field, fontWeight: 600, color: t.text.secondary, fontFamily: t.font.sans }}>
           {initial}
         </text>
       </div>
@@ -181,27 +171,27 @@ function ExtensionCard({ ext, onChanged }: { ext: ExtensionInfo; onChanged: () =
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
           <text
             style={{
-              fontSize: 13,
+              fontSize: t.fs.field,
               fontWeight: 500,
               color: ext.isValid ? t.text.primary : t.status.warning,
               fontFamily: t.font.sans,
             }}>
             {fields.displayName}
           </text>
-          <text style={{ fontSize: 11, color: t.text.muted, fontFamily: t.font.mono }}>
+          <text style={{ fontSize: t.fs.micro, color: t.text.muted, fontFamily: t.font.mono }}>
             {`v${fields.version}`}
           </text>
           {!ext.isValid && (
-            <text style={{ fontSize: 11, color: t.status.warning, fontFamily: t.font.sans }}>
+            <text style={{ fontSize: t.fs.micro, color: t.status.warning, fontFamily: t.font.sans }}>
               {TEXTS.invalidExt}
             </text>
           )}
         </div>
-        <text style={{ fontSize: 11, color: t.text.muted, fontFamily: t.font.sans }}>
+        <text style={{ fontSize: t.fs.micro, color: t.text.muted, fontFamily: t.font.sans }}>
           {`${TEXTS.author}: ${fields.author} · ${TEXTS.name}: ${ext.name}`}
         </text>
         {!ext.isValid && (
-          <text style={{ fontSize: 11, color: t.status.warning, fontFamily: t.font.sans }}>
+          <text style={{ fontSize: t.fs.micro, color: t.status.warning, fontFamily: t.font.sans }}>
             {ext.errorMsg}
           </text>
         )}

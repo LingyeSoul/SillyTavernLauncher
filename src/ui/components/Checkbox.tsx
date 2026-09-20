@@ -1,6 +1,8 @@
 /**
  * Checkbox（设计 §5.2）：16 方 · radius 3 · 选中 = ember 底 + 对勾 svg（onPrimary 色）。
+ * 键盘可达：tabIndex 0 + onFocus/onBlur 状态驱动 ember 聚焦辉环（同 Input 降级 #4）。
  */
+import { useState } from 'react'
 import { useTheme } from '../theme'
 import { ICONS } from './icons'
 
@@ -13,9 +15,13 @@ export interface CheckboxProps {
 
 export function Checkbox({ checked, label, onChange, testId }: CheckboxProps) {
   const t = useTheme()
+  const [focused, setFocused] = useState(false)
   return (
     <div
       onClick={() => onChange(!checked)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      tabIndex={0}
       role="checkbox"
       aria-selected={checked}
       testId={testId}
@@ -37,6 +43,9 @@ export function Checkbox({ checked, label, onChange, testId }: CheckboxProps) {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
+          boxShadow: focused
+            ? { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 3, color: t.glow.ember }
+            : undefined,
         }}>
         {checked && (
           <svg
@@ -46,7 +55,7 @@ export function Checkbox({ checked, label, onChange, testId }: CheckboxProps) {
         )}
       </div>
       {label && (
-        <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans }}>{label}</text>
+        <text style={{ fontSize: t.fs.field, color: t.text.primary, fontFamily: t.font.sans }}>{label}</text>
       )}
     </div>
   )

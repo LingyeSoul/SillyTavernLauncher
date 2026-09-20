@@ -15,7 +15,9 @@ import { useMotion, useTheme, useThemeContext, useBreath } from '../theme'
 import { NavItem } from './NavItem'
 import { Tooltip } from '../components/Tooltip'
 import { ToastHost } from '../components/Toast'
-import { ICONS, type IconName } from '../components/icons'
+import { Chip } from '../components/Chip'
+import { IconButton } from '../components/IconButton'
+import type { IconName } from '../components/icons'
 import { useUiState, VIEW_IDS, type ViewId } from '../../stores/uiState'
 import { useStState } from '../../stores/stState'
 import { TerminalView } from '../views/TerminalView'
@@ -194,48 +196,29 @@ function Sidebar() {
         }}>
         <StStatusDot status={status} />
         <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
-          <text style={{ fontSize: 12, color: t.text.secondary, fontFamily: t.font.sans }}>
+          <text style={{ fontSize: t.fs.caption, color: t.text.secondary, fontFamily: t.font.sans }}>
             SillyTavern
           </text>
-          <div
-            style={{
-              display: 'flex',
-              alignSelf: 'flex-start',
-              paddingLeft: 4,
-              paddingRight: 4,
-              borderWidth: 1,
-              borderColor: t.border.default,
-              borderRadius: 3,
-            }}>
-            <text style={{ fontSize: 10, fontFamily: t.font.mono, color: t.text.muted }}>
-              {statusLabel}
-            </text>
-          </div>
+          <Chip color={t.text.muted} testId="st-status-chip">
+            {statusLabel}
+          </Chip>
         </div>
         <Tooltip label={mode === 'dark' ? '切换浅色主题' : '切换深色主题'}>
-          <div
+          <IconButton
+            icon={mode === 'dark' ? 'sun' : 'moon'}
+            iconSize={16}
+            size={28}
+            label="切换主题"
             onClick={() => setMode(mode === 'dark' ? 'light' : 'dark')}
-            role="button"
-            aria-label="切换主题"
             testId="theme-toggle"
-            style={{
-              width: 28,
-              height: 28,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: t.radius.sm,
-              cursor: 'pointer',
-              hover: { backgroundColor: t.bg.hover },
-            }}>
-            <svg
-              source={mode === 'dark' ? ICONS.sun : ICONS.moon}
-              style={{ width: 16, height: 16, color: t.text.secondary }}
-            />
-          </div>
+          />
         </Tooltip>
         <Tooltip label="退出启动器">
-          <div
+          <IconButton
+            icon="x"
+            size={28}
+            label="退出启动器"
+            testId="exit-launcher"
             onClick={() => {
               // ← D1 行为定义：ST 未运行直接退出；运行中先确认
               if (!running) {
@@ -244,21 +227,7 @@ function Sidebar() {
                 openDialog({ kind: 'exitConfirm', onConfirm: () => void quitLauncher() })
               }
             }}
-            role="button"
-            aria-label="退出启动器"
-            testId="exit-launcher"
-            style={{
-              width: 28,
-              height: 28,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: t.radius.sm,
-              cursor: 'pointer',
-              hover: { backgroundColor: t.bg.hover },
-            }}>
-            <svg source={ICONS.x} style={{ width: 16, height: 16, color: t.text.secondary }} />
-          </div>
+          />
         </Tooltip>
       </div>
     </div>

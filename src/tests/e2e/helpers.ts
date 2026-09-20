@@ -52,6 +52,8 @@ export interface LaunchOptions {
   seedSt?: boolean
   /** 追加子进程环境变量（如 EULA_COUNTDOWN_SECONDS=2 缩短倒计时） */
   env?: Record<string, string>
+  /** 主题模式种子（默认 'dark'）；'light' 用于浅色主题视觉抽检（O6 elevated 等） */
+  theme?: 'dark' | 'light'
 }
 
 export interface E2ESession {
@@ -87,11 +89,11 @@ export function pidAlive(pid: number): boolean {
 }
 
 /** setupCompleted=true 时预置的 config.json（跳过首启弹窗；关闭联网更新检查保证确定性） */
-function seedConfig(): Record<string, unknown> {
+function seedConfig(theme: 'dark' | 'light' = 'dark'): Record<string, unknown> {
   return {
     patchgit: false,
     use_sys_env: false,
-    theme: 'dark',
+    theme,
     first_run: false,
     agreement_accepted: true,
     agreement_version: AGREEMENT_DATE,
@@ -150,7 +152,7 @@ export async function launchE2E(options: LaunchOptions = {}): Promise<E2ESession
     }),
   )
   if (options.setupCompleted) {
-    const seed = seedConfig()
+    const seed = seedConfig(options.theme)
     if (options.welcomeOnly) seed.first_run = true
     if (options.seedSt) seed.use_sys_env = true
     writeFileSync(configPath, JSON.stringify(seed, null, 4))
