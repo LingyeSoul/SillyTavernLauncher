@@ -1,7 +1,8 @@
 /**
  * 终端视图（设计 §4.1，核心）：
  * - 主区 padding 12，flex column，不滚动（自管滚动形态）。
- * - 日志卡：virtual-list alignment=bottom followTail，ANSI 彩色行渲染（相邻 <text> 合并一行）。
+ * - 日志卡：virtual-list alignment=bottom followTail，ANSI 彩色行渲染
+ *   （段 = 相邻 <text>，需在 display:flex + row 容器内才合并一行，见 LogRow）。
  * - 底部 5 按钮接 stLifecycle（安装/启动/停止/更新/清空，各带 tooltip 350ms）。
  * - 中文文案集中于顶部常量对象（i18n 缝）。
  */
@@ -43,7 +44,7 @@ const TEXTS = {
   cancelStart: '用户取消启动',
 } as const
 
-/** 单行渲染：引擎预解析段 = 相邻 <text>（合并一行特性）；无色行按日志级别兜底着色 */
+/** 单行渲染：引擎预解析段 = 相邻 <text>；无色行按日志级别兜底着色 */
 const LogRow = memo(function LogRow({ line }: { line: TerminalLine }) {
   const t = useTheme()
   const { enabled: motionEnabled } = useMotion()
@@ -81,8 +82,19 @@ const LogRow = memo(function LogRow({ line }: { line: TerminalLine }) {
     </text>
   ))
 
+  // 段必须落在 display:flex + flexDirection:'row' 容器内才会合并一行
+  // （纯 div 中相邻 <text> 纵向堆叠，实测结论）；overflow hidden 裁剪超宽长行
+  // （引擎按 1000 列预折行，极端长行不撑开 virtual-list 内容宽）
+  const rowStyle = {
+    display: 'flex',
+    flexDirection: 'row',
+    padding: 1,
+    minHeight: rowHeight,
+    overflow: 'hidden',
+  } as const
+
   if (!line.animate || !motionEnabled) {
-    return <div style={{ padding: 1, minHeight: rowHeight }}>{body}</div>
+    return <div style={rowStyle}>{body}</div>
   }
   // M2 新日志行入场：200ms easeOut，top 4→0（translateY 等效）
   return (
@@ -90,7 +102,7 @@ const LogRow = memo(function LogRow({ line }: { line: TerminalLine }) {
       initial={{ opacity: 0, top: 4 }}
       animate={{ opacity: 1, top: 0 }}
       transition={{ duration: dur.logEnter, ease: EASE_OUT_QUAD }}
-      style={{ position: 'relative', padding: 1, minHeight: rowHeight }}>
+      style={{ ...rowStyle, position: 'relative' }}>
       {body}
     </motion.div>
   )

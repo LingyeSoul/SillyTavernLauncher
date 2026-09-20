@@ -42,6 +42,16 @@ import { uiStateActions } from './stores/uiState'
 
 const RELEASES_URL = 'https://github.com/LingyeSoul/SillyTavernLauncher/releases/latest'
 
+// gpuix 0.9.0 内嵌的 zed gpui（env_logger）在 Windows 关窗拆除路径必然打 4 条 ERROR
+// （gpui::window "window not found" + gpui_windows::window/dispatcher "无效的窗口句柄"），
+// 退出码 0、进程正常退出，纯拆除期噪音——已用"最小静态树 + FFI 投递 WM_CLOSE"复现
+// 证实与应用代码无关（vendored Rust 二进制内部行为，0.9.0 已是最新版无升级修复）。
+// env_logger 在 renderer 初始化（render 调用）时读 RUST_LOG，静态 import 后、render
+// 前赋值即可生效（实测）；只静默这三个肇事 target，其余模块 error 级保持可见。
+// ??= 尊重外部显式设置：调试 gpuix 时可自行注入 RUST_LOG 覆盖本默认值。
+process.env.RUST_LOG ??=
+  'error,gpui_windows::window=off,gpui_windows::dispatcher=off,gpui::window=off'
+
 /** ← main.py check_first_launch 的启动对话框序列 */
 function StartupFlow() {
   useEffect(() => {
