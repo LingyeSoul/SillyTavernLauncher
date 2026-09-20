@@ -15,6 +15,7 @@
  */
 import { basename, delimiter } from 'node:path'
 import { resolveExecutableExtension } from './env'
+import { errMsg, logError } from './errorLog'
 import { isFile, IS_WINDOWS, spawnAsync, spawnSyncCmd } from './runtime'
 import type { LogLine, ProcessInfo, Subprocess } from './types'
 
@@ -223,8 +224,8 @@ export async function readStreamLines(
       emitLine(buffer)
     }
   } catch (err) {
-    console.error(
-      `[processManager] 读取 ${streamTag.toUpperCase()} 流失败: ${err instanceof Error ? err.message : String(err)}`,
+    logError(
+      `[processManager] 读取 ${streamTag.toUpperCase()} 流失败: ${errMsg(err)}`,
     )
   } finally {
     try {

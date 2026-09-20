@@ -16,6 +16,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { Document, isMap, parseDocument } from 'yaml'
 import { atomicWriteFileSync, ensureDirSync } from './atomicFs'
+import { errMsg, logError } from './errorLog'
 import { getLocalIp as defaultGetLocalIp } from './network'
 import type { StConfigShape } from './types'
 
@@ -144,7 +145,7 @@ export class StConfig {
 
       this.migrateWhitelistFromTxt()
     } catch (err) {
-      console.error(`配置加载错误: ${err instanceof Error ? err.message : String(err)}`)
+      logError(`配置加载错误: ${errMsg(err)}`)
       this.doc = new Document({ listen: this.listen, port: this.port })
     }
   }
@@ -199,7 +200,7 @@ export class StConfig {
       return true
     } catch (err) {
       // 保存失败必须可被调用方感知（原实现吞异常导致 UI 谎报"已保存"）
-      console.error(`配置保存失败: ${err instanceof Error ? err.message : String(err)}`)
+      logError(`配置保存失败: ${errMsg(err)}`)
       return false
     }
   }
@@ -267,7 +268,7 @@ export class StConfig {
       }
       return true
     } catch (err) {
-      console.error(`迁移 whitelist.txt 失败: ${err instanceof Error ? err.message : String(err)}`)
+      logError(`迁移 whitelist.txt 失败: ${errMsg(err)}`)
       return false
     }
   }
@@ -381,7 +382,7 @@ export class StConfig {
       if (changed) this.save()
       return true
     } catch (err) {
-      console.error(`白名单更新失败: ${err instanceof Error ? err.message : String(err)}`)
+      logError(`白名单更新失败: ${errMsg(err)}`)
       return false
     }
   }

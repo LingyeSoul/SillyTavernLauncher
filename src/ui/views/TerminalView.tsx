@@ -25,6 +25,7 @@ import { useStState } from '../../stores/stState'
 import { terminalRowHeight, useSettings } from '../../stores/settings'
 import { useUiState } from '../../stores/uiState'
 import { getConfigStore } from '../../services/configStore'
+import { errMsg, logError } from '../../services/errorLog'
 
 const TEXTS = {
   emptyNoLog: '等待日志输出',
@@ -183,7 +184,7 @@ export function TerminalView() {
           try {
             getConfigStore().save()
           } catch (err) {
-            console.error(`[terminal] 保存首次启动状态失败: ${err instanceof Error ? err.message : String(err)}`)
+            logError(`[terminal] 保存首次启动状态失败: ${errMsg(err)}`)
           }
           void startSt()
         },

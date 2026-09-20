@@ -13,8 +13,13 @@
  *   UI 层直接 <markdown> 渲染，设计计划 §3）。
  * - @gpuix/native 的 checkUpdate：延迟动态 import + 可注入 loader
  *   （vitest/Node 下 import .node 二进制会挂，测试全部注入 mock）。
+ *   DEVIATION: checkNativeUpdate 封装（本文件尾部）当前无生产调用方，仅
+ *   tests/updater.test.ts 注入 mock 引用；生产更新检查链路是 checkForUpdates
+ *   自行抓 raw.githubusercontent / GitHub Releases API 版本号并本地 semver
+ *   比对，不经原生 checkUpdate。原生链路留待后续接入，封装与测试保留备接线。
  */
 import { getConfigStore } from './configStore'
+import { errMsg, logError } from './errorLog'
 
 export interface UpdateCheckResult {
   has_error: boolean
@@ -177,10 +182,10 @@ async function fetchText(url: string, timeoutMs: number, fetchImpl: FetchLike): 
       signal: AbortSignal.timeout(timeoutMs),
     })
     if (response.status === 200) return await response.text()
-    console.error(`[updater] 请求失败，状态码: ${response.status} url: ${url}`)
+    logError(`[updater] 请求失败，状态码: ${response.status} url: ${url}`)
     return null
   } catch (err) {
-    console.error(`[updater] 网络错误: ${err instanceof Error ? err.message : String(err)} url: ${url}`)
+    logError(`[updater] 网络错误: ${errMsg(err)} url: ${url}`)
     return null
   }
 }
@@ -388,7 +393,7 @@ export async function fetchChangelog(options: UpdaterOptions = { currentVersion:
       signal: AbortSignal.timeout(timeoutMs),
     })
     if (response.status !== 200) {
-      console.error(`[updater] 获取更新日志失败，状态码: ${response.status}`)
+      logError(`[updater] 获取更新日志失败，状态码: ${response.status}`)
       return null
     }
     const htmlContent = await response.text()
@@ -415,7 +420,7 @@ export async function fetchChangelog(options: UpdaterOptions = { currentVersion:
     console.warn('[updater] 无法从页面中提取更新日志')
     return null
   } catch (err) {
-    console.error(`[updater] 获取更新日志时出错: ${err instanceof Error ? err.message : String(err)}`)
+    logError(`[updater] 获取更新日志时出错: ${errMsg(err)}`)
     return null
   }
 }

@@ -11,6 +11,7 @@ import { useEffect } from 'react'
 import type { ComponentType } from 'react'
 import { motion } from '@gpuix/react'
 import { EASE_OUT_QUAD, dur, layout } from '../../theme'
+import { errMsg, logError } from '../../services/errorLog'
 import { useMotion, useTheme, useThemeContext, useBreath } from '../theme'
 import { NavItem } from './NavItem'
 import { Tooltip } from '../components/Tooltip'
@@ -274,7 +275,7 @@ export async function quitLauncher(): Promise<void> {
   try {
     await stopAllProcesses()
   } catch (err) {
-    console.error(`[app] 退出前停止进程失败: ${err instanceof Error ? err.message : String(err)}`)
+    logError(`[app] 退出前停止进程失败: ${errMsg(err)}`)
   } finally {
     process.exit(0)
   }

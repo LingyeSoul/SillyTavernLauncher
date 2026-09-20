@@ -48,6 +48,7 @@ import { checkNodeModules, checkStInstalled, resolvePortableEnv, type PortableEn
 import { getStConfig, type PrivateFilterHealResult } from './stConfig'
 import { IS_WINDOWS, spawnSyncCmd, which } from './runtime'
 import { ensureDirSync } from './atomicFs'
+import { errMsg, logError } from './errorLog'
 import type { BoolMessage, ProcessInfo, SyncSpawnResult } from './types'
 
 export const ST_REPO_URL = 'https://github.com/SillyTavern/SillyTavern.git'
@@ -492,7 +493,7 @@ export class StLifecycle {
       this.config.set('downloads', downloads)
       this.config.save()
     } catch (err) {
-      console.error(`[stLifecycle] 记录下载行为失败: ${err instanceof Error ? err.message : String(err)}`)
+      logError(`[stLifecycle] 记录下载行为失败: ${errMsg(err)}`)
     }
   }
 
@@ -563,7 +564,7 @@ export class StLifecycle {
             rmSync(this.stDir, { recursive: true, force: true })
             this.log('已自动清理失败的安装目录')
           } catch (cleanupErr) {
-            console.error(`[stLifecycle] 清理失败目录时出错: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`)
+            logError(`[stLifecycle] 清理失败目录时出错: ${errMsg(cleanupErr)}`)
           }
         }
         return { ok: false, message: errorMsg }
@@ -593,7 +594,7 @@ export class StLifecycle {
     } catch (err) {
       const errorMsg = `安装SillyTavern时出错: ${err instanceof Error ? err.message : String(err)}`
       this.log(errorMsg)
-      console.error(`[stLifecycle] ${errorMsg}`)
+      logError(`[stLifecycle] ${errorMsg}`)
       return { ok: false, message: errorMsg }
     }
   }
@@ -654,7 +655,7 @@ export class StLifecycle {
     } catch (err) {
       const message = `私网请求过滤自愈时出错: ${err instanceof Error ? err.message : String(err)}`
       this.log(`警告: ${message}`)
-      console.error(`[stLifecycle] ${message}`)
+      logError(`[stLifecycle] ${message}`)
     }
   }
 
@@ -725,7 +726,7 @@ export class StLifecycle {
     } catch (err) {
       const errorMsg = `启动SillyTavern时出错: ${err instanceof Error ? err.message : String(err)}`
       this.log(errorMsg)
-      console.error(`[stLifecycle] ${errorMsg}`)
+      logError(`[stLifecycle] ${errorMsg}`)
       return { ok: false, message: errorMsg, proc: null }
     }
   }
@@ -748,7 +749,7 @@ export class StLifecycle {
     } catch (err) {
       const errorMsg = `停止进程时出错: ${err instanceof Error ? err.message : String(err)}`
       this.log(errorMsg)
-      console.error(`[stLifecycle] ${errorMsg}`)
+      logError(`[stLifecycle] ${errorMsg}`)
       return { ok: false, message: errorMsg }
     }
   }
@@ -818,7 +819,7 @@ export class StLifecycle {
     } catch (err) {
       const message = `重启失败: ${err instanceof Error ? err.message : String(err)}`
       this.log(message)
-      console.error(`[stLifecycle] ${message}`)
+      logError(`[stLifecycle] ${message}`)
       return { ok: false, message, proc: null }
     }
   }
@@ -1009,7 +1010,7 @@ export class StLifecycle {
     } catch (err) {
       const errorMsg = `更新SillyTavern时出错: ${err instanceof Error ? err.message : String(err)}`
       this.log(errorMsg)
-      console.error(`[stLifecycle] ${errorMsg}`)
+      logError(`[stLifecycle] ${errorMsg}`)
       return { ok: false, message: errorMsg }
     }
   }
@@ -1089,7 +1090,7 @@ export class StLifecycle {
       if (this.isRunning()) {
         const errorMsg = '错误: 请先停止SillyTavern后再切换版本'
         this.log(errorMsg)
-        console.error(`[stLifecycle] ${errorMsg}`)
+        logError(`[stLifecycle] ${errorMsg}`)
         return { ok: false, message: errorMsg }
       }
 
@@ -1109,7 +1110,7 @@ export class StLifecycle {
       const { ok: checkoutOk, message } = await checkout(tagName, this.stDir)
       if (!checkoutOk) {
         this.log(`✗ ${message}`)
-        console.error(`[stLifecycle] 切换版本失败: ${message}`)
+        logError(`[stLifecycle] 切换版本失败: ${message}`)
         return { ok: false, message: `切换版本失败: ${message}` }
       }
 
@@ -1127,7 +1128,7 @@ export class StLifecycle {
     } catch (err) {
       const errorMsg = `切换版本时发生错误: ${err instanceof Error ? err.message : String(err)}`
       this.log(errorMsg)
-      console.error(`[stLifecycle] ${errorMsg}`)
+      logError(`[stLifecycle] ${errorMsg}`)
       return { ok: false, message: errorMsg }
     }
   }
@@ -1156,7 +1157,7 @@ export class StLifecycle {
     } catch (err) {
       const errorMsg = `安装依赖时发生错误: ${err instanceof Error ? err.message : String(err)}`
       this.log(errorMsg)
-      console.error(`[stLifecycle] ${errorMsg}`)
+      logError(`[stLifecycle] ${errorMsg}`)
       return { ok: false, message: errorMsg }
     }
   }
@@ -1293,7 +1294,7 @@ export class StLifecycle {
     } catch (err) {
       const message = `更新Git配置失败: ${err instanceof Error ? err.message : String(err)}`
       this.log(message)
-      console.error(`[stLifecycle] ${message}`)
+      logError(`[stLifecycle] ${message}`)
       return { ok: false, message }
     }
   }

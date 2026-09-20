@@ -8,6 +8,8 @@ export default defineConfig({
           name: 'unit',
           // 既有用例（tests/ 根层）；e2e 归下方独立项目（语义与原 tests/** 一致）
           include: ['tests/*.test.ts', 'tests/*.test.tsx'],
+          // errorLog 文件通道重定向临时目录（防 src/logs/ 落进仓库，见文件头注释）
+          setupFiles: ['tests/setup.errorLog.ts'],
           testTimeout: 30_000,
           hookTimeout: 30_000,
         },
