@@ -67,8 +67,7 @@ describe('设置页交互', () => {
     const app = session.app
 
     await app.getByTestId('nav-settings').click()
-    // 镜像/更新检查在「启动器设置」tab（默认激活「环境」tab），先切 tab
-    await app.getByTestId('settings-tab-launcher').click()
+    // 镜像已移入「环境」tab（默认激活），无需切 tab；更新检查仍在「启动器设置」tab
     await app.getByTestId('setting-mirror').waitFor({ timeoutMs: 10_000 })
 
     // --- 1. 切镜像下拉：github → gh-proxy.org ---
@@ -82,7 +81,9 @@ describe('设置页交互', () => {
     const github = cfg?.github as Record<string, unknown> | undefined
     expect(github?.mirror, 'config.json github.mirror 应更新为 gh-proxy.org').toBe('gh-proxy.org')
 
-    // --- 2. 切开关：checkupdate false → true ---
+    // --- 2. 切开关：checkupdate false → true（「启动器设置」tab）---
+    await app.getByTestId('settings-tab-launcher').click()
+    await app.getByTestId('setting-checkupdate').waitFor({ timeoutMs: 10_000 })
     await app.getByTestId('setting-checkupdate').click()
     await expectToast(session, '设置已保存')
     cfg = session.readConfig()

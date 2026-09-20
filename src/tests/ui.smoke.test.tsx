@@ -119,9 +119,7 @@ describe('AppShell 视图切换与终端（smoke）', () => {
     await clickTestId('nav-settings')
     expect(app.useUiState.getState().view).toBe('settings')
     await settle()
-    // 分 tab 后镜像项在「启动器设置」页（默认激活「环境」页）
-    await clickTestId('settings-tab-launcher')
-    await settle()
+    // 镜像项已移入「环境」页（默认激活）
     expect(renderer.findByTestId('setting-mirror')).toBeDefined()
 
     await clickTestId('nav-about')
@@ -165,6 +163,26 @@ describe('AppShell 视图切换与终端（smoke）', () => {
     expect(renderer.findByText('smoke-line-1')).toBeUndefined()
   })
 
+  it('ANSI 彩色段同行内联（回归：纯 div 会纵向堆叠）', async () => {
+    await clickTestId('nav-terminal')
+    app.useTerminalLogs.getState().clear()
+    await settle()
+    // 引擎解析 SGR：绿 AAA + 默认色 BBB，两段应渲染在同一行（y 相同、x 相接）
+    app.useTerminalLogs.getState().appendLine('\x1b[32mAAA-SEG \x1b[0mBBB-SEG')
+    await settle()
+    const aaa = renderer.findByText('AAA-SEG ')
+    const bbb = renderer.findByText('BBB-SEG')
+    expect(aaa).toBeDefined()
+    expect(bbb).toBeDefined()
+    const a = renderer.getElementBounds(aaa!.id)
+    const b = renderer.getElementBounds(bbb!.id)
+    expect(a).not.toBeNull()
+    expect(b).not.toBeNull()
+    // 同行为本断言核心；同行内 x 递增（bbb 紧跟 aaa 右侧）
+    expect(b!.y).toBe(a!.y)
+    expect(b!.x).toBe(a!.x + a!.width)
+  })
+
   it('ST 未运行时停止按钮禁用（busy 反馈纪律）', async () => {
     await clickTestId('nav-terminal')
     const stop = renderer.findByTestId('terminal-stop')
@@ -179,8 +197,9 @@ describe('设置页分 tab（smoke）', () => {
     await resetUiStack()
     await clickTestId('nav-settings')
     await settle()
-    // 默认「环境」页：环境开关与工具在页，酒馆/启动器项不在
+    // 默认「环境」页：环境开关/镜像与工具在页，酒馆/启动器项不在
     expect(renderer.findByTestId('setting-use_sys_env')).toBeDefined()
+    expect(renderer.findByTestId('setting-mirror')).toBeDefined()
     expect(renderer.findByTestId('setting-check-env')).toBeDefined()
     expect(renderer.findByTestId('setting-port')).toBeUndefined()
 
@@ -192,12 +211,12 @@ describe('设置页分 tab（smoke）', () => {
     expect(renderer.findByTestId('setting-stcheckupdate')).toBeDefined()
     expect(renderer.findByTestId('setting-check-env')).toBeUndefined()
 
-    // 「启动器设置」页：更新源/启动器行为/终端
+    // 「启动器设置」页：启动器行为/终端（镜像已移入环境页）
     await clickTestId('settings-tab-launcher')
     await settle()
-    expect(renderer.findByTestId('setting-mirror')).toBeDefined()
     expect(renderer.findByTestId('setting-checkupdate')).toBeDefined()
     expect(renderer.findByTestId('setting-terminal-font-size')).toBeDefined()
+    expect(renderer.findByTestId('setting-mirror')).toBeUndefined()
     expect(renderer.findByTestId('setting-port')).toBeUndefined()
     await resetUiStack()
   })

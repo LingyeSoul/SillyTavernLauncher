@@ -13,7 +13,10 @@
  * - 门禁红线：默认先跑 typecheck + unit 测试，失败即中止——不打包坏代码
  * - exe 图标：运行时用 src/assets/logo.png + windowIcon 纯函数生成多尺寸
  *   PNG-entry ICO（16~256 七档），与标题栏 WM_SETICON 同一套缩放算法，
- *   视觉表现一致；嵌入经 --windows-icon，Win32 FFI 路径与此互补
+ *   视觉表现一致；嵌入经 --windows-icon，Win32 FFI 路径与此互补。
+ *   目录条目必须降序（256 在首）——legacy shell 取首条目再缩放，
+ *   升序 = 16px 被放大到所有尺寸 = 发糊
+ * - 版本资源：版权 Copyright (c) 2026 LingyeSoul；公司名单空格占位不显示
  * - 版本三处同步：version.ts ↔ package.json（此处校验）→ 文件名 + PE 元数据
  * - --windows-hide-console：GUI 子系统，双击不弹黑窗（exe 内 console.log
  *   仍写入 logs/，诊断不受影响）
@@ -28,7 +31,7 @@
  *   应用运行时产物，打包脚本不得污染安装根目录）。
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { APP_VERSION } from '../version'
@@ -87,7 +90,11 @@ function windowsVersion(v: string): string {
 /** ICO 容器：6 字节头 + N×16 字节目录 + PNG 数据（PNG-entry Vista+ 原生支持） */
 function buildIconIco(pngBytes: Uint8Array): Buffer {
   const img = decodePngRgba(pngBytes)
-  const entries = ICON_SIZES.map((size) => ({
+  // 目录条目降序（256→16）：Win32 legacy 图标解析取目录首条目再缩放——
+  // 升序会让 16px 被选中后放大到所有显示尺寸（发糊根因，探针实测验证）；
+  // 降序保证任何请求都从 256 高质量下采样。七档全保留，现代 best-fit
+  // 路径仍可精确命中
+  const entries = [...ICON_SIZES].reverse().map((size) => ({
     size,
     data: encodePngRgba(resizeRgba(img, size, size), size, size),
   }))
@@ -177,6 +184,10 @@ async function main(): Promise<void> {
     `--windows-version=${windowsVersion(APP_VERSION)}`,
     '--windows-title=SillyTavernLauncher',
     `--windows-description=SillyTavern Launcher ${APP_VERSION}`,
+    // 版权显式声明；公司名用单空格占位——Bun 对空 publisher 会回落默认
+    // "Oven"，单空格实测使字段显示为空白（--windows-publisher="" 无效）
+    '--windows-copyright=Copyright (c) 2026 LingyeSoul',
+    '--windows-publisher= ',
     `--outfile=${exePath}`,
     'app.tsx',
   ], { cwd: SRC_ROOT })
@@ -194,14 +205,9 @@ async function main(): Promise<void> {
   ]
   if (!SKIP_SMOKE) checks.push(await runSmoke(exePath))
 
-  // dist 纯净检查：冒烟真实跑过 exe，若其运行时副作用（config/agreement/logs）
-  // 解析进了产物目录，在这里直接红灯——不允许带运行时垃圾发布
-  const strangers = readdirSync(DIST_DIR).filter((f) => f !== exeName)
-  checks.push(
-    strangers.length === 0
-      ? { ok: true, message: 'dist 纯净（仅产物本体，无运行时副作用文件）' }
-      : { ok: false, message: `dist 被运行时副作用污染：${strangers.join(', ')}` },
-  )
+  // 注：dist 若出现 config.json / agreement_cache.json / logs，是有人双击运行过
+  // 产物 exe 的正常副作用（配置按设计落在 exe 所在目录 = 安装根），非打包缺陷，
+  // 不作门禁。冒烟自身写临时目录，已经对照实验排除（RCA 详见 2026-09-20 会话）。
 
   rmSync(icoPath, { force: true })
 

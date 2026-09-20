@@ -5,9 +5,10 @@
  * 布局为"固定头 + 内容滚动"自管形态（AppShell 对 settings 不再包外层滚动容器）：
  * 标题 + tab 栏固定不动，仅 tab 内容区 overflow:scroll（有界高度，切 tab 按 key
  * 重挂回到顶部）。tab 分组按"配置写到哪"切分：
- * - 环境：Git/Node 运行环境切换 + 环境工具（use_sys_env 与体检按钮联动，必须同页）
+ * - 环境：Git/Node 运行环境切换 + GitHub 镜像 + 环境工具（use_sys_env 与体检按钮联动，
+ *   必须同页；镜像与 patchgit 同属 gitconfig 镜像链路，2026-09-20 自启动器页移入）
  * - 酒馆设置：写 SillyTavern config.yaml 与启动命令的项（启动参数/网络/酒馆更新）
- * - 启动器设置：启动器自身行为与外观（更新源/更新检查/自启/动效/终端字体）
+ * - 启动器设置：启动器自身行为与外观（更新检查/自启/动效/终端字体）
  * tray 开关按 D1 移除；autostart 描述改为 D1 新语义。
  * 开关行：高 40（有描述 48），标签 13/500 + 描述 12px muted。
  * 语义 1:1 对齐 Flet 版 handler（listen/hostWhitelist/unified 白名单联动、端口校验、参数校验）。
@@ -45,6 +46,8 @@ const TEXTS = {
   useSysEnvDesc: '懒人包请勿修改，修改后重启生效 | 使用系统已安装的 Git 与 Node.js',
   patchgit: '启用修改Git配置文件',
   patchgitDesc: '开启后修改系统环境的Git配置文件（镜像源改写）',
+  mirrorLabel: 'GitHub 镜像',
+  mirrorHint: '当不使用官方源时，将使用镜像源加速下载',
   sectionTools: '环境工具',
   checkEnv: '检查内置环境',
   startCmd: '启动命令行',
@@ -72,13 +75,11 @@ const TEXTS = {
   editHostWhitelist: '编辑白名单',
   unifiedWhitelist: '使用同一白名单',
   unifiedWhitelistDesc: '开启后，IP 白名单和主机白名单将使用相同内容，修改其中一个会自动同步到另一个',
-  // 更新（酒馆 tab：酒馆更新检查；启动器 tab：更新源 + 启动器更新检查）
+  // 更新（酒馆 tab：酒馆更新检查；启动器 tab：启动器更新检查）
   sectionUpdate: '更新',
   stcheckupdate: '自动检查酒馆更新',
   stcheckupdateDesc: '开启后在每次启动酒馆时先进行更新操作再启动酒馆',
   // 启动器设置页
-  mirrorLabel: 'GitHub 镜像',
-  mirrorHint: '当不使用官方源时，将使用镜像源加速下载',
   checkupdate: '自动检查启动器更新',
   checkupdateDesc: '开启后在每次启动启动器时会自动检查更新并提示(启动器并不会自动安装更新，请手动下载并更新)',
   sectionLauncher: '启动器',
@@ -405,6 +406,22 @@ export function SettingsView() {
             <SectionTitle title={TEXTS.sectionEnvSwitch} />
             {switchRow('use_sys_env', TEXTS.useSysEnv, TEXTS.useSysEnvDesc, settings.useSysEnv, (v) => settings.update({ useSysEnv: v }))}
             {switchRow('patchgit', TEXTS.patchgit, TEXTS.patchgitDesc, settings.patchgit, (v) => settings.update({ patchgit: v }))}
+            {/* 镜像行紧随 patchgit：两者同属 gitconfig 镜像链路（2026-09-20 自启动器页移入） */}
+            <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans, flexShrink: 0 }}>
+                {TEXTS.mirrorLabel}
+              </text>
+              <Select
+                items={MIRROR_ITEMS}
+                value={settings.mirror}
+                onValueChange={(v) => void settings.setMirror(v)}
+                width={200}
+                testId="setting-mirror"
+              />
+            </div>
+            <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans, marginTop: 4 }}>
+              {TEXTS.mirrorHint}
+            </text>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <SectionTitle title={TEXTS.sectionTools} />
@@ -533,24 +550,9 @@ export function SettingsView() {
       {/* ==================== 启动器设置 tab ==================== */}
       {activeTab === 'launcher' && (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {/* 更新源 + 启动器更新检查 */}
+          {/* 更新（镜像行已移入环境 tab 的运行环境区，此处仅启动器更新检查） */}
           <div style={{ display: 'flex', flexDirection: 'column', marginBottom: 16 }}>
             <SectionTitle title={TEXTS.sectionUpdate} />
-            <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-              <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans, flexShrink: 0 }}>
-                {TEXTS.mirrorLabel}
-              </text>
-              <Select
-                items={MIRROR_ITEMS}
-                value={settings.mirror}
-                onValueChange={(v) => void settings.setMirror(v)}
-                width={200}
-                testId="setting-mirror"
-              />
-            </div>
-            <text style={{ fontSize: 12, color: t.status.info, fontFamily: t.font.sans, marginBottom: 8, marginTop: 4 }}>
-              {TEXTS.mirrorHint}
-            </text>
             {switchRow('checkupdate', TEXTS.checkupdate, TEXTS.checkupdateDesc, settings.checkupdate, (v) => settings.update({ checkupdate: v }))}
           </div>
 
