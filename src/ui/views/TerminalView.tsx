@@ -6,8 +6,8 @@
  * - 底部 5 按钮接 stLifecycle（安装/启动/停止/更新/清空，各带 tooltip 350ms）。
  * - 中文文案集中于顶部常量对象（i18n 缝）。
  */
-import { memo, useMemo } from 'react'
-import { motion } from '@gpuix/react'
+import { memo, useEffect, useMemo } from 'react'
+import { motion, useWindowSize } from '@gpuix/react'
 import { EASE_OUT_QUAD, dur, layout } from '../../theme'
 import { useMotion, useTheme } from '../theme'
 import { Button } from '../components/Button'
@@ -20,6 +20,7 @@ import {
   type EngineSeg,
   type TerminalLine,
 } from '../../stores/terminalLogs'
+import { computeCols } from '../../services/terminalEngine'
 import { useStState } from '../../stores/stState'
 import { terminalRowHeight, useSettings } from '../../stores/settings'
 import { useUiState } from '../../stores/uiState'
@@ -43,6 +44,20 @@ const TEXTS = {
   cancelInstall: '用户取消安装',
   cancelStart: '用户取消启动',
 } as const
+
+/**
+ * 日志区单行的可用文本宽（像素）：窗宽 − 侧栏 − 分隔线 − 主区/卡片/列表 padding 与边框。
+ * 与 AppShell（sidebarW + 1px 分隔线）、本视图（padTerminal×2、卡片 borderWidth×2）、
+ * virtual-list（paddingLeft/Right 8×2）的布局常量同源；估算误差由 computeCols 的
+ * 安全余量与 LogRow 的 overflow hidden 双重兜底。
+ */
+const DIVIDER_PX = 1
+const CARD_BORDER_PX = 2
+const LIST_PADDING_X_PX = 16
+
+function terminalTextWidthPx(windowWidth: number): number {
+  return windowWidth - layout.sidebarW - DIVIDER_PX - 2 * layout.padTerminal - CARD_BORDER_PX - LIST_PADDING_X_PX
+}
 
 /** 单行渲染：引擎预解析段 = 相邻 <text>；无色行按日志级别兜底着色 */
 const LogRow = memo(function LogRow({ line }: { line: TerminalLine }) {
@@ -83,8 +98,8 @@ const LogRow = memo(function LogRow({ line }: { line: TerminalLine }) {
   ))
 
   // 段必须落在 display:flex + flexDirection:'row' 容器内才会合并一行
-  // （纯 div 中相邻 <text> 纵向堆叠，实测结论）；overflow hidden 裁剪超宽长行
-  // （引擎按 1000 列预折行，极端长行不撑开 virtual-list 内容宽）
+  // （纯 div 中相邻 <text> 纵向堆叠，实测结论）；overflow hidden 吸收折行列数
+  // 校准误差（估算 advance 偏窄时末列亦不撑开 virtual-list 内容宽）
   const rowStyle = {
     display: 'flex',
     flexDirection: 'row',
@@ -114,7 +129,15 @@ export function TerminalView() {
   const clear = useTerminalLogs((s) => s.clear)
   // 字号联动 virtual-list 估算高度（与 LogRow 行高同源：terminalRowHeight）
   const fontSize = useSettings((s) => s.terminalFontSize)
+  const fontFamilySetting = useSettings((s) => s.terminalFontFamily)
+  const fontFamily = fontFamilySetting || t.font.mono
   const estimatedRowHeight = terminalRowHeight(fontSize)
+  // 视口折行校准：窗宽/字号/字体任一变 → 重算列数写入引擎（窗口当前固定 800，
+  // 校准主要为字号与自定义字体服务；引擎初始 1000 列仅为挂载前占位）
+  const { width: windowWidth } = useWindowSize()
+  useEffect(() => {
+    useTerminalLogs.getState().setCols(computeCols(terminalTextWidthPx(windowWidth), fontSize, fontFamily))
+  }, [windowWidth, fontSize, fontFamily])
   const running = useStState((s) => s.running)
   const installed = useStState((s) => s.installed)
   const busy = useStState((s) => s.busy)

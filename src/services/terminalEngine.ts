@@ -43,13 +43,61 @@ export interface TerminalEngine {
   writeLine(text: string, tag?: unknown): void
   /** 丢弃终端与全部未决写入（清空日志用） */
   reset(): void
+  /**
+   * 视口折行列数校准（窗口宽 / 字号 / 字体变化时由视图层重算写入）。
+   * xterm 按"列"折行（CJK 占 2 列），一列像素宽 = 当前字体 ASCII advance 宽。
+   * 泵串行化保证 resize 只落在两次 write 解析回调之间，marker 不跨 resize
+   * 存活，增量提取窗口不受影响；在途 write 仅以新几何折行，不损坏提取。
+   */
+  setCols(cols: number): void
 }
 
-/** 固定几何：日志视图不做 resize 重排（简化步）；64KB 最长行折 ~64 视觉行 */
+/**
+ * 初始折行列数：TerminalView 挂载前的占位（启动期日志），
+ * 挂载后按实际窗宽/字号/字体经 setCols 校准为视口宽。
+ */
 const COLS = 1000
 const ROWS = 10
 /** 只需容纳在途 write 的 marker 行（提取即时发生，与展示回滚无关），2000 余量充足 */
 const SCROLLBACK = 2000
+/** 折行列数下限：防极小字号/极窄窗退化为逐字折行 */
+export const MIN_COLS = 20
+/** 视口宽度安全余量（px）：吸收字体 advance 估算误差，防末列被裁剪 */
+const WRAP_SAFETY_PX = 4
+/** 未收录字体的 advance 保守回退（按偏宽估算，宁可早折行也不溢出裁剪） */
+const ADVANCE_EM_FALLBACK = 0.6
+
+/** 常见等宽字体 ASCII 字符 advance 宽（em 占比；Consolas 0.55、Cascadia 0.586 为实测/官方值） */
+const MONO_ADVANCE_EM: Readonly<Record<string, number>> = {
+  consolas: 0.55,
+  'cascadia mono': 0.586,
+  'cascadia code': 0.586,
+  'jetbrains mono': 0.6,
+  'fira code': 0.6,
+  'courier new': 0.6,
+  'source code pro': 0.6,
+  'sarasa mono sc': 0.5,
+  'sarasa mono': 0.5,
+  'simhei': 0.5,
+  'nsimsun': 0.5,
+  'ms gothic': 0.5,
+}
+
+/** 字体族串 → advance 系数：取逗号列表首项、去引号、小写匹配；未收录走保守回退 */
+function advanceEmOf(fontFamily: string): number {
+  const first = fontFamily.split(',')[0]?.trim().replace(/^["']|["']$/g, '').toLowerCase() ?? ''
+  return MONO_ADVANCE_EM[first] ?? ADVANCE_EM_FALLBACK
+}
+
+/**
+ * 日志区可用像素宽 → 引擎折行列数。
+ * 纯函数便于单测；输入异常时返回下限保底。
+ */
+export function computeCols(availablePx: number, fontSize: number, fontFamily: string): number {
+  const cellPx = fontSize * advanceEmOf(fontFamily)
+  if (!(availablePx > 0) || !(cellPx > 0)) return MIN_COLS
+  return Math.max(MIN_COLS, Math.floor((availablePx - WRAP_SAFETY_PX) / cellPx))
+}
 
 /**
  * 非 SGR 的 CSI 序列：输入侧剔除，避免游标移动/擦除序列把光标搬离增量窗口。
@@ -149,6 +197,8 @@ function extractRow(term: Terminal, y: number): EngineRow {
 
 export function createTerminalEngine(emit: (rows: EngineRow[]) => void): TerminalEngine {
   let gen = 0
+  /** 当前折行列数（setCols 校准；createTerm 读取，reset 后保持） */
+  let cols = COLS
   let term = createTerm()
   /** 待写队列 + 泵状态：写入串行化，保证 marker 恒注册在真实起始行 */
   let queue: Array<{ text: string; tag?: unknown }> = []
@@ -156,7 +206,7 @@ export function createTerminalEngine(emit: (rows: EngineRow[]) => void): Termina
 
   function createTerm(): Terminal {
     return new Terminal({
-      cols: COLS,
+      cols,
       rows: ROWS,
       scrollback: SCROLLBACK,
       // buffer / markers 属实验性 API，读取缓冲必需（6.0 类型声明标注）
@@ -171,7 +221,10 @@ export function createTerminalEngine(emit: (rows: EngineRow[]) => void): Termina
     pumping = true
     const myGen = gen
     const marker = term.registerMarker(0)
-    term.write(`${next.text}\n`, () => {
+    // 行首 \r 校正：xterm 收窄 reflow 会把光标列挪到非 0（实测 50→20 列时空尾行
+    // 光标落在 col 19），下一次写入会从行中偏移位置开始；\r 归位行首，
+    // 常态（光标本就在行首）下是无害空操作
+    term.write(`\r${next.text}\n`, () => {
       try {
         if (myGen === gen) {
           const buf = term.buffer.active
@@ -210,5 +263,12 @@ export function createTerminalEngine(emit: (rows: EngineRow[]) => void): Termina
     term = createTerm()
   }
 
-  return { writeLine, reset }
+  function setCols(next: number): void {
+    const clamped = Math.max(MIN_COLS, Math.floor(next))
+    if (clamped === cols) return
+    cols = clamped
+    term.resize(clamped, ROWS)
+  }
+
+  return { writeLine, reset, setCols }
 }
