@@ -43,6 +43,18 @@ function Harness({ rows }: { rows: number }) {
   )
 }
 
+/** 对话框内模式：无外层定高约束，maxHeight 钳视口 + pad 0
+ *  （ErrorDialog 详情 / EulaDialog 正文 / UpdateAvailableDialog changelog 形态） */
+function DialogHarness({ rows }: { rows: number }) {
+  return (
+    <div style={{ width: 400 }}>
+      <SmartScrollArea maxHeight={200} padX={0} padY={0} contentKey={rows} testId="dlg-area">
+        <Rows n={rows} />
+      </SmartScrollArea>
+    </div>
+  )
+}
+
 /** 等 SmartScrollArea 的 500ms 看门狗完成一轮重测 */
 async function settleWatchdog(): Promise<void> {
   for (let i = 0; i < 8; i++) await settle(120)
@@ -88,5 +100,27 @@ describe('SmartScrollArea 契约', () => {
     const rb = renderer().getElementBounds(row.id)!
     expect(rb.y).toBeGreaterThanOrEqual(0)
     expect(rb.y + rb.height).toBeLessThanOrEqual(260)
+  }, 20_000)
+
+  it('对话框模式（maxHeight + pad 0）：短内容非滚动、超高钳高且滚轮生效', async () => {
+    testRoot = createTestRoot()
+
+    // 5 行 100px < maxHeight 200 → 非滚动容器（短文案滚轮不可推越界）
+    testRoot.root.render(<DialogHarness rows={5} />)
+    await settleWatchdog()
+    let area = renderer().findByTestId('dlg-area')!
+    expect(renderer().getScrollOffset(area.id), '对话框短内容 → 非滚动容器').toBeNull()
+
+    // 20 行 400px > 200 → 滚动容器，且视口被 maxHeight 钳住（不画出面板）
+    testRoot.root.render(<DialogHarness rows={20} />)
+    await settleWatchdog()
+    area = renderer().findByTestId('dlg-area')!
+    expect(renderer().getScrollOffset(area.id), '对话框超高 → 滚动容器').toEqual([0, 0])
+    const b = renderer().getElementBounds(area.id)!
+    expect(b.height, '视口高度须被 maxHeight 钳制').toBeLessThanOrEqual(200)
+    renderer().nativeSimulateScrollWheel(b.x + b.width / 2, b.y + b.height / 2, 0, -120)
+    await settle()
+    const offset = renderer().getScrollOffset(area.id)
+    expect(offset![1], '超高时滚轮应滚动内容').toBeLessThan(0)
   }, 20_000)
 })

@@ -198,12 +198,17 @@ function ExtensionCard({ ext, onChanged }: { ext: ExtensionInfo; onChanged: () =
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexGrow: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
+          {/* displayName 来自第三方 manifest 可任意长：flex 行内 text 收不了缩
+              （auto min-size）会撑爆卡片行；minWidth:0 即解锁收缩折行（flex-text-
+              shrink.test 实证，无需 flexGrow——版本号须与名称保持相邻） */}
           <text
             style={{
               fontSize: t.fs.field,
               fontWeight: 500,
               color: ext.isValid ? t.text.primary : t.status.warning,
               fontFamily: t.font.sans,
+              minWidth: 0,
+              whiteSpace: 'normal',
             }}>
             {fields.displayName}
           </text>

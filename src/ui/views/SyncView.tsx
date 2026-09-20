@@ -331,7 +331,9 @@ export function SyncView() {
                 flexDirection: 'row',
                 alignItems: 'center',
                 gap: 10,
-                height: 48,
+                // DEVIATION: 定高 48 放宽为最小高——长 URL（含路径）折 3-4 行时
+                // 定高行纵向溢出画出卡框（同 Radio.tsx 长标签先例）
+                minHeight: 48,
                 paddingLeft: 12,
                 paddingRight: 8,
                 marginBottom: t.space.cardGap,

@@ -1,6 +1,7 @@
 /**
  * EULA 对话框（设计 §4.7）：30s 倒计时 + <markdown> 正文（远端文本，maxHeight 300
- * 内部滚动——模态在 FloatingLayer，与主视图滚动不构成嵌套）。
+ * SmartScroll——模态在 FloatingLayer，与主视图滚动不构成嵌套；loading 态短文本
+ * 自动非滚动，杜绝裸 scroll 短态滚轮推越界）。
  * 同意 → agreement_accepted/agreement_version 落盘；不同意 → 退出进程。
  *
  * DEVIATION: 协议抓取（features/agreement/fetcher.py）的精简版在 services/agreement
@@ -18,6 +19,7 @@ import { useUiState } from '../../stores/uiState'
 import { editorTheme, useTheme, useThemeContext } from '../theme'
 import { Button } from '../components/Button'
 import { Modal } from '../components/Modal'
+import { SmartScrollArea } from '../components/SmartScroll'
 
 const TEXTS = {
   title: '使用协议',
@@ -145,25 +147,32 @@ export function EulaDialog() {
         {countdown > 0 ? TEXTS.countdown(countdown) : TEXTS.countdownDone}
       </text>
 
-      {/* 正文：markdown + 内部滚动（模态浮层内合法） */}
+      {/* 正文：markdown SmartScroll（loading 态单行短文本非滚动；缓存正文/远端
+          刷新超高才滚。SmartScroll contentKey + 500ms 看门狗覆盖 loading→正文
+          的异步长高，勿裸 overflow:scroll——短态滚轮可推越界） */}
       <div
         style={{
           marginTop: 8,
-          maxHeight: 300,
-          overflow: 'scroll',
           backgroundColor: t.bg.deep,
           borderWidth: 1,
           borderColor: t.border.subtle,
           borderRadius: t.radius.md,
           padding: 12,
         }}>
-        {content === null ? (
-          <text style={{ fontSize: 13, color: t.text.muted, fontFamily: t.font.sans }}>
-            {TEXTS.loading}
-          </text>
-        ) : (
-          <markdown source={content} theme={editorTheme(t, mode)} />
-        )}
+        <SmartScrollArea
+          maxHeight={300}
+          padX={0}
+          padY={0}
+          contentKey={content ?? 'loading'}
+          testId="eula-content-scroll">
+          {content === null ? (
+            <text style={{ fontSize: 13, color: t.text.muted, fontFamily: t.font.sans }}>
+              {TEXTS.loading}
+            </text>
+          ) : (
+            <markdown source={content} theme={editorTheme(t, mode)} />
+          )}
+        </SmartScrollArea>
       </div>
     </Modal>
   )
