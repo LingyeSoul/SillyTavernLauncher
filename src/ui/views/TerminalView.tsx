@@ -1,7 +1,8 @@
 /**
  * 终端视图（设计 §4.1，核心）：
  * - 主区 padding 12，flex column，不滚动（自管滚动形态）。
- * - 日志卡：virtual-list alignment=bottom followTail，ANSI 彩色行渲染
+ * - 日志卡：virtual-list alignment=top followTail（不足一屏时从顶部向下填充，
+ *   满屏后 followTail 继续跟尾），ANSI 彩色行渲染
  *   （段 = 相邻 <text>，需在 display:flex + row 容器内才合并一行，见 LogRow）。
  * - 底部 5 按钮接 stLifecycle（安装/启动/停止/更新/清空，各带 tooltip 350ms）。
  * - 中文文案集中于顶部常量对象（i18n 缝）。
@@ -239,6 +240,7 @@ export function TerminalView() {
       }}>
       {/* 日志卡：bg-deep 外框 + 1px subtle + radius 6 */}
       <div
+        testId="terminal-log-card"
         style={{
           flexGrow: 1,
           minHeight: 0,
@@ -252,7 +254,7 @@ export function TerminalView() {
         }}>
         {hasLogs ? (
           <virtual-list
-            alignment="bottom"
+            alignment="top"
             followTail
             estimatedItemHeight={estimatedRowHeight}
             style={{ flexGrow: 1, minHeight: 0, paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4 }}>

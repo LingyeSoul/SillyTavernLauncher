@@ -3,12 +3,16 @@
  * - 点「启动」：首次启动先过年龄确认 → 确认后走 startSt → 未安装 →
  *   必须有错误反馈（toast/日志），不得静默、不得崩溃；has_started_st 落盘。
  * - 点「安装」：确认对话框出现 → 取消 → 日志「用户取消安装」。
+ * - 日志贴顶断言：不足一屏时首行从列表顶部向下渲染（alignment=top 行为契约）。
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import { launchE2E, sleep, pidAlive } from './helpers'
 import type { E2ESession } from './helpers'
 
 let session: E2ESession | null = null
+
+/** 与 TerminalView TEXTS.cancelInstall 同文案（日志行定位锚点） */
+const TEXT_CANCEL_LOG = '用户取消安装'
 
 afterEach(async () => {
   if (session) {
@@ -73,5 +77,21 @@ describe('终端按钮异常路径（无 SillyTavern 环境）', () => {
     }
     expect(ageGone, '取消后年龄确认对话框应关闭').toBe(true)
     expect(pidAlive(session.pid)).toBe(true)
+
+    // --- 4. 日志贴顶：不足一屏时日志从卡片顶部向下渲染 ---
+    // alignment=top 的行为契约（改自 bottom）：锚点行是最后一条日志（「用户取消
+    // 安装」，前面还有数行启动日志 ≈66px 偏移）；贴底渲染时该偏移为卡片高度
+    // 减内容高（数百像素）。阈值取卡片半高，自适应行数与窗口尺寸。作用域限定
+    // 在日志卡内以排除 toast 同文案；锚点是外层卡片 div（virtual-list 原生
+    // 元素无 painted bounds）
+    const cardB = await app.getByTestId('terminal-log-card').bounds()
+    const rowB = await app
+      .getByTestId('terminal-log-card')
+      .getByText(TEXT_CANCEL_LOG)
+      .bounds()
+    expect(
+      rowB.y - cardB.y,
+      '少量日志应从卡片顶部开始向下渲染，而非贴底',
+    ).toBeLessThan(cardB.height / 2)
   }, 120_000)
 })

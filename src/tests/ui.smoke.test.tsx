@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import { createTestRoot } from '@gpuix/react/testing'
 import type { ReactElement, ReactNode } from 'react'
 import type { TestRenderer, TestRoot } from '@gpuix/react/testing'
+import { layout } from '../theme'
 
 let tempDir: string
 let originalCwd: string
@@ -223,32 +224,42 @@ describe('设置页分 tab（smoke）', () => {
 })
 
 describe('智能滚动（smoke）', () => {
+  /** 与 SmartScrollArea 同源的"装得下"判定（theme 数值即契约）。
+   *  offscreen 根按宿主机屏幕高布局：开发机高屏 fits=true，CI 虚拟屏（768 级）上
+   *  环境页内容会真实超高 → 断言必须按实测 bounds 推导期望值，而非假定装得下。
+   *  契约：滚动开启 ⇔ 内容超高（双向都卡：装得下却开滚 = 要修的回归；超高误关 = 更糟） */
+  const PAD_Y = layout.padFormY
+
+  function assertScrollContract(scrollId: string): void {
+    const vp = renderer.findByTestId(scrollId)
+    if (!vp) throw new Error(`${scrollId} not found`)
+    const ct = renderer.findByTestId(`${scrollId}-content`)
+    if (!ct) throw new Error(`${scrollId}-content not found`)
+    const vb = renderer.getElementBounds(vp.id)
+    const cb = renderer.getElementBounds(ct.id)
+    if (!vb || !cb) throw new Error(`${scrollId} bounds not ready`)
+    const fits = cb.height <= vb.height - PAD_Y * 2 + 1
+    expect(renderer.getScrollOffset(vp.id) === null, fits ? '装得下时应为非滚动容器' : '超高时应为滚动容器').toBe(fits)
+  }
+
   /** SmartScrollArea 测量经 setTimeout(16ms) 轮询 + 需 flush 出 painted bounds，
    *  断言前多轮 settle 让效应跑完（retry 12×16ms 内必有一次命中已绘制帧） */
   async function settleMeasure(): Promise<void> {
     for (let i = 0; i < 6; i++) await settle(60)
   }
 
-  it('环境 tab 内容装得下 → 非滚动容器；切 tab 重挂后依旧自愈', async () => {
+  it('环境 tab：滚动开关与实测"装得下"判定一致；切 tab 重挂后依旧收敛', async () => {
     await resetUiStack()
     await clickTestId('nav-settings')
     await settleMeasure()
+    assertScrollContract('settings-tab-scroll')
 
-    // 环境 tab（默认）：两张卡片远小于可用高度 → overflow 应已翻 'hidden'。
-    // 超高分枝（超高才开滚动）由 smart-scroll.test.tsx 定高组件用例 + E2E 真窗口覆盖
-    //（本 offscreen 根实际按屏幕高布局，请求的窗口尺寸不生效，不宜做超高断言）
-    const envScroll = renderer.findByTestId('settings-tab-scroll')
-    if (!envScroll) throw new Error('settings-tab-scroll not found')
-    expect(renderer.getScrollOffset(envScroll.id), '内容装得下时不应是滚动容器').toBeNull()
-
-    // 切走再切回（key 重挂）→ 测量重新收敛，仍是非滚动容器
+    // 切走再切回（key 重挂）→ 测量重新收敛，契约依旧成立
     await clickTestId('settings-tab-launcher')
     await settleMeasure()
     await clickTestId('settings-tab-env')
     await settleMeasure()
-    const envScroll2 = renderer.findByTestId('settings-tab-scroll')
-    if (!envScroll2) throw new Error('settings-tab-scroll not found after switching back')
-    expect(renderer.getScrollOffset(envScroll2.id), '切回装得下的 tab 应再次禁用滚动').toBeNull()
+    assertScrollContract('settings-tab-scroll')
     await resetUiStack()
   })
 })
@@ -386,6 +397,24 @@ describe('对话框（smoke）', () => {
     const confirm = renderer.findByTestId('age-confirm')
     if (!confirm) throw new Error('age-confirm not found')
     expect(Number(confirm.style.opacity ?? 1)).toBeLessThanOrEqual(0.32 + 1e-9)
+
+    // 回归：长标签不得画出对话框边界（checkbox 根 = Modal 内容宽），
+    // 且宽度受限后应折行（高度 > 单行 lineHeight）
+    {
+      const root = renderer.findByTestId('age-checkbox')
+      const label = renderer.findByText(
+        '我已确认本人已年满18周岁，或作为未满18周岁用户已取得监护人同意',
+      )
+      if (!root) throw new Error('age-checkbox not found')
+      if (!label) throw new Error('age-checkbox label not found')
+      const rb = renderer.getElementBounds(root.id)
+      const lb = renderer.getElementBounds(label.id)
+      if (!rb || !lb) throw new Error('age-checkbox bounds missing')
+      expect(lb.x + lb.width).toBeLessThanOrEqual(rb.x + rb.width + 1)
+      // 容差含 1px 边框取整：标签须为 16px 方框 + 8px 间隙让出宽度
+      expect(lb.width).toBeLessThanOrEqual(rb.width - 16)
+      expect(lb.height).toBeGreaterThan(24)
+    }
 
     await clickTestId('age-checkbox')
     const confirmAfter = renderer.findByTestId('age-confirm')

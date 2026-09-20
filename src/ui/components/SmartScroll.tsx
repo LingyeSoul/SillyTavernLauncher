@@ -96,8 +96,12 @@ export function SmartScrollArea({ children, contentKey, testId }: SmartScrollAre
         paddingRight: PAD_X,
       }}>
       {/* 测量锚点：flexShrink 0 保住内容自然高度（默认收缩会把它压到视口高，
-          超高内容被误判"装得下"） */}
-      <div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+          超高内容被误判"装得下"）；派生 testId 暴露锚点供测试/E2E 复测同一判定 */}
+      <div
+        ref={contentRef}
+        testId={testId ? `${testId}-content` : undefined}
+        style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}
+      >
         {children}
       </div>
     </div>
