@@ -29,7 +29,6 @@ export type DialogDescriptor =
   | { kind: 'welcome' }
   | { kind: 'ipWhitelist' }
   | { kind: 'hostWhitelist' }
-  | { kind: 'privateRanges' }
   | {
       kind: 'ageConfirm'
       mode: 'install' | 'start'
@@ -44,6 +43,8 @@ export type DialogDescriptor =
     }
   | { kind: 'error'; title: string; message: string; detail?: string }
   | { kind: 'exitConfirm'; onConfirm: () => void }
+  /** 首启同步服务器警告（30s 倒计时，确认关闭后才启动服务器） */
+  | { kind: 'syncFirstRun'; onConfirm: () => void }
   | {
       kind: 'versionSwitch'
       version: string

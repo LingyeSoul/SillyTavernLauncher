@@ -31,7 +31,7 @@ import { Card, SectionTitle } from '../components/Card'
 import { Input } from '../components/Input'
 import { PageHeader } from '../components/PageHeader'
 import { Select } from '../components/Select'
-import { Switch } from '../components/Switch'
+import { SwitchRow } from '../components/Switch'
 
 type SettingsTabId = 'env' | 'st' | 'launcher'
 
@@ -169,7 +169,7 @@ export function SettingsView() {
 
   const st = getStConfig()
 
-  /** 开关行：高 40（无描述）/48（有描述），标签左 Switch 右 */
+  /** 开关行：高 40（无描述）/48（有描述），标签左 Switch 右（共享 SwitchRow，常规档） */
   const switchRow = (
     key: string,
     label: string,
@@ -177,25 +177,7 @@ export function SettingsView() {
     on: boolean,
     onChange: (v: boolean) => void,
   ): ReactElement => (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'row',
-        alignItems: 'center',
-        minHeight: desc ? 48 : 40,
-        gap: 12,
-      }}
-      key={key}>
-      <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, gap: 2 }}>
-        <text style={{ fontSize: 13, fontWeight: 500, color: t.text.primary, fontFamily: t.font.sans }}>
-          {label}
-        </text>
-        {desc && (
-          <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>{desc}</text>
-        )}
-      </div>
-      <Switch on={on} onChange={onChange} testId={`setting-${key}`} />
-    </div>
+    <SwitchRow key={key} label={label} desc={desc} on={on} onChange={onChange} testId={`setting-${key}`} />
   )
 
   /** ← listen_changed：开启时创建白名单，失败回滚 + 错误对话框 */
@@ -499,7 +481,8 @@ export function SettingsView() {
               <div style={{ flexGrow: 1, minWidth: 0 }}>
                 {switchRow('private_filter', TEXTS.privateFilter, TEXTS.privateFilterDesc, settings.privateAddressWhitelistEnabled, handlePrivateFilter)}
               </div>
-              <Button variant="quiet" icon="edit" onClick={() => uiStateActions.openDialog({ kind: 'privateRanges' })} testId="setting-edit-private-ranges">
+              {/* 网段编辑已并入网络白名单合并对话框（2026-09-20），入口直达同一对话框 */}
+              <Button variant="quiet" icon="edit" onClick={() => uiStateActions.openDialog({ kind: 'ipWhitelist' })} testId="setting-edit-private-ranges">
                 {TEXTS.editPrivateRanges}
               </Button>
             </div>
