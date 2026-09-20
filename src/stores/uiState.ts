@@ -29,6 +29,7 @@ export type DialogDescriptor =
   | { kind: 'welcome' }
   | { kind: 'ipWhitelist' }
   | { kind: 'hostWhitelist' }
+  | { kind: 'privateRanges' }
   | {
       kind: 'ageConfirm'
       mode: 'install' | 'start'

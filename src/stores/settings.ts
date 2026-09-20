@@ -33,6 +33,7 @@ export interface SettingsSnapshot {
   proxyUrl: string
   hostWhitelistEnabled: boolean
   unifiedWhitelist: boolean
+  privateAddressWhitelistEnabled: boolean
 }
 
 // —— 终端字体设置域 ——
@@ -92,6 +93,7 @@ export function readSettings(): SettingsSnapshot {
     proxyUrl: st.proxyUrl,
     hostWhitelistEnabled: st.hostWhitelistEnabled,
     unifiedWhitelist: st.unifiedWhitelist,
+    privateAddressWhitelistEnabled: st.privateAddressWhitelistEnabled,
   }
 }
 
@@ -137,6 +139,7 @@ export const useSettings = create<SettingsState>((set) => ({
       proxyUrl: null,
       hostWhitelistEnabled: null,
       unifiedWhitelist: null,
+      privateAddressWhitelistEnabled: null,
     }
     for (const [field, configKey] of Object.entries(keyMap)) {
       const value = patch[field as keyof SettingsSnapshot]

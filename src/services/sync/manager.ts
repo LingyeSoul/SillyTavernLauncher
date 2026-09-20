@@ -14,7 +14,12 @@
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { getConfigStore, type ConfigStore } from '../configStore'
-import { getLocalIp as defaultGetLocalIp } from '../network'
+import {
+  getLocalIp,
+  getNetworkManager,
+  isLocalAddress as defaultIsLocalAddress,
+  isValidIpString,
+} from '../network'
 import { generateSyncToken, createSyncServer, SyncServer, type SyncLogLevel } from './server'
 import { SyncClient, formatSize } from './client'
 
@@ -30,9 +35,20 @@ export interface DataSyncManagerOptions {
   /** 显式传 null 关闭配置持久化；默认使用全局 configStore */
   configStore?: ConfigStore | null
   getLocalIp?: () => Promise<string | null>
+  /** IP 本地性校验（默认 network 服务；测试注入） */
+  isLocalAddress?: (ip: string) => boolean
   log?: SyncLogFn
   /** 发现扫描使用的 fetch（默认全局 fetch；测试注入） */
   fetchImpl?: typeof fetch
+}
+
+/**
+ * 默认 LAN IP 解析：先失效 300s 缓存再取（网络切换后缓存值同样可能陈旧；
+ * manager 侧调用频率低，换取的是网络变化后始终拿到真实 IP）。
+ */
+async function freshLocalIp(): Promise<string | null> {
+  getNetworkManager().invalidateCache()
+  return getLocalIp()
 }
 
 export type SyncStatus = 'idle' | 'syncing' | 'server' | 'error'
@@ -61,6 +77,7 @@ export class DataSyncManager {
   readonly dataDir: string
   private readonly configStore: ConfigStore | null
   private readonly getLanIp: () => Promise<string | null>
+  private readonly isLocalAddress: (ip: string) => boolean
   private readonly logFn: SyncLogFn
   private readonly fetchImpl: typeof fetch
 
@@ -80,7 +97,8 @@ export class DataSyncManager {
     this.dataDir = options.dataDir
     this.configStore =
       options.configStore === undefined ? getConfigStore() : options.configStore
-    this.getLanIp = options.getLocalIp ?? defaultGetLocalIp
+    this.getLanIp = options.getLocalIp ?? freshLocalIp
+    this.isLocalAddress = options.isLocalAddress ?? defaultIsLocalAddress
     this.logFn = options.log ?? ((message) => console.log(message))
     this.fetchImpl = options.fetchImpl ?? fetch
   }
@@ -228,6 +246,24 @@ export class DataSyncManager {
     try {
       this.serverPort = options.port ?? this.serverPort
       this.serverHost = options.host ?? this.serverHost
+
+      // 监听地址拦截：host 可能来自 configStore 内置默认/历史 config/输入框残留，
+      // 网段漂移后该 IP 已不挂在本机网卡，listen 会 EADDRNOTAVAIL（Bun 将其掩蔽成
+      // 误导性的 "Is port in use?"）。校验失败回退当前局域网 IP；启动成功后
+      // saveConfig 把新 IP 写回 config，陈旧值自此自愈。
+      // 回环（127.*）不参与校验：isValidIpString 本就排除，测试/本机绑定不受影响。
+      if (isValidIpString(this.serverHost) && !this.isLocalAddress(this.serverHost)) {
+        this.log(`监听地址 ${this.serverHost} 未挂在本机网卡上（网络环境已变化？）`, 'warning')
+        const lanIp = await this.getLanIp()
+        if (lanIp && this.isLocalAddress(lanIp)) {
+          this.log(`回退到当前局域网 IP: ${lanIp}`, 'warning')
+          this.serverHost = lanIp
+        } else {
+          this.log('无法确定可用的本机监听地址，启动中止（请检查网络连接后重试）', 'error')
+          this.syncStatus = 'error'
+          return false
+        }
+      }
 
       // Initialize sync server（host 显式传入，只绑该网卡）
       this.syncServer = await createSyncServer({

@@ -133,6 +133,52 @@ describe('服务器编排（← start_sync_server / stop_sync_server）', () => 
   })
 })
 
+describe('监听地址拦截（网段漂移后陈旧 host 回退——Bun 把 EADDRNOTAVAIL 掩蔽成 "port in use"）', () => {
+  it('config 中的陈旧 host 不在本机网卡 → 回退当前局域网 IP 并写回 config（自愈）', async () => {
+    const logs: string[] = []
+    const manager = makeManager({
+      getLocalIp: async () => '127.0.0.1', // 回退目标取回环，测试不碰真实网卡
+      isLocalAddress: (ip) => ip === '127.0.0.1',
+      log: (message) => logs.push(message),
+    })
+    configStore.set('sync.host', '192.168.64.197') // 网段漂移前的陈旧值
+    await manager.initialize()
+    expect(await manager.startSyncServer({ port: 0 })).toBe(true)
+    expect(manager.serverHost).toBe('127.0.0.1')
+    expect(logs.some((m) => m.includes('未挂在本机网卡上'))).toBe(true)
+    expect(logs.some((m) => m.includes('回退到当前局域网 IP'))).toBe(true)
+    const saved = JSON.parse(readFileSync(configPath, 'utf8')) as { sync: { host: string } }
+    expect(saved.sync.host).toBe('127.0.0.1')
+    await manager.stopSyncServer()
+  })
+
+  it('回退目标也不可用 → 启动失败并置 error（给出真实诊断而非误导性端口提示）', async () => {
+    const logs: string[] = []
+    const manager = makeManager({
+      getLocalIp: async () => null,
+      isLocalAddress: () => false, // 注入以保证确定性：任何地址都不算本机
+      log: (message) => logs.push(message),
+    })
+    configStore.set('sync.host', '192.168.96.111') // configStore 内置默认同款虚构 IP
+    await manager.initialize()
+    expect(await manager.startSyncServer({ port: 0 })).toBe(false)
+    expect(manager.isServerRunning).toBe(false)
+    expect(manager.syncStatus).toBe('error')
+    expect(logs.some((m) => m.includes('无法确定可用的本机监听地址'))).toBe(true)
+  })
+
+  it('显式传入的本机地址不触发回退（127.0.0.1 直通）', async () => {
+    const manager = makeManager({
+      getLocalIp: async () => '10.0.0.99',
+      isLocalAddress: (ip) => ip === '127.0.0.1',
+    })
+    await manager.initialize()
+    expect(await manager.startSyncServer({ port: 0, host: '127.0.0.1' })).toBe(true)
+    expect(manager.serverHost).toBe('127.0.0.1')
+    await manager.stopSyncServer()
+  })
+})
+
 describe('LAN 发现（← detect_network_servers，并发池版）', () => {
   it('192.168 网段扫描 1..254（跳过自身），发现健康节点', async () => {
     const calls: string[] = []

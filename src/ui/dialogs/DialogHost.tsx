@@ -12,7 +12,7 @@ import { useUiState } from '../../stores/uiState'
 import type { DialogDescriptor } from '../../stores/uiState'
 import { EulaDialog } from './EulaDialog'
 import { WelcomeDialog } from './WelcomeDialog'
-import { IpWhitelistDialog, HostWhitelistDialog } from './WhitelistDialogs'
+import { IpWhitelistDialog, HostWhitelistDialog, PrivateRangesDialog } from './WhitelistDialogs'
 import { AgeConfirmDialog } from './AgeConfirmDialog'
 import { UpdateAvailableDialog } from './UpdateAvailableDialog'
 import { ErrorDialog } from './ErrorDialog'
@@ -37,6 +37,8 @@ function DialogSlot({ dialog }: { dialog: DialogDescriptor }) {
       return <IpWhitelistDialog />
     case 'hostWhitelist':
       return <HostWhitelistDialog />
+    case 'privateRanges':
+      return <PrivateRangesDialog />
     case 'ageConfirm':
       return <AgeConfirmDialog mode={dialog.mode} onConfirm={dialog.onConfirm} />
     case 'updateAvailable':

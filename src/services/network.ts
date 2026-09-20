@@ -83,7 +83,6 @@ export class NetworkManager {
     if (this.cachedLocalIp && currentTime - this.lastIpCheckTime < this.cacheDurationMs) {
       return this.cachedLocalIp
     }
-
     const adapters = this.collectAdapterIps(this.getInterfaces())
     if (adapters.length > 0) {
       // 按适配器类型优先级 + IP 段优先级取最优
@@ -112,6 +111,15 @@ export class NetworkManager {
       this.lastIpCheckTime = currentTime
     }
     return fallbackIp
+  }
+
+  /**
+   * 清除 IP 缓存（网络环境变化后需重取真实 IP，
+   * 如同步服务绑定前发现配置 IP 已不在本机网卡上时的回退解析）。
+   */
+  invalidateCache(): void {
+    this.cachedLocalIp = null
+    this.lastIpCheckTime = 0
   }
 
   /** ← _parse_adapter_ips 的 os.networkInterfaces 版本 */
@@ -216,4 +224,24 @@ export function getNetworkManager(): NetworkManager {
 /** ← get_local_ip 便捷函数 */
 export function getLocalIp(): Promise<string | null> {
   return getNetworkManager().getLocalIp()
+}
+
+/**
+ * 判断 IP 是否挂在本机某块网卡上（含回环；按字面量比对，IPv4/IPv6 皆可）。
+ * 同步服务绑定前的拦截线：config 里的 host 是网络状态快照而非用户偏好，
+ * 网段漂移后 listen 该 IP 会 EADDRNOTAVAIL——而 Bun 会把所有 listen 失败
+ * 掩蔽成误导性的 "Failed to start server. Is port XXXX in use?"，
+ * 必须在 listen 之前自行校验才能给出真实诊断。
+ */
+export function isLocalAddress(
+  ip: string,
+  getInterfaces: InterfacesProvider = () => os.networkInterfaces(),
+): boolean {
+  for (const infos of Object.values(getInterfaces())) {
+    if (!infos) continue
+    for (const info of infos) {
+      if (info.address === ip) return true
+    }
+  }
+  return false
 }

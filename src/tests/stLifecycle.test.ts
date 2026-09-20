@@ -516,6 +516,81 @@ describe('startSt（← start_sillytavern）', () => {
   })
 })
 
+describe('私网请求过滤自愈（← 适配 ST private request filter 特性）', () => {
+  it('startSt：存量配置（listen 开 + 过滤关）→ spawn 前补开并打日志', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const heal = vi.fn(async () => 'healed' as const)
+    const lifecycle = makeLifecycle({
+      deps: {
+        ...harness.deps,
+        stConfig: {
+          proxyEnabled: false,
+          proxyUrl: '',
+          save: () => true,
+          ensurePrivateFilterForListen: heal,
+          privateAddressAllowedRanges: ['127.0.0.0/8', '::1/128'],
+        },
+      },
+    })
+
+    const result = await lifecycle.startSt()
+    expect(result.ok).toBe(true)
+    expect(heal).toHaveBeenCalledTimes(1)
+    expect(logs.some((m) => m.includes('已自动开启私网请求过滤') && m.includes('127.0.0.0/8'))).toBe(true)
+  })
+
+  it('startSt：自愈写入失败 → 不阻断启动，仅警告日志', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const lifecycle = makeLifecycle({
+      deps: {
+        ...harness.deps,
+        stConfig: {
+          proxyEnabled: false,
+          proxyUrl: '',
+          save: () => false,
+          ensurePrivateFilterForListen: async () => 'save-failed',
+        },
+      },
+    })
+
+    const result = await lifecycle.startSt()
+    expect(result.ok).toBe(true)
+    expect(harness.calls.length).toBe(1)
+    expect(logs.some((m) => m.includes('私网请求过滤自动开启失败'))).toBe(true)
+  })
+
+  it('startSt：无需自愈（ok）→ 不打自愈日志', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const lifecycle = makeLifecycle({
+      deps: {
+        ...harness.deps,
+        stConfig: { proxyEnabled: false, proxyUrl: '', save: () => true, ensurePrivateFilterForListen: async () => 'ok' },
+      },
+    })
+    await lifecycle.startSt()
+    expect(logs.some((m) => m.includes('私网请求过滤'))).toBe(false)
+  })
+
+  it('restartSt：不经 startSt 的路径同样执行自愈', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const heal = vi.fn(async () => 'healed' as const)
+    const lifecycle = makeLifecycle({
+      deps: {
+        ...harness.deps,
+        stConfig: { proxyEnabled: false, proxyUrl: '', save: () => true, ensurePrivateFilterForListen: heal },
+      },
+    })
+
+    const result = await lifecycle.restartSt()
+    expect(result.ok).toBe(true)
+    expect(heal).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('stopSt（← stop_sillytavern）', () => {
   it('无进程 → 提示；有进程 → stopAllProcesses 并上报日志', async () => {
     const stopAll = vi.fn(async (onEvent?: (message: string) => void) => {

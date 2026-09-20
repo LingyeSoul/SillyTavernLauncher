@@ -21,6 +21,9 @@ import type { StConfigShape } from './types'
 
 export const DEFAULT_PRIVATE_ADDRESS_RANGES: readonly string[] = ['127.0.0.0/8', '::1/128']
 
+/** ensurePrivateFilterForListen 的结果：ok=本就安全 / healed=已自愈落盘 / save-failed=需要自愈但写入失败 */
+export type PrivateFilterHealResult = 'ok' | 'healed' | 'save-failed'
+
 export interface StConfigOptions {
   /** SillyTavern 目录（默认 <cwd>/SillyTavern） */
   baseDir?: string
@@ -330,6 +333,18 @@ export class StConfig {
     return true
   }
 
+  /** 确保回环放行段在列（开启私网过滤的最小权限默认；缺失则补，不重复）；返回是否有补缺 */
+  ensureLoopbackRanges(): boolean {
+    let changed = false
+    for (const addressRange of DEFAULT_PRIVATE_ADDRESS_RANGES) {
+      if (!this.privateAddressAllowedRanges.includes(addressRange)) {
+        this.privateAddressAllowedRanges.push(addressRange)
+        changed = true
+      }
+    }
+    return changed
+  }
+
   /** ← create_whitelist：开启局域网监听时的最小权限白名单 */
   async createWhitelist(): Promise<boolean> {
     try {
@@ -361,12 +376,7 @@ export class StConfig {
           changed = true
         }
       }
-      for (const addressRange of DEFAULT_PRIVATE_ADDRESS_RANGES) {
-        if (!this.privateAddressAllowedRanges.includes(addressRange)) {
-          this.privateAddressAllowedRanges.push(addressRange)
-          changed = true
-        }
-      }
+      if (this.ensureLoopbackRanges()) changed = true
 
       if (changed) this.save()
       return true
@@ -374,6 +384,18 @@ export class StConfig {
       console.error(`白名单更新失败: ${err instanceof Error ? err.message : String(err)}`)
       return false
     }
+  }
+
+  /** ← 启动自愈（适配 ST 新增 private request filter 特性）：
+   *  listen 已开启但私网请求过滤未开启（存量配置 / 手改 config.yaml）时自动补开，
+   *  消除 "listen is enabled but private request filter is disabled" 的 SSRF 启动警告。
+   *  放行段沿用 create_whitelist 的最小权限语义（仅回环，不自动加当前网段）；
+   *  需要放行局域网后端时由用户在设置页"编辑放行网段"自行添加。 */
+  async ensurePrivateFilterForListen(): Promise<PrivateFilterHealResult> {
+    if (!this.listen || this.privateAddressWhitelistEnabled) return 'ok'
+    this.privateAddressWhitelistEnabled = true
+    this.ensureLoopbackRanges()
+    return this.save() ? 'healed' : 'save-failed'
   }
 
   /** ← sync_whitelists：unified 模式下 IP/Host 白名单双向同步 */

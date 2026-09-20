@@ -135,6 +135,8 @@ export function SyncView() {
           const portNum = /^\d+$/.test(port) ? Number(port) : 9999
           const ok = await m.startSyncServer({ port: portNum, host: host.trim() || undefined })
           if (!ok) syncLog('启动同步服务失败', 'error')
+          // manager 可能把陈旧监听地址回退为当前局域网 IP（config 自愈），输入框同步刷新
+          else setHost(m.serverHost)
         } else {
           const ok = await m.stopSyncServer()
           if (!ok) syncLog('停止同步服务失败', 'error')

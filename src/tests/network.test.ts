@@ -4,7 +4,7 @@
  */
 import type * as os from 'node:os'
 import { describe, expect, it } from 'vitest'
-import { NetworkManager } from '../services/network'
+import { isLocalAddress, NetworkManager } from '../services/network'
 
 interface FakeIpv4 {
   address: string
@@ -93,6 +93,20 @@ describe('IP 校验与优先级（← _is_valid_ip / _get_ip_priority / _is_vali
     expect(manager.isValidLanIp('172.20.0.1')).toBe(true)
     expect(manager.isValidLanIp('172.32.0.1')).toBe(false)
     expect(manager.isValidLanIp('8.8.8.8')).toBe(false)
+  })
+})
+
+describe('isLocalAddress（监听地址拦截线：config 陈旧 IP 判定）', () => {
+  const provider = (): NodeJS.Dict<os.NetworkInterfaceInfo[]> => ({
+    lo: [iface('127.0.0.1', true)],
+    eth: [iface('192.168.94.197')],
+  })
+
+  it('挂在本机网卡的 IP（含回环）→ true；陈旧/他机 IP → false', () => {
+    expect(isLocalAddress('192.168.94.197', provider)).toBe(true)
+    expect(isLocalAddress('127.0.0.1', provider)).toBe(true)
+    expect(isLocalAddress('192.168.64.197', provider)).toBe(false)
+    expect(isLocalAddress('8.8.8.8', provider)).toBe(false)
   })
 })
 
