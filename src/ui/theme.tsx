@@ -9,7 +9,10 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { getConfigStore } from '../services/configStore'
-import { createUITheme, dark, light, type UITheme } from '../theme'
+import {
+  applyThemeAccent, createUITheme, dark, light, resolveThemeAccent,
+  THEME_ACCENTS, type ThemeAccentId, type UITheme,
+} from '../theme'
 
 // 原生组件主题工厂从根 theme.ts 透传（input/textarea/markdown 共用）
 export { editorTheme } from '../theme'
@@ -20,6 +23,9 @@ interface ThemeContextValue {
   t: UITheme
   mode: ThemeMode
   setMode: (mode: ThemeMode) => void
+  /** 主题色预设 id（themeColor，'ember' 默认；UI 见设置→启动器→外观） */
+  accent: ThemeAccentId
+  setAccent: (accent: ThemeAccentId) => void
   /** reduced-motion 应用内开关（§6.B；PoC-4 的 reg query 探测未实现，列遗留 TODO） */
   motionEnabled: boolean
   setMotionEnabled: (enabled: boolean) => void
@@ -33,6 +39,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const config = getConfigStore()
   const [mode, setModeState] = useState<ThemeMode>(
     config.get<string>('theme', 'dark') === 'light' ? 'light' : 'dark',
+  )
+  // 主题色预设：脏值/缺省一律 resolve 回 ember（theme.ts 兜底）
+  const [accent, setAccentState] = useState<ThemeAccentId>(
+    resolveThemeAccent(config.get('themeColor', 'ember')),
   )
   // 默认开启动效；持久化键 motionEnabled（config schema 自由扩展键）
   const [motionEnabled, setMotionEnabledState] = useState<boolean>(
@@ -51,7 +61,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [motionEnabled])
 
   const value = useMemo<ThemeContextValue>(() => {
-    const t = createUITheme(mode === 'light' ? light : dark)
+    const base = mode === 'light' ? light : dark
+    const t = createUITheme(applyThemeAccent(base, THEME_ACCENTS[accent][mode]))
     return {
       t,
       mode,
@@ -62,6 +73,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
           config.save()
         } catch (err) {
           console.error(`[theme] 保存主题设置失败: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      },
+      accent,
+      setAccent: (a) => {
+        setAccentState(a)
+        try {
+          config.set('themeColor', a)
+          config.save()
+        } catch (err) {
+          console.error(`[theme] 保存主题色设置失败: ${err instanceof Error ? err.message : String(err)}`)
         }
       },
       motionEnabled,
@@ -76,7 +97,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       },
       shimmerPhase,
     }
-  }, [config, mode, motionEnabled, shimmerPhase])
+  }, [config, mode, accent, motionEnabled, shimmerPhase])
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
 }
