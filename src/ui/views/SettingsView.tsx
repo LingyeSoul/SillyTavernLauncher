@@ -34,6 +34,7 @@ import { PageHeader } from '../components/PageHeader'
 import { PageScaffold } from '../components/PageScaffold'
 import { Select } from '../components/Select'
 import { SwitchRow } from '../components/Switch'
+import { TabItem } from '../components/TabItem'
 
 type SettingsTabId = 'env' | 'st' | 'launcher'
 
@@ -303,57 +304,6 @@ export function SettingsView() {
     }
   }
 
-  /** tab 项：激活 = ember 下划线（绝对定位压在 tab 栏 1px 分隔线上）+ 600 字重，
-   *  未激活 hover 即时切 bg.hover（NavItem 同款降级） */
-  const tabItem = (tab: { id: SettingsTabId; label: string }): ReactElement => {
-    const active = activeTab === tab.id
-    return (
-      <div
-        key={tab.id}
-        onClick={() => setActiveTab(tab.id)}
-        role="tab"
-        aria-selected={active}
-        testId={`settings-tab-${tab.id}`}
-        style={{
-          position: 'relative',
-          display: 'flex',
-          flexDirection: 'row',
-          alignItems: 'center',
-          height: 34,
-          paddingLeft: 14,
-          paddingRight: 14,
-          borderRadius: t.radius.sm,
-          cursor: 'pointer',
-          userSelect: 'none',
-          hover: active ? undefined : { backgroundColor: t.bg.hover },
-        }}>
-        {active && (
-          <div
-            style={{
-              position: 'absolute',
-              left: 10,
-              right: 10,
-              bottom: -1,
-              height: 2,
-              borderRadius: 1,
-              backgroundColor: t.ember,
-              pointerEvents: 'none',
-            }}
-          />
-        )}
-        <text
-          style={{
-            fontSize: t.fs.field,
-            fontWeight: active ? 600 : 400,
-            color: active ? t.ember : t.text.secondary,
-            fontFamily: t.font.sans,
-          }}>
-          {tab.label}
-        </text>
-      </div>
-    )
-  }
-
   return (
     <PageScaffold
       scrollKey={activeTab}
@@ -363,7 +313,15 @@ export function SettingsView() {
           <PageHeader title={TEXTS.title} subtitle={TEXTS.subtitle} />
           {/* tab 栏：底部 1px 分隔线由 PageScaffold 收口（激活下划线压线） */}
           <div style={{ display: 'flex', flexDirection: 'row', gap: 4 }}>
-            {SETTINGS_TABS.map(tabItem)}
+            {SETTINGS_TABS.map((tab) => (
+              <TabItem
+                key={tab.id}
+                label={tab.label}
+                active={activeTab === tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                testId={`settings-tab-${tab.id}`}
+              />
+            ))}
           </div>
         </>
       }>

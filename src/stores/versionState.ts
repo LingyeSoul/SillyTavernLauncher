@@ -47,7 +47,7 @@ async function fetchAndStore(set: (partial: Partial<VersionStateState>) => void)
       .sort((a, b) => compareVersions(b.version, a.version))
     set({ versions: entries })
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = errMsg(err)
     logError(`[versionState] 获取版本列表失败: ${message}`)
     set({ error: message, versions: [] })
   } finally {
