@@ -8,7 +8,8 @@
  * - 版本数据来自 services/git.getStTags（视图经 hook 消费服务，不绕过）。
  * - 列表/加载/错误状态暂存于 stores/versionState（2026-09-20）：切页卸载不丢
  *   缓存，切回直接渲染已暂存数据，不再重走骨架动画与重复 git 扫描；手动刷新
- *   按钮走 reloadVersions 强制重拉。挂载时静默 refreshVersion（本地 git describe）
+ *   先 refreshVersion 再 reloadVersions 强制重拉（对齐原内联 loadVersions 语义，
+ *   刷新后「当前」芯片同步校正）。挂载时静默 refreshVersion（本地 git describe）
  *   保证「当前」芯片在终端页更新/切版本后仍准确。
  */
 import { useEffect } from 'react'
@@ -59,6 +60,15 @@ export function VersionView() {
     })()
   }, [refreshVersion, ensureVersions])
 
+  /** 手动刷新：先刷「当前」版本再强制重拉列表（对齐原内联 loadVersions 语义），
+   *  刷新后「当前」芯片随终端页切版本/更新立即校正 */
+  const handleReload = (): void => {
+    void (async () => {
+      await refreshVersion()
+      await reloadVersions()
+    })()
+  }
+
   const subtitle = currentVersion
     ? `${TEXTS.subtitlePrefix} ${currentVersion.version ?? ''}${
         currentVersion.commit ? ` · Commit ${currentVersion.commit.slice(0, 7)}` : ''
@@ -82,7 +92,7 @@ export function VersionView() {
                   size={32}
                   label={TEXTS.refreshTip}
                   disabled={loading}
-                  onClick={() => void reloadVersions()}
+                  onClick={handleReload}
                   testId="version-refresh"
                 />
               </Tooltip>
@@ -107,7 +117,7 @@ export function VersionView() {
           title={TEXTS.emptyTitle}
           hint={TEXTS.emptyHint}
           action={
-            <Button variant="primary" icon="refresh" onClick={() => void reloadVersions()} testId="version-empty-refresh">
+            <Button variant="primary" icon="refresh" onClick={handleReload} testId="version-empty-refresh">
               {TEXTS.refresh}
             </Button>
           }

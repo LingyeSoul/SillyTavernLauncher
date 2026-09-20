@@ -35,6 +35,10 @@ function resetFlag(): void {
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), 'stl-crashguard-'))
   resetFlag()
+  // 默认视作 gpuix handler 在场（基线 listenerCount ≥ 1）：独监听退出路径不触发，
+  // 避免现有用例手动调 handler 时真调 process.exit 杀死测试 worker；独监听
+  // 专用用例内改写为 0
+  vi.spyOn(process, 'listenerCount').mockReturnValue(1)
 })
 
 afterEach(() => {
@@ -100,5 +104,31 @@ describe('crashGuard（进程级异常落盘兜底）', () => {
     expect(files).toHaveLength(1)
     const content = readFileSync(join(tempDir, 'logs', files[0] ?? ''), 'utf8')
     expect(content).toContain('[crashGuard] unhandledRejection: 字符串原因')
+  })
+
+  it('独监听防御：无其他 listener 时落盘后以退出码 1 结束（保持原生崩溃语义）', async () => {
+    const onSpy = vi.spyOn(process, 'on').mockImplementation(() => process)
+    vi.spyOn(process, 'listenerCount').mockReturnValue(0)
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { installCrashGuard } = await freshModule()
+    const { __setErrorLogDirForTests } = await import('../services/errorLog')
+    __setErrorLogDirForTests(join(tempDir, 'logs'))
+
+    installCrashGuard()
+    const handlers = new Map(onSpy.mock.calls as [string, (payload: unknown) => void][])
+
+    handlers.get('uncaughtException')?.(new Error('sole listener crash'))
+    expect(exitSpy).toHaveBeenCalledWith(1)
+
+    exitSpy.mockClear()
+    handlers.get('unhandledRejection')?.('独监听 rejection')
+    expect(exitSpy).toHaveBeenCalledWith(1)
+
+    const files = readdirSync(join(tempDir, 'logs'))
+    expect(files).toHaveLength(1)
+    const content = readFileSync(join(tempDir, 'logs', files[0] ?? ''), 'utf8')
+    expect(content).toContain('sole listener crash')
+    expect(content).toContain('独监听 rejection')
   })
 })

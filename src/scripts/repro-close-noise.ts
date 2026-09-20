@@ -9,6 +9,10 @@
  * 子进程环境不注入 RUST_LOG（保留 app.tsx 的生产默认静默值），
  * 采样结果即用户默认运行时真实可见的输出。
  *
+ * DEVIATION: 子进程不走 services/runtime.ts——采样须持有子进程 pid/实时输出
+ * 流/退出码（spawnAsync 只回缓冲结果，不满足），且为一次性诊断脚本不进产品
+ * 路径（build-onefile.ts 同款偏离）；taskkill 兜底强杀显式检查 exitCode。
+ *
  *   bun scripts/repro-close-noise.ts [--runs 10]
  */
 import { dlopen, FFIType } from 'bun:ffi'
@@ -65,6 +69,14 @@ function pidAlive(pid: number): boolean {
     return true
   } catch {
     return false
+  }
+}
+
+/** 兜底强杀：taskkill 失败只告警不中断采样（进程可能已自行退出） */
+function forceKill(pid: number): void {
+  const result = Bun.spawnSync(['taskkill', '/pid', String(pid), '/T', '/F'])
+  if (result.exitCode !== 0) {
+    console.warn(`taskkill /pid ${pid} 失败 exit=${result.exitCode}（进程可能已退出）`)
   }
 }
 
@@ -152,14 +164,14 @@ async function runOnce(run: number): Promise<RunResult> {
   let outcome: RunResult['outcome'] = 'closed'
   if (hwnd === 0) {
     outcome = 'no-window'
-    Bun.spawnSync(['taskkill', '/pid', String(pid), '/T', '/F'])
+    forceKill(pid)
   } else {
     user32.PostMessageW(hwnd, WM_CLOSE, 0n, 0n)
     // 关窗后应数秒内退出
     for (let i = 0; i < 40 && pidAlive(pid); i++) await sleep(250)
     if (pidAlive(pid)) {
       outcome = 'exit-timeout'
-      Bun.spawnSync(['taskkill', '/pid', String(pid), '/T', '/F'])
+      forceKill(pid)
     }
   }
 

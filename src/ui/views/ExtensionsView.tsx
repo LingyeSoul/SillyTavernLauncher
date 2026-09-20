@@ -23,6 +23,7 @@ import { EmptyState } from '../components/EmptyState'
 import { FieldHint } from '../components/FieldHint'
 import { PageHeader } from '../components/PageHeader'
 import { PageScaffold } from '../components/PageScaffold'
+import { TabItem } from '../components/TabItem'
 import { Tooltip } from '../components/Tooltip'
 
 type ExtensionsTabId = 'global' | 'user'
@@ -50,11 +51,14 @@ const TEXTS = {
   versionUnknown: '未知',
 } as const
 
+/** tab 元数据按 id 聚合：标签/路径提示/空态标题一体（消灭散落的同 id 三元链） */
+const TAB_META: Record<ExtensionsTabId, { label: string; pathHint: string; emptyTitle: string }> = {
+  global: { label: TEXTS.tabGlobal, pathHint: TEXTS.globalPathHint, emptyTitle: TEXTS.emptyGlobal },
+  user: { label: TEXTS.tabUser, pathHint: TEXTS.userPathHint, emptyTitle: TEXTS.emptyUser },
+}
+
 /** tab 顺序即默认关注顺序：全局 → 用户（默认激活第一项） */
-const EXTENSIONS_TABS: Array<{ id: ExtensionsTabId; label: string }> = [
-  { id: 'global', label: TEXTS.tabGlobal },
-  { id: 'user', label: TEXTS.tabUser },
-]
+const TAB_ORDER: ExtensionsTabId[] = ['global', 'user']
 
 export function ExtensionsView() {
   const t = useTheme()
@@ -83,78 +87,16 @@ export function ExtensionsView() {
     user: userExts,
   }
 
-  /** tab 项：激活 = ember 下划线（绝对定位压在 tab 栏 1px 分隔线上）+ 600 字重，
-   *  未激活 hover 即时切 bg.hover（设置页 tabItem 同款）；计数 fs.caption muted
-   *  随标签常显（flex row 内相邻 text 才同行） */
-  const tabItem = (tab: { id: ExtensionsTabId; label: string }): ReactElement => {
-    const active = activeTab === tab.id
-    return (
-      <div
-        key={tab.id}
-        onClick={() => setActiveTab(tab.id)}
-        role="tab"
-        aria-selected={active}
-        testId={`extensions-tab-${tab.id}`}
-        style={{
-          position: 'relative',
-          display: 'flex',
-          flexDirection: 'row',
-          alignItems: 'center',
-          height: 34,
-          paddingLeft: 14,
-          paddingRight: 14,
-          borderRadius: t.radius.sm,
-          cursor: 'pointer',
-          userSelect: 'none',
-          hover: active ? undefined : { backgroundColor: t.bg.hover },
-        }}>
-        {active && (
-          <div
-            style={{
-              position: 'absolute',
-              left: 10,
-              right: 10,
-              bottom: -1,
-              height: 2,
-              borderRadius: 1,
-              backgroundColor: t.ember,
-              pointerEvents: 'none',
-            }}
-          />
-        )}
-        <text
-          style={{
-            fontSize: t.fs.field,
-            fontWeight: active ? 600 : 400,
-            color: active ? t.ember : t.text.secondary,
-            fontFamily: t.font.sans,
-          }}>
-          {tab.label}
-        </text>
-        <text
-          style={{
-            fontSize: t.fs.caption,
-            color: t.text.muted,
-            fontFamily: t.font.sans,
-            marginLeft: 6,
-          }}>
-          {`${tabLists[tab.id].length}`}
-        </text>
-      </div>
-    )
-  }
-
   /** 单 tab 内容：路径提示 + 列表（列表型 section 不包 Card：行自身即卡片，
-   *  同 SyncView 发现列表先例） */
-  const tabList = (id: ExtensionsTabId): ReactElement => {
+   *  同 SyncView 发现列表先例）；提示/空态标题出自 TAB_META */
+  const renderTabContent = (id: ExtensionsTabId): ReactElement => {
+    const meta = TAB_META[id]
     const exts = tabLists[id]
-    const emptyTitle = id === 'global' ? TEXTS.emptyGlobal : TEXTS.emptyUser
-    const pathHint = id === 'global' ? TEXTS.globalPathHint : TEXTS.userPathHint
     return (
       <div style={{ display: 'flex', flexDirection: 'column' }}>
-        <FieldHint style={{ marginBottom: t.space.fieldGap }}>{pathHint}</FieldHint>
+        <FieldHint style={{ marginBottom: t.space.fieldGap }}>{meta.pathHint}</FieldHint>
         {exts.length === 0 ? (
-          <EmptyState icon="puzzle" title={emptyTitle} hint={TEXTS.emptyHint} />
+          <EmptyState icon="puzzle" title={meta.emptyTitle} hint={TEXTS.emptyHint} />
         ) : (
           exts.map((ext) => <ExtensionCard key={ext.path} ext={ext} onChanged={refresh} />)
         )}
@@ -185,13 +127,21 @@ export function ExtensionsView() {
           />
           {/* tab 栏：底部 1px 分隔线由 PageScaffold 收口（激活下划线压线） */}
           <div style={{ display: 'flex', flexDirection: 'row', gap: 4 }}>
-            {EXTENSIONS_TABS.map(tabItem)}
+            {TAB_ORDER.map((id) => (
+              <TabItem
+                key={id}
+                label={TAB_META[id].label}
+                active={activeTab === id}
+                onClick={() => setActiveTab(id)}
+                testId={`extensions-tab-${id}`}
+                count={tabLists[id].length}
+              />
+            ))}
           </div>
         </>
       }>
       {/* 滚动区仅 tab 内容：scrollKey 按 tab 重挂 → 切 tab 回到顶部（设置页同款） */}
-      {activeTab === 'global' && tabList('global')}
-      {activeTab === 'user' && tabList('user')}
+      {renderTabContent(activeTab)}
     </PageScaffold>
   )
 }

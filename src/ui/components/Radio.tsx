@@ -4,6 +4,7 @@
  */
 import { useState } from 'react'
 import { useTheme } from '../theme'
+import { ControlLabel } from './ControlLabel'
 
 export interface RadioProps {
   checked: boolean
@@ -60,21 +61,8 @@ export function Radio({ checked, label, onChange, testId }: RadioProps) {
           />
         )}
       </div>
-      {/* 标签须可收缩折行：text 作 flex 子项时 auto min-size = 整行不折行宽度，
-          缺 minWidth:0 会把定宽容器（Modal）撑爆画出边界（GPUIX 规则 8） */}
-      {label && (
-        <text
-          style={{
-            fontSize: t.fs.field,
-            color: checked ? t.text.primary : t.text.secondary,
-            fontFamily: t.font.sans,
-            flexGrow: 1,
-            minWidth: 0,
-            whiteSpace: 'normal',
-          }}>
-          {label}
-        </text>
-      )}
+      {/* 标签折行规则见 ControlLabel（与 Checkbox 共用）；选中态提亮标签 */}
+      {label && <ControlLabel color={checked ? t.text.primary : t.text.secondary}>{label}</ControlLabel>}
     </div>
   )
 }
