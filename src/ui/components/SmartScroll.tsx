@@ -1,0 +1,105 @@
+/**
+ * SmartScrollArea（内容超高才滚动的滚动区，2026-09-20）：
+ * GPUIX 0.9 无 overflow:'auto'（不被解析：不滚也不裁，见 AGENTS.md）；而 overflow:'scroll'
+ * 容器在内容不超高时，真实窗口里滚轮仍可把偏移推出越界（实测位移 34px 起且可把
+ * 整窗内容滚没——"内容明明装得下却还能滚"的根因）。
+ * 对策：挂载后经 renderer.getElementBounds 实测视口/内容高度，超高才开
+ * overflow:'scroll'，否则 'hidden'（非滚动容器，滚轮天然无效）。
+ * - 首帧默认 'scroll'（保持旧行为；测量失败亦不降级，安全兜底）
+ * - contentKey 变化 / 窗口尺寸变化 / 500ms 看门狗 → 重测自愈（内容异步长高、
+ *   版本卡加载后再翻回可滚动；React 同值 setState 不触发提交，无额外开销）
+ * - 从 'scroll' 翻 'hidden' 前先 scrollTo(0,0) 清残留偏移（GPUIX 越界偏移破坏绘制的教训）
+ * 铁律不变：本组件是所在视图的唯一垂直滚动容器；内层 contentRef 包装 div 仅作测量
+ * 锚点（flex 列 + 子元素自带 margin，不改变布局）。
+ */
+import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
+import { useWindowSize, useGpuixRequired } from '@gpuix/react'
+import type { PublicInstance } from '@gpuix/react'
+import { layout } from '../../theme'
+
+export interface SmartScrollAreaProps {
+  /** 滚动区内容（flex 列排布；间距由子元素自带或外层显式 gap） */
+  children: ReactNode
+  /** 内容版本号：tab 切换 / 数据加载等可能改变内容高度的时机传入，触发重测 */
+  contentKey?: unknown
+  testId?: string
+}
+
+/** 等待绘制后实测；bounds 未就绪时轮询（首帧绘制在 commit 之后一帧） */
+const MEASURE_RETRY = 12
+const MEASURE_INTERVAL_MS = 16
+/** 内容异步长高（版本卡加载等）的自愈重测周期 */
+const WATCHDOG_INTERVAL_MS = 500
+/** 滚动区内边距（原 padX/padY props 无调用方覆盖，内联为常量；PAD_Y 参与超高判定） */
+const PAD_Y = layout.padFormY
+const PAD_X = layout.padFormX
+
+export function SmartScrollArea({ children, contentKey, testId }: SmartScrollAreaProps) {
+  const renderer = useGpuixRequired()
+  const { width: winW, height: winH } = useWindowSize()
+  const viewportRef = useRef<PublicInstance | null>(null)
+  const contentRef = useRef<PublicInstance | null>(null)
+  // 首帧与测量失败均保持 'scroll'（旧行为兜底）；翻 'hidden' 只在实测"装得下"后
+  const [overflow, setOverflow] = useState<'scroll' | 'hidden'>('scroll')
+
+  useEffect(() => {
+    // 测量 API 缺失（旧版 renderer）：不启动定时器与看门狗，保持 'scroll' 兜底——
+    // 否则看门狗每 500ms 空转重试，永无结果。注意不可把方法捕获为局部变量调用
+    // （会丢失 renderer this 绑定，testing.js 的 getElementBounds 依赖它）
+    if (typeof renderer.getElementBounds !== 'function') return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let tries = 0
+    const measure = (): void => {
+      if (cancelled) return
+      const vp = viewportRef.current
+      const ct = contentRef.current
+      if (!vp || !ct) return
+      const vb = renderer.getElementBounds?.(vp.id) ?? null
+      const cb = renderer.getElementBounds?.(ct.id) ?? null
+      if (!vb || !cb) {
+        // 尚未绘制：短轮询等待；超次放弃（保持 'scroll'，不阻塞 UI）
+        if (++tries < MEASURE_RETRY) timer = setTimeout(measure, MEASURE_INTERVAL_MS)
+        return
+      }
+      const fits = cb.height <= vb.height - PAD_Y * 2 + 1
+      if (fits) {
+        renderer.scrollTo?.(vp.id, 0, 0)
+        setOverflow('hidden')
+      } else {
+        setOverflow('scroll')
+      }
+    }
+    timer = setTimeout(measure, MEASURE_INTERVAL_MS)
+    const watchdog = setInterval(measure, WATCHDOG_INTERVAL_MS)
+    return () => {
+      cancelled = true
+      if (timer !== undefined) clearTimeout(timer)
+      clearInterval(watchdog)
+    }
+  }, [renderer, contentKey, winW, winH])
+
+  return (
+    <div
+      ref={viewportRef}
+      testId={testId}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flexGrow: 1,
+        minHeight: 0,
+        overflow,
+        paddingTop: PAD_Y,
+        paddingBottom: PAD_Y,
+        paddingLeft: PAD_X,
+        paddingRight: PAD_X,
+      }}>
+      {/* 测量锚点：flexShrink 0 保住内容自然高度（默认收缩会把它压到视口高，
+          超高内容被误判"装得下"） */}
+      <div ref={contentRef} style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+        {children}
+      </div>
+    </div>
+  )
+}

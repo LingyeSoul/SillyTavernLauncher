@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { atomicWriteFileSync } from './atomicFs'
 import { errMsg, logError } from './errorLog'
+import { fetchWithTlsFallback, type CaProvider, type FetchLikeX } from './httpClient'
 import { htmlToMarkdown, type FetchLike } from './updater'
 
 export const AGREEMENT_URL = 'https://sillytavern.lingyesoul.top/agreement'
@@ -21,6 +22,8 @@ const AGREEMENT_RETRY_BASE_DELAY_MS = 1_000
 
 export interface FetchAgreementOptions {
   fetchImpl?: FetchLike
+  /** 系统证书库 PEM 提供者（证书校验失败时回退注入；测试注入避免触 PowerShell） */
+  caProvider?: CaProvider
   /** 失败后的自动重试次数，默认 3 */
   retries?: number
   /** 重试退避基数（毫秒），默认 1000；测试传 0 跳过等待 */
@@ -84,15 +87,20 @@ export function resolveAgreementVersion(html: string, parsed: AgreementDocument)
   return parsed.date || fetchDate(html) || contentFingerprint(parsed.content)
 }
 
-/** 单次抓取 + 解析 + 缓存（重试的最小单元） */
+/** 单次抓取 + 解析 + 缓存（重试的最小单元；证书校验失败时系统 CA 回退） */
 async function fetchAgreementOnce(
   fetchImpl: FetchLike,
+  caProvider: CaProvider | undefined,
   cacheDir: string,
 ): Promise<AgreementDocument> {
-  const response = await fetchImpl(AGREEMENT_URL, {
-    headers: { 'User-Agent': 'SillyTavernLauncher/2.0' },
-    signal: AbortSignal.timeout(10_000),
-  })
+  const response = await fetchWithTlsFallback(
+    AGREEMENT_URL,
+    {
+      headers: { 'User-Agent': 'SillyTavernLauncher/2.0' },
+      signal: AbortSignal.timeout(10_000),
+    },
+    { fetchImpl: fetchImpl as unknown as FetchLikeX, caProvider },
+  )
   if (response.status !== 200) throw new Error(`HTTP ${response.status}`)
   const html = await response.text()
   const parsed = extractAgreementMarkdown(html)
@@ -127,7 +135,7 @@ export async function fetchAgreementDocument(
 
   for (let attempt = 0; ; attempt++) {
     try {
-      return await fetchAgreementOnce(fetchImpl, cacheDir)
+      return await fetchAgreementOnce(fetchImpl, options.caProvider, cacheDir)
     } catch (err) {
       if (attempt >= retries) throw err
       const delayMs = baseDelayMs * 2 ** attempt

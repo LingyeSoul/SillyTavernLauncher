@@ -2,9 +2,9 @@
  * 设置视图（设计 §4.5 单滚动长表单 → 2026-09-20 改分 tab）：
  * DEVIATION: 设计文档 §4.5 曾声明"6 section 规模下单滚动（折叠面板负收益）"；
  * 现按用户要求分三个 tab，tab 内仍为 section 标题 + 列布局，单 tab 长度可控。
- * 布局为"固定头 + 内容滚动"自管形态（AppShell 对 settings 不再包外层滚动容器）：
- * 标题 + tab 栏固定不动，仅 tab 内容区 overflow:scroll（有界高度，切 tab 按 key
- * 重挂回到顶部）。tab 分组按"配置写到哪"切分：
+ * 布局为"固定头 + 内容滚动"自管形态（PageScaffold + scrollKey 重挂，O11 回写）：
+ * 标题 + tab 栏固定不动，仅 tab 内容区 SmartScrollArea 智能滚动（切 tab 重挂
+ * 回到顶部）。tab 分组按"配置写到哪"切分：
  * - 环境：Git/Node 运行环境切换 + GitHub 镜像 + 环境工具（use_sys_env 与体检按钮联动，
  *   必须同页；镜像与 patchgit 同属 gitconfig 镜像链路，2026-09-20 自启动器页移入）
  * - 酒馆设置：写 SillyTavern config.yaml 与启动命令的项（启动参数/网络/酒馆更新）
@@ -25,11 +25,13 @@ import { DEFAULT_PRIVATE_ADDRESS_RANGES } from '../../services/stConfig'
 import { useTerminalLogs } from '../../stores/terminalLogs'
 import { uiStateActions } from '../../stores/uiState'
 import { useThemeContext } from '../theme'
-import { layout, THEME_ACCENTS, type ThemeAccentId } from '../../theme'
+import { THEME_ACCENTS, type ThemeAccentId } from '../../theme'
 import { Button } from '../components/Button'
 import { Card, SectionTitle } from '../components/Card'
+import { FieldHint } from '../components/FieldHint'
 import { Input } from '../components/Input'
 import { PageHeader } from '../components/PageHeader'
+import { PageScaffold } from '../components/PageScaffold'
 import { Select } from '../components/Select'
 import { SwitchRow } from '../components/Switch'
 
@@ -353,48 +355,20 @@ export function SettingsView() {
   }
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        flexGrow: 1,
-        minHeight: 0,
-      }}>
-      {/* ============ 固定区：workspace-heading + tab 栏（不随内容滚动）============ */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          paddingTop: layout.padFormY,
-          paddingLeft: layout.padFormX,
-          paddingRight: layout.padFormX,
-        }}>
-        <PageHeader title={TEXTS.title} subtitle={TEXTS.subtitle} />
-
-        {/* tab 栏：三项 + 底部 1px 分隔线（激活下划线压线） */}
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
+    <PageScaffold
+      scrollKey={activeTab}
+      testId="settings-tab-scroll"
+      header={
+        <>
+          <PageHeader title={TEXTS.title} subtitle={TEXTS.subtitle} />
+          {/* tab 栏：底部 1px 分隔线由 PageScaffold 收口（激活下划线压线） */}
           <div style={{ display: 'flex', flexDirection: 'row', gap: 4 }}>
             {SETTINGS_TABS.map(tabItem)}
           </div>
-          <div style={{ height: 1, backgroundColor: t.border.subtle }} />
-        </div>
-      </div>
-
-      {/* ============ 滚动区：仅 tab 内容（key 按 tab 重挂 → 切 tab 回到顶部，
-          也避免切到更短 tab 后残留越界滚动偏移）============ */}
-      <div
-        key={activeTab}
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          flexGrow: 1,
-          minHeight: 0,
-          overflow: 'scroll',
-          paddingLeft: layout.padFormX,
-          paddingRight: layout.padFormX,
-          paddingTop: layout.padFormY,
-          paddingBottom: layout.padFormY,
-        }}>
+        </>
+      }>
+      {/* 滚动区仅 tab 内容：scrollKey 按 tab 重挂 → 切 tab 回到顶部，亦避免残留
+          越界偏移；SmartScrollArea 实测内容高度，装得下（环境 tab 常态）则滚轮无效 */}
 
       {/* ==================== 环境 tab（默认）==================== */}
       {activeTab === 'env' && (
@@ -416,9 +390,7 @@ export function SettingsView() {
                 testId="setting-mirror"
               />
             </div>
-            <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans, marginTop: 4 }}>
-              {TEXTS.mirrorHint}
-            </text>
+            <FieldHint style={{ marginTop: 4 }}>{TEXTS.mirrorHint}</FieldHint>
           </Card>
           <Card>
             <SectionTitle title={TEXTS.sectionTools} />
@@ -459,9 +431,7 @@ export function SettingsView() {
                   {TEXTS.save}
                 </Button>
               </div>
-              <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
-                {TEXTS.customArgsDesc}
-              </text>
+              <FieldHint>{TEXTS.customArgsDesc}</FieldHint>
             </div>
           </Card>
 
@@ -494,9 +464,7 @@ export function SettingsView() {
                   {TEXTS.save}
                 </Button>
               </div>
-              <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
-                {TEXTS.portDesc}
-              </text>
+              <FieldHint>{TEXTS.portDesc}</FieldHint>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
               <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -604,9 +572,7 @@ export function SettingsView() {
                 })}
               </div>
             </div>
-            <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
-              {`${TEXTS.accentHintPrefix}：${THEME_ACCENTS[accent].label} · 切换后立即生效`}
-            </text>
+            <FieldHint>{`${TEXTS.accentHintPrefix}：${THEME_ACCENTS[accent].label} · 切换后立即生效`}</FieldHint>
           </Card>
 
           {/* 终端（字号/字体族即时生效；自定义字体名走 Input+保存，同 customArgs 模式） */}
@@ -624,9 +590,7 @@ export function SettingsView() {
                 testId="setting-terminal-font-size"
               />
             </div>
-            <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 12 }}>
-              {TEXTS.terminalFontSizeHint}
-            </text>
+            <FieldHint style={{ marginBottom: 12 }}>{TEXTS.terminalFontSizeHint}</FieldHint>
             <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 4 }}>
               <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans, flexShrink: 0 }}>
                 {TEXTS.terminalFontFamilyLabel}
@@ -642,9 +606,7 @@ export function SettingsView() {
                 testId="setting-terminal-font-family"
               />
             </div>
-            <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 12 }}>
-              {TEXTS.terminalFontFamilyHint}
-            </text>
+            <FieldHint style={{ marginBottom: 12 }}>{TEXTS.terminalFontFamilyHint}</FieldHint>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 }}>
               <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans }}>
                 {TEXTS.terminalFontCustomLabel}
@@ -663,9 +625,7 @@ export function SettingsView() {
                   {TEXTS.save}
                 </Button>
               </div>
-              <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
-                {TEXTS.terminalFontCustomDesc}
-              </text>
+              <FieldHint>{TEXTS.terminalFontCustomDesc}</FieldHint>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans }}>
@@ -684,8 +644,7 @@ export function SettingsView() {
           </Card>
         </div>
       )}
-      </div>
-    </div>
+    </PageScaffold>
   )
 }
 

@@ -14,7 +14,7 @@ import { join } from 'node:path'
 import { resolvePortableEnv } from './env'
 import { getConfigStore } from './configStore'
 import { logError } from './errorLog'
-import { spawnAsync } from './runtime'
+import { IS_WINDOWS, spawnAsync } from './runtime'
 import type { BoolMessage, CommitResult, SyncSpawnResult, TagsResult } from './types'
 import { compareVersions } from './env'
 
@@ -23,12 +23,38 @@ export const COMMIT_HASH_RE = /^[0-9a-f]{7,40}$/
 /** ← _TAG_NAME_RE：仅字母数字点下划线短横线 */
 export const TAG_NAME_RE = /^[a-zA-Z0-9._-]+$/
 
+/**
+ * git 证书信任链失败的 stderr 特征（openssl 后端的 ca-bundle 不认
+ * Watt Toolkit/企业网关装在 Windows 系统证书库里的自签 CA）。
+ */
+const GIT_SSL_FAILURE_RE =
+  /SSL certificate problem|certificate verif(?:y|ication) failed|self-signed certificate|unable to get local issuer certificate/i
+
+/** Windows 系统证书库回退参数（一次性 -c，不污染用户 git 配置；
+ *  schannelCheckRevoke=false 规避劫持证书无 CRL 端点时的吊销检查失败） */
+export const GIT_SCHANNEL_FALLBACK_ARGS = [
+  '-c',
+  'http.sslBackend=schannel',
+  '-c',
+  'http.schannelCheckRevoke=false',
+] as const
+
+/** stderr 是否为证书信任链失败（→ Windows 上值得用系统证书库重试一次） */
+export function isGitSslFailure(stderr: string): boolean {
+  return IS_WINDOWS && GIT_SSL_FAILURE_RE.test(stderr)
+}
+
+/** git 执行器（默认真实 spawn；测试注入以断言 schannel 回退的参数拼装） */
+export type GitExecutor = (cmd: string[], cwd: string) => Promise<SyncSpawnResult & { ok: boolean }>
+
 export interface GitCallOptions {
   /**
    * 显式指定 git 可执行文件（测试注入用）。
    * 默认按 config 的 use_sys_env 解析：系统模式 "git"，便携模式 env/cmd/git.exe。
    */
   gitExecutable?: string
+  /** 执行器注入（测试断言 schannel 回退参数；默认真实 spawn） */
+  executor?: GitExecutor
 }
 
 /** ← _get_git_command */
@@ -40,15 +66,10 @@ export function resolveGitExecutable(options: { useSysEnv?: boolean } = {}): str
   return resolvePortableEnv().gitExe
 }
 
-/** ← run_git_command：数组参数、shell 永不启用 */
-export async function runGit(
-  args: string[],
-  cwd: string,
-  options: GitCallOptions = {},
-): Promise<SyncSpawnResult & { ok: boolean }> {
-  const gitCmd = options.gitExecutable ?? resolveGitExecutable()
+/** 默认执行器：真实 spawn + 流收集（原 runGit 主体） */
+const defaultExecutor: GitExecutor = async (cmd, cwd) => {
   try {
-    const proc = spawnAsync({ cmd: [gitCmd, ...args], cwd, windowsHide: true })
+    const proc = spawnAsync({ cmd, cwd, windowsHide: true })
     const [exitCode, stdout, stderr] = await Promise.all([
       proc.exited,
       streamText(proc.stdout),
@@ -59,6 +80,37 @@ export async function runGit(
     const message = err instanceof Error ? err.message : String(err)
     return { exitCode: null, stdout: '', stderr: message, ok: false }
   }
+}
+
+/**
+ * ← run_git_command：数组参数、shell 永不启用。
+ * Windows 上证书信任链失败时自动用系统证书库（schannel）重试一次——
+ * 覆盖 Watt Toolkit/企业网关等 hosts 劫持 + 本地反代换证书的环境，
+ * 首选路径（openssl + 自带 ca-bundle）行为不变。
+ */
+export async function runGit(
+  args: string[],
+  cwd: string,
+  options: GitCallOptions = {},
+): Promise<SyncSpawnResult & { ok: boolean }> {
+  const gitCmd = options.gitExecutable ?? resolveGitExecutable()
+  const executor = options.executor ?? defaultExecutor
+  const result = await executor([gitCmd, ...args], cwd)
+
+  if (!result.ok && isGitSslFailure(result.stderr)) {
+    console.warn('[git] SSL 证书校验失败，改用 Windows 系统证书库（schannel）重试')
+    const retried = await executor(
+      [gitCmd, ...GIT_SCHANNEL_FALLBACK_ARGS, ...args],
+      cwd,
+    )
+    if (!retried.ok) {
+      logError(
+        `[git] schannel 回退仍失败: ${retried.stderr.trim().slice(0, 300)}`,
+      )
+    }
+    return retried
+  }
+  return result
 }
 
 async function streamText(stream: ReadableStream<Uint8Array>): Promise<string> {

@@ -37,6 +37,13 @@ describe('normalizeVersion（← D5 语义化 pre-release）', () => {
     expect(normalizeVersion('v1.3.11beta')).toBe('1.3.11-beta')
   })
 
+  it('已带连字符的非 beta 后缀原样（alpha/rc 回归：无双横线）', () => {
+    expect(normalizeVersion('v2.0.0-alpha.0')).toBe('2.0.0-alpha.0')
+    expect(normalizeVersion('1.3.11-rc.2')).toBe('1.3.11-rc.2')
+    expect(normalizeVersion('2.0.0 - dev')).toBe('2.0.0-dev')
+    expect(normalizeVersion('2.0.0-')).toBe('2.0.0')
+  })
+
   it('无后缀只去 v 前缀；非版本串原样', () => {
     expect(normalizeVersion('v1.3.10')).toBe('1.3.10')
     expect(normalizeVersion('V2.0.0')).toBe('2.0.0')
@@ -172,6 +179,47 @@ describe('远端版本抓取（← raw → API 回退）', () => {
     const withName: FetchLike = async () =>
       new Response(JSON.stringify({ name: 'v1.3.12' }), { status: 200 })
     expect(await fetchLatestVersionFromApi({ currentVersion: 'x', fetchImpl: withName })).toBe('v1.3.12')
+  })
+})
+
+describe('TLS 拦截回退（Watt Toolkit/网关换证书场景）', () => {
+  /** Bun 形态的证书信任链失败错误 */
+  const tlsErr = Object.assign(new Error('unable to verify the first certificate'), {
+    code: 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  })
+
+  it('raw+API 双双被拦截 → has_error 且提示指向证书拦截与镜像', async () => {
+    const hijacked: FetchLike = async () => {
+      throw tlsErr
+    }
+    const result = await checkForUpdates({
+      currentVersion: 'v1.3.10',
+      fetchImpl: hijacked,
+      caProvider: async () => 'FAKE-CA',
+    })
+    expect(result.has_error).toBe(true)
+    expect(result.error_message).toContain('证书被拦截')
+    expect(result.error_message).toContain('镜像')
+  })
+
+  it('raw 被拦截（CA 回退后网关仍 502）→ API 经系统 CA 走通，检查成功', async () => {
+    const fetchImpl: FetchLike = vi.fn(async (url: string, init?: RequestInit) => {
+      const viaCa = (init as { tls?: { ca?: string } } | undefined)?.tls?.ca === 'FAKE-CA'
+      if (!viaCa) throw tlsErr
+      // raw 的本地反代上游坏了（502），API 的反代正常（200）
+      if (url.includes('api.github.com')) {
+        return new Response(JSON.stringify({ tag_name: 'v1.3.12' }), { status: 200 })
+      }
+      return new Response('bad gateway', { status: 502 })
+    }) as unknown as FetchLike
+    const result = await checkForUpdates({
+      currentVersion: 'v1.3.10',
+      fetchImpl,
+      caProvider: async () => 'FAKE-CA',
+    })
+    expect(result.has_error).toBe(false)
+    expect(result.latest_version).toBe('v1.3.12')
+    expect(result.has_update).toBe(true)
   })
 })
 

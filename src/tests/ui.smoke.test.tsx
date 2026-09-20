@@ -222,6 +222,37 @@ describe('设置页分 tab（smoke）', () => {
   })
 })
 
+describe('智能滚动（smoke）', () => {
+  /** SmartScrollArea 测量经 setTimeout(16ms) 轮询 + 需 flush 出 painted bounds，
+   *  断言前多轮 settle 让效应跑完（retry 12×16ms 内必有一次命中已绘制帧） */
+  async function settleMeasure(): Promise<void> {
+    for (let i = 0; i < 6; i++) await settle(60)
+  }
+
+  it('环境 tab 内容装得下 → 非滚动容器；切 tab 重挂后依旧自愈', async () => {
+    await resetUiStack()
+    await clickTestId('nav-settings')
+    await settleMeasure()
+
+    // 环境 tab（默认）：两张卡片远小于可用高度 → overflow 应已翻 'hidden'。
+    // 超高分枝（超高才开滚动）由 smart-scroll.test.tsx 定高组件用例 + E2E 真窗口覆盖
+    //（本 offscreen 根实际按屏幕高布局，请求的窗口尺寸不生效，不宜做超高断言）
+    const envScroll = renderer.findByTestId('settings-tab-scroll')
+    if (!envScroll) throw new Error('settings-tab-scroll not found')
+    expect(renderer.getScrollOffset(envScroll.id), '内容装得下时不应是滚动容器').toBeNull()
+
+    // 切走再切回（key 重挂）→ 测量重新收敛，仍是非滚动容器
+    await clickTestId('settings-tab-launcher')
+    await settleMeasure()
+    await clickTestId('settings-tab-env')
+    await settleMeasure()
+    const envScroll2 = renderer.findByTestId('settings-tab-scroll')
+    if (!envScroll2) throw new Error('settings-tab-scroll not found after switching back')
+    expect(renderer.getScrollOffset(envScroll2.id), '切回装得下的 tab 应再次禁用滚动').toBeNull()
+    await resetUiStack()
+  })
+})
+
 describe('终端字体设置（smoke）', () => {
   it('设置页渲染终端 section：字号/字体下拉 + 自定义输入 + 预览', async () => {
     await resetUiStack()

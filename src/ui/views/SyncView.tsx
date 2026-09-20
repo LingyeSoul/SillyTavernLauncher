@@ -1,12 +1,15 @@
 /**
- * 同步视图（设计 §4.3，单滚动型）：服务端/客户端配置 + 发现列表 + 进度 + 日志。
+ * 同步视图（设计 §4.3，固定头型 PageScaffold，2026-09-20 对齐设置页）：
+ * DEVIATION: §4.3 原单滚动型（heading 随内容滚动），现推广固定头并 SmartScroll
+ * 化（O11 回写）。workspace-heading + 安全警示常驻固定区，服务端/客户端配置 +
+ * 发现列表 + 进度 + 日志滚动。
  *
  * DEVIATION: 设计文档 §4.3 的"mini 日志卡 overflow scroll"与 GPUIX 嵌套滚动铁律冲突
- *   （本视图自身已在唯一滚动容器内），改为固定高度 120 + 50 行环形缓冲 + 截尾显示
+ *   （本视图内容区已在唯一滚动容器内），改为固定高度 120 + 50 行环形缓冲 + 截尾显示
  *   （overflow hidden，最新行始终可见）。铁律优先。
  * DEVIATION: Flet 版首启同步服务器的 30s 倒计时警告对话框已于 2026-09-20 迁移
  *   （ui/dialogs/SyncFirstRunDialog，经 uiState 对话框栈挂载）；视图内安全警示
- *   文案保留作为常驻补偿（旧版行为）。
+ *   文案保留作为常驻补偿（旧版行为，随标题固定不随内容滚走）。
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { DiscoveredServer } from '../../services/sync/manager'
@@ -15,14 +18,15 @@ import { getConfigStore } from '../../services/configStore'
 import { getSyncManager, useSyncState, type SyncLogEntry } from '../../stores/syncState'
 import { useUiState } from '../../stores/uiState'
 import { getLocalIp } from '../../services/network'
-import { layout } from '../../theme'
 import { useTheme } from '../theme'
 import { shouldShowFirstRunDialog } from '../dialogs/SyncFirstRunDialog'
 import { Button } from '../components/Button'
 import { Card, SectionTitle } from '../components/Card'
 import { Chip } from '../components/Chip'
 import { PageHeader } from '../components/PageHeader'
+import { PageScaffold } from '../components/PageScaffold'
 import { EmptyState } from '../components/EmptyState'
+import { FieldHint } from '../components/FieldHint'
 import { Input } from '../components/Input'
 import { ProgressBar } from '../components/ProgressBar'
 import { Select } from '../components/Select'
@@ -236,27 +240,16 @@ export function SyncView() {
     : t.status.info
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        paddingTop: layout.padFormY,
-        paddingBottom: layout.padFormY,
-        paddingLeft: layout.padFormX,
-        paddingRight: layout.padFormX,
-      }}>
-      {/* workspace-heading（PageHeader 收口）；安全提示降级为 caption 级说明——
-          红字保留给真异常（减法：status.error 是异常色，非常驻装饰） */}
-      <PageHeader title={TEXTS.title} subtitle={`状态: ${statusText(status)}`} />
-      <text
-        style={{
-          fontSize: t.fs.caption,
-          color: t.text.muted,
-          fontFamily: t.font.sans,
-          marginBottom: t.space.sectionGap,
-        }}>
-        {TEXTS.warning}
-      </text>
+    <PageScaffold
+      contentKey={logs.length}
+      header={
+        <>
+          {/* workspace-heading（PageHeader 收口）；安全提示降级为 caption 级说明——
+              红字保留给真异常（减法：status.error 是异常色，非常驻装饰） */}
+          <PageHeader title={TEXTS.title} subtitle={`状态: ${statusText(status)}`} />
+          <FieldHint style={{ marginBottom: t.space.sectionGap }}>{TEXTS.warning}</FieldHint>
+        </>
+      }>
 
       {/* 服务器配置 */}
       <Card>
@@ -373,9 +366,7 @@ export function SyncView() {
       {(syncing || status === 'syncing') && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: t.space.sectionGap }}>
           <ProgressBar testId="sync-progress" />
-          <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
-            {TEXTS.syncingText}
-          </text>
+          <FieldHint>{TEXTS.syncingText}</FieldHint>
         </div>
       )}
 
@@ -412,6 +403,6 @@ export function SyncView() {
           )}
         </div>
       </div>
-    </div>
+    </PageScaffold>
   )
 }
