@@ -13,6 +13,7 @@ import {
   loadAgreementCache,
 } from '../../services/agreement'
 import { getConfigStore } from '../../services/configStore'
+import { errMsg, logError } from '../../services/errorLog'
 import { useUiState } from '../../stores/uiState'
 import { editorTheme, useTheme, useThemeContext } from '../theme'
 import { Button } from '../components/Button'
@@ -81,7 +82,7 @@ export function EulaDialog() {
     try {
       config.save()
     } catch (err) {
-      console.error(`[eula] 保存协议同意状态失败: ${err instanceof Error ? err.message : String(err)}`)
+      logError(`[eula] 保存协议同意状态失败: ${errMsg(err)}`)
     }
     useUiState.getState().closeTopDialog()
   }

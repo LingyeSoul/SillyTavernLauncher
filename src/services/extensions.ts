@@ -31,6 +31,7 @@ import { tmpdir } from 'node:os'
 import { unzipSync } from 'fflate'
 import { getConfigStore } from './configStore'
 import { checkStInstalled } from './env'
+import { logError } from './errorLog'
 import { resolveGitExecutable } from './git'
 import { isDirSync, realpathBestEffort } from './atomicFs'
 import { spawnAsync } from './runtime'
@@ -418,7 +419,7 @@ export class ExtensionManager {
       return { ok: false, message: `扩展目录不存在: ${ext.path}` }
     } catch (err) {
       const errorMsg = `删除扩展失败: ${err instanceof Error ? err.message : String(err)}`
-      console.error(`[extensions] ${errorMsg}`)
+      logError(`[extensions] ${errorMsg}`)
       return { ok: false, message: errorMsg }
     }
   }
@@ -450,7 +451,7 @@ export class ExtensionManager {
       return { ok: true, message: `成功将扩展移动到${typeName}插件目录` }
     } catch (err) {
       const errorMsg = `移动扩展失败: ${err instanceof Error ? err.message : String(err)}`
-      console.error(`[extensions] ${errorMsg}`)
+      logError(`[extensions] ${errorMsg}`)
       return { ok: false, message: errorMsg }
     }
   }
@@ -563,7 +564,7 @@ export class ExtensionManager {
       return { ok: false, message: `Git 克隆失败: ${errorMsg}` }
     } catch (err) {
       const errorMsg = `安装扩展失败: ${err instanceof Error ? err.message : String(err)}`
-      console.error(`[extensions] ${errorMsg}`)
+      logError(`[extensions] ${errorMsg}`)
       if (existsSync(targetPath)) {
         removeTree(targetPath, true)
       }
@@ -686,7 +687,7 @@ export class ExtensionManager {
       }
     } catch (err) {
       const errorMsg = `安装扩展失败: ${err instanceof Error ? err.message : String(err)}`
-      console.error(`[extensions] ${errorMsg}`)
+      logError(`[extensions] ${errorMsg}`)
       // 清理可能残留的文件
       if (existsSync(targetPath)) {
         removeTree(targetPath, true)
@@ -739,7 +740,7 @@ export class ExtensionManager {
       return { ok: true, message: `成功复制扩展到${typeName}插件目录` }
     } catch (err) {
       const errorMsg = `复制扩展失败: ${err instanceof Error ? err.message : String(err)}`
-      console.error(`[extensions] ${errorMsg}`)
+      logError(`[extensions] ${errorMsg}`)
       return { ok: false, message: errorMsg }
     }
   }
@@ -775,7 +776,7 @@ export class ExtensionManager {
       return { ok: true, message: `成功重命名扩展为: ${newName}` }
     } catch (err) {
       const errorMsg = `重命名扩展失败: ${err instanceof Error ? err.message : String(err)}`
-      console.error(`[extensions] ${errorMsg}`)
+      logError(`[extensions] ${errorMsg}`)
       return { ok: false, message: errorMsg }
     }
   }

@@ -45,6 +45,14 @@ function formatArg(value: unknown): string {
   }
 }
 
+/**
+ * 未知异常归一化为 message 字符串。
+ * 全仓 catch 块原先各自重复 `err instanceof Error ? err.message : String(err)`，收敛到这唯一出口。
+ */
+export function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
 /** ERROR 及以上级别专用：console 原样输出 + 追加 logs/Error_*.txt（懒创建） */
 export function logError(...args: unknown[]): void {
   console.error(...args)

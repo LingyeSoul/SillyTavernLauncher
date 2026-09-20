@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import { create } from 'zustand'
 import { StLifecycle } from '../services/stLifecycle'
 import { checkStInstalled } from '../services/env'
+import { errMsg, logError } from '../services/errorLog'
 import { hasActiveProcess } from '../services/processManager'
 import { getConfigStore } from '../services/configStore'
 import { useTerminalLogs } from './terminalLogs'
@@ -84,7 +85,7 @@ export const useStState = create<StStateState>((set, get) => ({
         },
       })
     } catch (err) {
-      console.error(`[stState] 读取当前版本失败: ${err instanceof Error ? err.message : String(err)}`)
+      logError(`[stState] 读取当前版本失败: ${errMsg(err)}`)
       set({ currentVersion: null })
     } finally {
       set({ versionLoading: false })
@@ -162,7 +163,7 @@ export const useStState = create<StStateState>((set, get) => ({
 
 function reportUnexpected(where: string, err: unknown): void {
   const message = err instanceof Error ? err.message : String(err)
-  console.error(`[stState] ${where} 意外错误: ${message}`)
+  logError(`[stState] ${where} 意外错误: ${message}`)
   uiStateActions.pushToast('error', `${where} 时发生意外错误`)
   uiStateActions.openDialog({
     kind: 'error',

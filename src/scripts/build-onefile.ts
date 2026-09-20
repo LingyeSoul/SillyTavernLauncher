@@ -28,7 +28,8 @@
  *   远端协议，但不参与判定）。冒烟会在本机短暂弹出启动器窗口后强杀，与 E2E 一致
  *
  * DEVIATION: 子进程不经 services/runtime.ts——那是应用运行时纪律；本脚本与
- *   scripts/verify-*.ts 同构，直接 Bun.spawnSync + 数组参数（仍禁 shell 拼接）。
+ *   scripts/verify-*.ts 同构，直接调用 node:child_process 的 spawnSync（冒烟为
+ *   Bun.spawn）+ 数组参数（仍禁 shell 拼接）。
  * DEVIATION: 构建失败只 console.error + 非零退出，不写 errorLog（logs/ 属于
  *   应用运行时产物，打包脚本不得污染安装根目录）。
  */

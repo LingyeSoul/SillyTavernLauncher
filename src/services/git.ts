@@ -13,6 +13,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { resolvePortableEnv } from './env'
 import { getConfigStore } from './configStore'
+import { logError } from './errorLog'
 import { spawnAsync } from './runtime'
 import type { BoolMessage, CommitResult, SyncSpawnResult, TagsResult } from './types'
 import { compareVersions } from './env'
@@ -332,7 +333,7 @@ export async function cleanupGitState(
       .map((p) => p.split(/[\\/]/).pop() ?? p)
     if (remainingFlags.length > 0) {
       const errorMsg = `清理失败，仍存在的状态文件: ${remainingFlags.join(', ')}`
-      console.error(`[git] ${errorMsg}`)
+      logError(`[git] ${errorMsg}`)
       return { ok: false, message: errorMsg }
     }
     return { ok: true, message: 'Git状态清理成功' }

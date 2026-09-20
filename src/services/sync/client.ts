@@ -33,6 +33,7 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { unzipSync } from 'fflate'
 import { isDirSync, realpathBestEffort } from '../atomicFs'
+import { errMsg, logError } from '../errorLog'
 import type { ManifestEntry } from './server'
 
 export type FetchImpl = typeof fetch
@@ -260,7 +261,7 @@ export class SyncClient {
       this.log('服务器状态: 健康')
       return true
     } catch (err) {
-      console.error(`[sync-client] 服务器健康检查失败: ${err instanceof Error ? err.message : String(err)}`)
+      logError(`[sync-client] 服务器健康检查失败: ${errMsg(err)}`)
       return false
     }
   }
@@ -277,7 +278,7 @@ export class SyncClient {
         server_info: { port: number; host: string; running: boolean; total_size: number; file_count: number }
       }
     } catch (err) {
-      console.error(`[sync-client] 获取服务器信息失败: ${err instanceof Error ? err.message : String(err)}`)
+      logError(`[sync-client] 获取服务器信息失败: ${errMsg(err)}`)
       return null
     }
   }
@@ -292,7 +293,7 @@ export class SyncClient {
       }
       throw new Error(data.error ?? '未知错误')
     } catch (err) {
-      console.error(`[sync-client] 获取远程文件清单失败: ${err instanceof Error ? err.message : String(err)}`)
+      logError(`[sync-client] 获取远程文件清单失败: ${errMsg(err)}`)
       return null
     }
   }
@@ -309,7 +310,7 @@ export class SyncClient {
     this.log('开始 ZIP 全量同步...')
 
     if (backup && !this.backupExistingData()) {
-      console.error('[sync-client] 备份失败，取消同步')
+      logError('[sync-client] 备份失败，取消同步')
       return false
     }
 
@@ -331,7 +332,7 @@ export class SyncClient {
       this.log('ZIP 全量同步完成')
       return true
     } catch (err) {
-      console.error(`[sync-client] ZIP 同步失败: ${err instanceof Error ? err.message : String(err)}`)
+      logError(`[sync-client] ZIP 同步失败: ${errMsg(err)}`)
       if (backup) {
         this.log('尝试恢复备份...')
         this.restoreBackup()
@@ -343,8 +344,8 @@ export class SyncClient {
         try {
           rmSync(dirname(tempZipPath), { recursive: true, force: true })
         } catch (cleanupError) {
-          console.error(
-            `[sync-client] 清理临时文件失败: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+          logError(
+            `[sync-client] 清理临时文件失败: ${errMsg(cleanupError)}`,
           )
         }
       }

@@ -9,6 +9,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { getConfigStore } from '../services/configStore'
+import { errMsg, logError } from '../services/errorLog'
 import {
   applyThemeAccent, createUITheme, dark, light, resolveThemeAccent,
   THEME_ACCENTS, type ThemeAccentId, type UITheme,
@@ -74,7 +75,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
           config.set('theme', m)
           config.save()
         } catch (err) {
-          console.error(`[theme] 保存主题设置失败: ${err instanceof Error ? err.message : String(err)}`)
+          logError(`[theme] 保存主题设置失败: ${errMsg(err)}`)
         }
       },
       accent,
@@ -84,7 +85,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
           config.set('themeColor', a)
           config.save()
         } catch (err) {
-          console.error(`[theme] 保存主题色设置失败: ${err instanceof Error ? err.message : String(err)}`)
+          logError(`[theme] 保存主题色设置失败: ${errMsg(err)}`)
         }
       },
       motionEnabled,
@@ -94,7 +95,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
           config.set('motionEnabled', enabled)
           config.save()
         } catch (err) {
-          console.error(`[theme] 保存动效设置失败: ${err instanceof Error ? err.message : String(err)}`)
+          logError(`[theme] 保存动效设置失败: ${errMsg(err)}`)
         }
       },
       shimmerPhase,

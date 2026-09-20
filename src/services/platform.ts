@@ -5,11 +5,14 @@
  * - pickZipFile：spawn PowerShell System.Windows.Forms OpenFileDialog，返回路径或 null。
  *
  * 命令一律参数数组，不经 shell 字符串拼接（安全纪律）。
- * DEVIATION: clip.exe 需要可写 stdin，services/spawnAsync 固定 stdin:'ignore'
- *   （进程管理场景），故此处单独实现双宿主 spawn-with-stdin（Bun / node:child_process）。
+ * DEVIATION: 只读 spawn 已并轨 runtime.spawnAsync（windowsHide / 数组参数统一
+ *   在 runtime.ts 实现）；仅 clip.exe 需要可写 stdin，而 spawnAsync 固定
+ *   stdin:'ignore'（进程管理场景），故 stdin 场景单独实现双宿主
+ *   spawn-with-stdin（Bun / node:child_process）。
  */
 import { spawn as nodeSpawn } from 'node:child_process'
-import { Readable } from 'node:stream'
+import { errMsg, logError } from './errorLog'
+import { spawnAsync } from './runtime'
 
 const hasBun = typeof Bun !== 'undefined'
 
@@ -59,42 +62,6 @@ async function readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
   }
 }
 
-interface SimpleSpawn {
-  exited: Promise<number>
-  stdout: ReadableStream<Uint8Array>
-  stderr: ReadableStream<Uint8Array>
-}
-
-/** 普通只读 spawn（windowsHide） */
-function spawnReadonly(cmd: string[]): SimpleSpawn {
-  if (hasBun) {
-    const proc = Bun.spawn(cmd, { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', windowsHide: true })
-    return {
-      exited: proc.exited,
-      stdout: proc.stdout as ReadableStream<Uint8Array>,
-      stderr: proc.stderr as ReadableStream<Uint8Array>,
-    }
-  }
-  const child = nodeSpawn(cmd[0] ?? '', cmd.slice(1), {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  })
-  const exited = new Promise<number>((resolve, reject) => {
-    child.once('error', reject)
-    child.once('exit', (code) => resolve(code ?? -1))
-  })
-  exited.catch(() => undefined)
-  return {
-    exited,
-    stdout: (child.stdout
-      ? Readable.toWeb(child.stdout)
-      : new ReadableStream<Uint8Array>()) as ReadableStream<Uint8Array>,
-    stderr: (child.stderr
-      ? Readable.toWeb(child.stderr)
-      : new ReadableStream<Uint8Array>()) as ReadableStream<Uint8Array>,
-  }
-}
-
 /**
  * 用默认浏览器打开 URL：explorer.exe <url>。
  * 不走 cmd /c start——cmd 会把 URL 中的 & 当命令分隔符切分（downloadUrl 含查询参数时真实触发）；
@@ -103,11 +70,11 @@ function spawnReadonly(cmd: string[]): SimpleSpawn {
  */
 export async function openUrl(url: string): Promise<boolean> {
   try {
-    const proc = spawnReadonly(['explorer.exe', url])
+    const proc = spawnAsync({ cmd: ['explorer.exe', url] })
     await proc.exited.catch(() => undefined)
     return true
   } catch (err) {
-    console.error(`[platform] 打开 URL 失败: ${url}: ${err instanceof Error ? err.message : String(err)}`)
+    logError(`[platform] 打开 URL 失败: ${url}: ${errMsg(err)}`)
     return false
   }
 }
@@ -120,7 +87,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     const code = await proc.exited
     return code === 0
   } catch (err) {
-    console.error(`[platform] 写剪贴板失败: ${err instanceof Error ? err.message : String(err)}`)
+    logError(`[platform] 写剪贴板失败: ${errMsg(err)}`)
     return false
   }
 }
@@ -140,13 +107,13 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     '}',
   ].join('\n')
   try {
-    const proc = spawnReadonly(['powershell', '-NoProfile', '-NonInteractive', '-Command', script])
+    const proc = spawnAsync({ cmd: ['powershell', '-NoProfile', '-NonInteractive', '-Command', script] })
     const [code, stdout] = await Promise.all([proc.exited, readStream(proc.stdout)])
     if (code !== 0) return null
     const path = stdout.trim()
     return path.length > 0 ? path : null
   } catch (err) {
-    console.error(`[platform] 选择文件失败: ${err instanceof Error ? err.message : String(err)}`)
+    logError(`[platform] 选择文件失败: ${errMsg(err)}`)
     return null
   }
 }
@@ -155,8 +122,9 @@ export async function copyToClipboard(text: string): Promise<boolean> {
  * 启动命令行窗口（← event.py start_cmd）：cmd.exe /k + PATH 前置便携 env +
  * chcp 65001。需要新控制台窗口（detached），不收集输出。
  *
- * Bug#11：Bun.spawn 无 detached 语义（选项被静默忽略，实测 scripts/verify-detached.ts——
- * 父进程退出连带杀掉 cmd 窗口）；node:child_process 的 detached 在 Bun 运行时下同样有效，
+ * DEVIATION: 此处绕过 runtime.ts 直用 nodeSpawn detached——Bug#11：Bun.spawn 无
+ * detached 语义（选项被静默忽略，实测 scripts/verify-detached.ts——父进程退出连带
+ * 杀掉 cmd 窗口）；node:child_process 的 detached 在 Bun 运行时下同样有效，
  * 故两个运行时统一走 nodeSpawn detached。
  */
 export function launchCommandLine(prependDirs: string[]): boolean {
@@ -165,7 +133,7 @@ export function launchCommandLine(prependDirs: string[]): boolean {
     newEnv.PATH = `${prependDirs.join(';')};${process.env.PATH ?? ''}`
   }
   const cmdExecutable =
-    process.env.COMSPEC ?? `${process.env.SystemRoot ?? 'C:\Windows'}\System32\cmd.exe`
+    process.env.COMSPEC ?? `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\cmd.exe`
   try {
     const command = 'chcp 65001 >nul && echo 环境变量已设置，欢迎使用！ && cmd /k'
     nodeSpawn(
@@ -175,7 +143,7 @@ export function launchCommandLine(prependDirs: string[]): boolean {
     ).unref()
     return true
   } catch (err) {
-    console.error(`[platform] 启动命令行失败: ${err instanceof Error ? err.message : String(err)}`)
+    logError(`[platform] 启动命令行失败: ${errMsg(err)}`)
     return false
   }
 }

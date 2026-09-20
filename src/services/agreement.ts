@@ -9,6 +9,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { atomicWriteFileSync } from './atomicFs'
+import { errMsg, logError } from './errorLog'
 import { htmlToMarkdown, type FetchLike } from './updater'
 
 export const AGREEMENT_URL = 'https://sillytavern.lingyesoul.top/agreement'
@@ -103,7 +104,7 @@ async function fetchAgreementOnce(
       JSON.stringify({ date, content: parsed.content }),
     )
   } catch (err) {
-    console.error(`[agreement] 缓存协议失败: ${err instanceof Error ? err.message : String(err)}`)
+    logError(`[agreement] 缓存协议失败: ${errMsg(err)}`)
   }
   return { date, content: parsed.content }
 }

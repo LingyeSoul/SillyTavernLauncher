@@ -7,6 +7,7 @@
  */
 import { create } from 'zustand'
 import { getConfigStore } from '../services/configStore'
+import { errMsg, logError } from '../services/errorLog'
 import { getStConfig } from '../services/stConfig'
 import { uiStateActions } from './uiState'
 
@@ -102,7 +103,7 @@ function saveLauncherConfig(): boolean {
     S.save()
     return true
   } catch (err) {
-    console.error(`[settings] 保存配置失败: ${err instanceof Error ? err.message : String(err)}`)
+    logError(`[settings] 保存配置失败: ${errMsg(err)}`)
     uiStateActions.pushToast('error', '配置保存失败，请检查文件写入权限')
     return false
   }

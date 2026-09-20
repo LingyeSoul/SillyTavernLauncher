@@ -9,6 +9,7 @@
  */
 import { useState } from 'react'
 import { getConfigStore } from '../../services/configStore'
+import { errMsg, logError } from '../../services/errorLog'
 import { useUiState } from '../../stores/uiState'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
@@ -125,7 +126,7 @@ export function WelcomeDialog() {
       try {
         config.save()
       } catch (err) {
-        console.error(`[welcome] 保存首次启动状态失败: ${err instanceof Error ? err.message : String(err)}`)
+        logError(`[welcome] 保存首次启动状态失败: ${errMsg(err)}`)
       }
       useUiState.getState().closeTopDialog()
       return
