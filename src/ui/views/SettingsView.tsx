@@ -25,7 +25,7 @@ import { DEFAULT_PRIVATE_ADDRESS_RANGES } from '../../services/stConfig'
 import { useTerminalLogs } from '../../stores/terminalLogs'
 import { uiStateActions } from '../../stores/uiState'
 import { useThemeContext } from '../theme'
-import { layout } from '../../theme'
+import { layout, THEME_ACCENTS, type ThemeAccentId } from '../../theme'
 import { Button } from '../components/Button'
 import { Input } from '../components/Input'
 import { SectionTitle } from '../components/Card'
@@ -94,6 +94,9 @@ const TEXTS = {
   autostartDesc: '启动启动器后自动启动酒馆（主窗口正常显示）',
   reduceMotion: '减少动效',
   reduceMotionDesc: '关闭界面过渡动画与状态动效（性能受限设备建议开启）',
+  sectionAppearance: '外观',
+  accentLabel: '主题色',
+  accentHintPrefix: '当前',
   sectionTerminal: '终端',
   terminalFontSizeLabel: '终端字体大小',
   terminalFontSizeHint: '调整终端日志文本大小，立即生效',
@@ -155,9 +158,8 @@ const TERMINAL_FONT_SIZE_ITEMS = TERMINAL_FONT_SIZE_PRESETS.map((n) => ({
 const TERMINAL_FONT_PREVIEW_TEXT = 'Aa01 中文示例 [OK] SillyTavern ✓'
 
 export function SettingsView() {
-  const t = useThemeContext().t
+  const { t, mode, accent, setAccent, setMotionEnabled, motionEnabled } = useThemeContext()
   const settings = useSettings()
-  const { setMotionEnabled, motionEnabled } = useThemeContext()
   const [activeTab, setActiveTab] = useState<SettingsTabId>('env')
   const [portDraft, setPortDraft] = useState(String(settings.stPort))
   const [proxyDraft, setProxyDraft] = useState(settings.proxyUrl)
@@ -589,6 +591,45 @@ export function SettingsView() {
             <SectionTitle title={TEXTS.sectionLauncher} />
             {switchRow('autostart', TEXTS.autostart, TEXTS.autostartDesc, settings.autostart, (v) => settings.update({ autostart: v }))}
             {switchRow('reduce_motion', TEXTS.reduceMotion, TEXTS.reduceMotionDesc, !motionEnabled, (v) => setMotionEnabled(!v))}
+          </div>
+
+          {/* 外观（主题色预设：色板行，点击即存即生效；预览色取当前模式侧的 ember，
+              激活项以 2px text.primary 描边标识——全部色板统一 2px 边宽避免选中态抖动） */}
+          <div style={{ display: 'flex', flexDirection: 'column', marginBottom: 16 }}>
+            <SectionTitle title={TEXTS.sectionAppearance} />
+            <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', minHeight: 40, gap: 12 }}>
+              <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans, flexShrink: 0 }}>
+                {TEXTS.accentLabel}
+              </text>
+              <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                {(Object.keys(THEME_ACCENTS) as ThemeAccentId[]).map((id) => {
+                  const active = id === accent
+                  return (
+                    <div
+                      key={id}
+                      onClick={() => setAccent(id)}
+                      role="radio"
+                      aria-checked={active}
+                      aria-label={THEME_ACCENTS[id].label}
+                      testId={`setting-accent-${id}`}
+                      style={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: 10,
+                        backgroundColor: THEME_ACCENTS[id][mode].ember,
+                        borderWidth: 2,
+                        borderColor: active ? t.text.primary : 'transparent',
+                        cursor: 'pointer',
+                        userSelect: 'none',
+                      }}
+                    />
+                  )
+                })}
+              </div>
+            </div>
+            <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>
+              {`${TEXTS.accentHintPrefix}：${THEME_ACCENTS[accent].label} · 切换后立即生效`}
+            </text>
           </div>
 
           {/* 终端（字号/字体族即时生效；自定义字体名走 Input+保存，同 customArgs 模式） */}

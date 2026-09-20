@@ -80,6 +80,103 @@ export function createUITheme(tokens: ThemeTokens): UITheme {
   return { ...tokens, font, fs, radius, space, size }
 }
 
+// —— 主题色（accent）预设：只换主强调色 ember 及其派生色 ——
+//
+// 第一性原理：全 UI 的"主题色"消费点（按钮/激活态/glow/selection/编辑器光标）全部
+// 走 t.ember 一支；amber/gold 是次级装饰色（全 UI 仅 2 处独立使用），status.* 是语义
+// 色——它们不随主题色切换，保持设计契约稳定。每套 accent 提供 dark/light 双值：
+// dark = 高明度低饱和色 + 深色 onPrimary；light = 低明度高饱和色 + 白 onPrimary
+// （同现有 ember 双形态规律，onPrimary↔ember 对比度 ≥ 4.5:1 由 tests/theme.accent.test.ts 契约锁定）。
+// 取色种子优先复用设计系统内已调校的成对色值：teal ← amber 对、gold ← gold 对、
+// blue ← status.info 对；violet 为新调。selection 双模式统一用 dark 侧色相 35%
+// （对齐现有 ember 的 selection 双模式同值规律）。
+
+export type ThemeAccentId = 'ember' | 'teal' | 'gold' | 'blue' | 'violet'
+
+/** 主题色要覆写的 token 子集（ember 主色 + onPrimary/glow/selection 派生） */
+export interface AccentSet {
+  ember: string
+  onPrimary: string
+  /** bg glow 用低透明度（dark 12% / light 10%） */
+  glow: string
+  /** 选区高亮（双模式统一 dark 侧色相 35%） */
+  selection: string
+}
+
+export const THEME_ACCENTS: Record<ThemeAccentId, { label: string; dark: AccentSet; light: AccentSet }> = {
+  ember: {
+    label: '余烬',
+    dark: {
+      ember: '#EBA375', onPrimary: '#251C16',
+      glow: 'rgb(235 163 117 / 12%)', selection: 'rgb(235 163 117 / 35%)',
+    },
+    light: {
+      ember: '#9D4C23', onPrimary: '#FFFFFF',
+      glow: 'rgb(157 76 35 / 10%)', selection: 'rgb(235 163 117 / 35%)',
+    },
+  },
+  teal: {
+    label: '青碧',
+    dark: {
+      ember: '#88BDB5', onPrimary: '#132320',
+      glow: 'rgb(136 189 181 / 12%)', selection: 'rgb(136 189 181 / 35%)',
+    },
+    light: {
+      ember: '#34756C', onPrimary: '#FFFFFF',
+      glow: 'rgb(52 117 108 / 10%)', selection: 'rgb(136 189 181 / 35%)',
+    },
+  },
+  gold: {
+    label: '鎏金',
+    dark: {
+      ember: '#E3BC75', onPrimary: '#241B0C',
+      glow: 'rgb(227 188 117 / 12%)', selection: 'rgb(227 188 117 / 35%)',
+    },
+    light: {
+      ember: '#956914', onPrimary: '#FFFFFF',
+      glow: 'rgb(149 105 20 / 10%)', selection: 'rgb(227 188 117 / 35%)',
+    },
+  },
+  blue: {
+    label: '沧蓝',
+    dark: {
+      ember: '#91B9EA', onPrimary: '#0F1B26',
+      glow: 'rgb(145 185 234 / 12%)', selection: 'rgb(145 185 234 / 35%)',
+    },
+    light: {
+      ember: '#356FA8', onPrimary: '#FFFFFF',
+      glow: 'rgb(53 111 168 / 10%)', selection: 'rgb(145 185 234 / 35%)',
+    },
+  },
+  violet: {
+    label: '紫棠',
+    dark: {
+      ember: '#B3A2DF', onPrimary: '#17112A',
+      glow: 'rgb(179 162 223 / 12%)', selection: 'rgb(179 162 223 / 35%)',
+    },
+    light: {
+      ember: '#5F4FA8', onPrimary: '#FFFFFF',
+      glow: 'rgb(95 79 168 / 10%)', selection: 'rgb(179 162 223 / 35%)',
+    },
+  },
+}
+
+/** config.json themeColor 脏值兜底：非法/未知值回退默认 ember（老配置无此键同样安全） */
+export function resolveThemeAccent(value: unknown): ThemeAccentId {
+  return typeof value === 'string' && value in THEME_ACCENTS ? (value as ThemeAccentId) : 'ember'
+}
+
+/** 把 accent 覆写到基础 token 集：ember 预设时返回值与基础集逐值相等（默认零视觉变化） */
+export function applyThemeAccent(base: ThemeTokens, accent: AccentSet): ThemeTokens {
+  return {
+    ...base,
+    ember: accent.ember,
+    onPrimary: accent.onPrimary,
+    glow: { ember: accent.glow },
+    selection: { ember: accent.selection },
+  }
+}
+
 // —— 原生组件主题工厂（input/textarea/markdown 共用，§7 双形态）——
 export function editorTheme(t: ThemeTokens, appearance: 'dark' | 'light') {
   return {
