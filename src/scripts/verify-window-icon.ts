@@ -27,6 +27,20 @@ const ICON_BIG = 1
 const ICON_SMALL2 = 2
 const SMTO_ABORTIFHUNG = 0x0002
 
+/**
+ * FFI 符号收窄：bun:ffi 的 pointer 出入参类型是 bigint|Pointer|null 宽联合，
+ * 本脚本按句柄即 number 使用（与 services/windowIcon.ts 的 User32Symbols 同款收窄）。
+ */
+interface VerifyUser32Symbols {
+  CreateIconFromResourceEx(bits: unknown, size: number, isIcon: number, version: number, cx: number, cy: number, flags: number): number
+  DestroyIcon(hIcon: number): number
+  GetTopWindow(hwnd: unknown): number
+  GetWindow(hwnd: number, cmd: number): number
+  GetWindowTextW(hwnd: number, buf: unknown, maxCount: number): number
+  GetWindowThreadProcessId(hwnd: number, pidOut: unknown): number
+  SendMessageTimeoutW(hwnd: number, msg: number, wParam: bigint, lParam: bigint, flags: number, timeout: number, result: unknown): number
+}
+
 const user32 = dlopen('user32.dll', {
   CreateIconFromResourceEx: {
     args: [FFIType.pointer, FFIType.u32, FFIType.i32, FFIType.u32, FFIType.i32, FFIType.i32, FFIType.u32],
@@ -41,7 +55,7 @@ const user32 = dlopen('user32.dll', {
     args: [FFIType.pointer, FFIType.u32, FFIType.u64, FFIType.i64, FFIType.u32, FFIType.u32, FFIType.pointer],
     returns: FFIType.i64,
   },
-}).symbols
+}).symbols as unknown as VerifyUser32Symbols
 
 const probeTitle = process.argv.includes('--probe') ? process.argv[process.argv.indexOf('--probe') + 1] : null
 const pidArg = process.argv.includes('--pid') ? Number(process.argv[process.argv.indexOf('--pid') + 1]) : null
