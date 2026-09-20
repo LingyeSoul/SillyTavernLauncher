@@ -65,6 +65,29 @@ describe('六视图切换', () => {
     await app.getByTestId('terminal-start').waitFor({ timeoutMs: 5_000 })
   }, 120_000)
 
+  // 分 tab（2026-09-20）：默认全局 tab 空态 → 切用户 tab（scrollKey 重挂）空态切换。
+  // 种子环境无 SillyTavern 目录，双列表均为空 → 双 EmptyState 路径可断言。
+  it('扩展页分 tab：全局/用户 tab 切换与空态（设置页同款 tab）', async () => {
+    session = await launchE2E({ setupCompleted: true })
+    const app = session.app
+
+    await app.getByTestId('nav-extensions').click()
+    await app.getByTestId('ext-git-install').waitFor({ timeoutMs: 10_000 })
+    // 默认全局 tab：空态可见（tab 标签计数 0 常显）
+    await app.getByText('暂无全局扩展').waitFor({ timeoutMs: 5_000 })
+    expect((await app.getByText('暂无全局扩展').all()).length, '全局 tab 空态应唯一').toBe(1)
+
+    // 切用户 tab：滚动区重挂（scrollKey），全局空态消失、用户空态出现
+    await app.getByTestId('extensions-tab-user').click()
+    await app.getByText('暂无用户扩展').waitFor({ timeoutMs: 5_000 })
+    const globalNodes = await app.getByText('暂无全局扩展').all()
+    expect(globalNodes.length, '切 tab 后全局空态应卸载').toBe(0)
+
+    await sleep(300) // 视图入场动画（240ms）后截图
+    await app.screenshot({ path: join(SHOTS_DIR, 'view-extensions-tabs.png') })
+    expectShotExists('view-extensions-tabs.png')
+  }, 120_000)
+
   it('种子 git 仓库下版本视图渲染版本卡片', async () => {
     session = await launchE2E({ setupCompleted: true, seedSt: true })
     const app = session.app
