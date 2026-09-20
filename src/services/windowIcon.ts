@@ -22,6 +22,9 @@
  *
  * 纯函数部分（解码/缩放/编码）在 Node/vitest 下可测；FFI 部分仅
  * win32 + Bun 运行时执行，其余环境为静默空操作（非错误路径）。
+ * 窗口枚举（findWindowByTitleAndPid）为 FFI 导出：任意进程的 标题+PID
+ * 双匹配探测，供打包冒烟等进程外观测复用；非 win32+Bun 下抛错而非空操作
+ * （观测方需要显式失败，不能与"未找到窗口"混淆）。
  */
 import { deflateSync, inflateSync } from 'node:zlib'
 import { logError } from './errorLog'
@@ -279,6 +282,61 @@ interface IconAppliedFlag {
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
+/** user32 符号懒加载缓存：applyWindowIcon 与 findWindowByTitleAndPid 共用一次 dlopen */
+let user32Symbols: User32Symbols | null = null
+
+async function loadUser32(): Promise<User32Symbols> {
+  if (user32Symbols) return user32Symbols
+  // 动态引入：vitest(Node) 下模块解析失败必须走调用方 catch 而不是顶层 import
+  const { dlopen, FFIType } = await import('bun:ffi')
+  user32Symbols = dlopen('user32.dll', {
+    GetTopWindow: { args: [FFIType.pointer], returns: FFIType.pointer },
+    GetWindow: { args: [FFIType.pointer, FFIType.u32], returns: FFIType.pointer },
+    GetWindowTextW: { args: [FFIType.pointer, FFIType.pointer, FFIType.i32], returns: FFIType.i32 },
+    GetWindowThreadProcessId: { args: [FFIType.pointer, FFIType.pointer], returns: FFIType.u32 },
+    GetSystemMetrics: { args: [FFIType.i32], returns: FFIType.i32 },
+    CreateIconFromResourceEx: {
+      args: [FFIType.pointer, FFIType.u32, FFIType.i32, FFIType.u32, FFIType.i32, FFIType.i32, FFIType.u32],
+      returns: FFIType.pointer,
+    },
+    PostMessageW: { args: [FFIType.pointer, FFIType.u32, FFIType.u64, FFIType.i64], returns: FFIType.i32 },
+  }).symbols as unknown as User32Symbols
+  return user32Symbols
+}
+
+/**
+ * GetTopWindow/GetWindow 链上按 标题+PID 双匹配定位顶层窗口（找不到返回 0）。
+ * 不能用 FindWindowW 单命中：它只返回 Z 序第一个标题命中，dev 与 E2E 常态
+ * 并存多个同名启动器窗口时会拿到别家实例（见模块头）。
+ */
+function findWindowByTitleAndPidSync(user32: User32Symbols, title: string, pid: number): number {
+  let hwnd = user32.GetTopWindow(0n)
+  let guard = 0
+  while (hwnd !== 0 && guard++ < 2000) {
+    const pidOut = new Uint32Array(1)
+    user32.GetWindowThreadProcessId(hwnd, pidOut)
+    if (pidOut[0] === pid) {
+      const buf = Buffer.alloc(512)
+      const len = user32.GetWindowTextW(hwnd, buf, 256)
+      if (buf.toString('utf16le', 0, Math.max(0, len) * 2) === title) return hwnd
+    }
+    hwnd = user32.GetWindow(hwnd, 2 /* GW_HWNDNEXT */)
+  }
+  return 0
+}
+
+/**
+ * 枚举顶层窗口，定位"标题为 title 且属于 pid 进程"的窗口；未找到返回 0。
+ * 供进程外观测方（打包冒烟、诊断脚本）判定目标进程的窗口是否已创建。
+ * 跨进程读标题安全：GetWindowTextW 读系统缓存副本，不向目标窗口泵发消息。
+ */
+export async function findWindowByTitleAndPid(title: string, pid: number): Promise<number> {
+  if (process.platform !== 'win32' || !process.versions.bun) {
+    throw new Error('窗口枚举仅支持 win32 + Bun 运行时')
+  }
+  return findWindowByTitleAndPidSync(await loadUser32(), title, pid)
+}
+
 /**
  * 为本进程标题为 title 的窗口设置图标（icon 源为 PNG dataURL 字符串，
  * 解析在本函数 try 内进行，调用点无裸抛路径）。win32 + Bun 之外静默空操作；
@@ -291,47 +349,19 @@ export async function applyWindowIcon(dataUrl: string, title: string): Promise<v
   flag.__stlWindowIconApplied = true
   if (process.platform !== 'win32' || !process.versions.bun) return
   try {
-    // 动态引入：vitest(Node) 下模块解析失败必须走 catch 而不是顶层 import
+    const user32 = await loadUser32()
     const { dlopen, FFIType } = await import('bun:ffi')
-    const user32 = dlopen('user32.dll', {
-      GetTopWindow: { args: [FFIType.pointer], returns: FFIType.pointer },
-      GetWindow: { args: [FFIType.pointer, FFIType.u32], returns: FFIType.pointer },
-      GetWindowTextW: { args: [FFIType.pointer, FFIType.pointer, FFIType.i32], returns: FFIType.i32 },
-      GetWindowThreadProcessId: { args: [FFIType.pointer, FFIType.pointer], returns: FFIType.u32 },
-      GetSystemMetrics: { args: [FFIType.i32], returns: FFIType.i32 },
-      CreateIconFromResourceEx: {
-        args: [FFIType.pointer, FFIType.u32, FFIType.i32, FFIType.u32, FFIType.i32, FFIType.i32, FFIType.u32],
-        returns: FFIType.pointer,
-      },
-      PostMessageW: { args: [FFIType.pointer, FFIType.u32, FFIType.u64, FFIType.i64], returns: FFIType.i32 },
-    }).symbols as unknown as User32Symbols
     const kernel32 = dlopen('kernel32.dll', {
       GetCurrentProcessId: { args: [], returns: FFIType.u32 },
     }).symbols as unknown as Kernel32Symbols
 
-    // 1. 枚举顶层窗口找"标题匹配 + 属于本进程"的那个。
-    //    不能用 FindWindowW 单命中：dev 与 E2E 常态并存多个同名启动器窗口，
-    //    FindWindowW 永远只返回 Z 序第一个，撞上别家实例就永远找不到自己的。
+    // 1. 枚举顶层窗口找"标题匹配 + 属于本进程"的那个
+    //    （FindWindowW 单命中的陷阱见 findWindowByTitleAndPidSync 注释）。
     const myPid = kernel32.GetCurrentProcessId()
-    const findOwnWindow = (): number => {
-      let hwnd = user32.GetTopWindow(0n)
-      let guard = 0
-      while (hwnd !== 0 && guard++ < 2000) {
-        const pid = new Uint32Array(1)
-        user32.GetWindowThreadProcessId(hwnd, pid)
-        if (pid[0] === myPid) {
-          const buf = Buffer.alloc(512)
-          const len = user32.GetWindowTextW(hwnd, buf, 256)
-          if (buf.toString('utf16le', 0, Math.max(0, len) * 2) === title) return hwnd
-        }
-        hwnd = user32.GetWindow(hwnd, 2 /* GW_HWNDNEXT */)
-      }
-      return 0
-    }
     // render() 同步建窗，但留重试兜底（标题设置或窗口链入 Z 序的极短窗口期）
     let hwnd = 0
     for (let attempt = 0; attempt < 10 && hwnd === 0; attempt++) {
-      hwnd = findOwnWindow()
+      hwnd = findWindowByTitleAndPidSync(user32, title, myPid)
       if (hwnd === 0) await sleep(100)
     }
     if (hwnd === 0) throw new Error('未找到本进程的窗口（枚举 10 次重试后放弃）')
