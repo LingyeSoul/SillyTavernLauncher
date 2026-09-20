@@ -142,6 +142,10 @@ describe('ConfigStore（← config_manager.py）', () => {
 
   it('注册 exit 自动保存，saveOnExit 失败被吞掉（← atexit._save_on_exit）', async () => {
     const { getConfigStore } = await freshModule()
+    // saveOnExit 失败现走 logError：重定向文件通道到 tempDir，防止写 src/logs/ 污染仓库
+    const { __setErrorLogDirForTests } = await import('../services/errorLog')
+    __setErrorLogDirForTests(join(tempDir, 'logs'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     const before = process.listenerCount('exit')
     mkdirSync(join(tempDir, 'exit'), { recursive: true })
     const configPath = join(tempDir, 'exit', 'config.json')
@@ -151,8 +155,11 @@ describe('ConfigStore（← config_manager.py）', () => {
     // 直接调用退出保存路径
     store.saveOnExit()
     expect((JSON.parse(readFileSync(configPath, 'utf8')) as { theme: string }).theme).toBe('light')
-    // 目录被删后保存失败也不抛出
+    // 目录被删后保存失败也不抛出，且错误落盘 Error_*.txt
     rmSync(join(tempDir, 'exit'), { force: true, recursive: true })
     expect(() => store.saveOnExit()).not.toThrow()
+    const logFiles = readdirSync(join(tempDir, 'logs'))
+    expect(logFiles).toHaveLength(1)
+    expect(readFileSync(join(tempDir, 'logs', logFiles[0] ?? ''), 'utf8')).toContain('配置保存失败')
   })
 })

@@ -26,6 +26,7 @@ import { render } from '@gpuix/react'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getConfigStore } from './services/configStore'
+import { installCrashGuard } from './services/crashGuard'
 import { logError } from './services/errorLog'
 import { stopAllProcessesSync } from './services/processManager'
 import { fetchAgreementDocument } from './services/agreement'
@@ -51,6 +52,13 @@ const RELEASES_URL = 'https://github.com/LingyeSoul/SillyTavernLauncher/releases
 // ??= 尊重外部显式设置：调试 gpuix 时可自行注入 RUST_LOG 覆盖本默认值。
 process.env.RUST_LOG ??=
   'error,gpui_windows::window=off,gpui_windows::dispatcher=off,gpui::window=off'
+
+// 进程级异常落盘（RCA：关窗偶发报错未捕获）：gpui 拆除窗口后 Bun 事件循环
+// 短暂存活，拆除窗口期落地的 React commit 调 GPU API 会抛
+// "The GPUI UI thread is not running"（@gpuix 的 uncaughtException handler
+// 只打 stderr 不落盘，退出码 0，纯竞态噪音；采样复现率 ~1/8）。
+// crashGuard 只增不替：补 logs/Error_*.txt 落盘通道，退出语义不变。
+installCrashGuard()
 
 /** ← main.py check_first_launch 的启动对话框序列 */
 function StartupFlow() {

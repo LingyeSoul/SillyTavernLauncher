@@ -150,7 +150,8 @@ export class ConfigStore {
     try {
       this.save()
     } catch (err) {
-      console.warn(`配置保存失败: ${err instanceof Error ? err.message : String(err)}`)
+      // 退出期错误同样落盘（logs/Error_*.txt），console.warn 会随进程死亡丢失
+      logError(`配置保存失败: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
