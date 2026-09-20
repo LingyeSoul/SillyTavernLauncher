@@ -7,6 +7,7 @@ import { useState } from 'react'
 import { useUiState } from '../../stores/uiState'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
+import { Chip } from '../components/Chip'
 import { Modal } from '../components/Modal'
 import { executeVersionSwitch } from '../views/VersionView'
 
@@ -56,33 +57,19 @@ export function VersionSwitchDialog({ version, commit, date, tagName }: VersionS
       }>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <text style={{ fontSize: 13, color: t.text.muted, fontFamily: t.font.sans }}>
+          <text style={{ fontSize: t.fs.field, color: t.text.muted, fontFamily: t.font.sans }}>
             {`${TEXTS.versionLabel}:`}
           </text>
-          <div
-            style={{
-              display: 'flex',
-              paddingLeft: 6,
-              paddingRight: 6,
-              paddingTop: 2,
-              paddingBottom: 2,
-              borderWidth: 1,
-              borderColor: t.border.default,
-              borderRadius: 3,
-            }}>
-            <text style={{ fontSize: 11, fontFamily: t.font.mono, color: t.text.secondary }}>
-              {`v${version}`}
-            </text>
-          </div>
+          <Chip>{`v${version}`}</Chip>
         </div>
-        <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>
+        <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
           {`${TEXTS.dateLabel}: ${date}`}
         </text>
-        <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.mono }}>
+        <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.mono }}>
           {`${TEXTS.commitLabel}: ${commit.slice(0, 7)}`}
         </text>
         <div style={{ height: 6 }} />
-        <text style={{ fontSize: 13, color: t.status.warning, fontFamily: t.font.sans }}>
+        <text style={{ fontSize: t.fs.field, color: t.status.warning, fontFamily: t.font.sans }}>
           {TEXTS.warning}
         </text>
       </div>

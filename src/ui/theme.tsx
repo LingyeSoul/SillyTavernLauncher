@@ -29,8 +29,9 @@ interface ThemeContextValue {
   /** reduced-motion 应用内开关（§6.B；PoC-4 的 reg query 探测未实现，列遗留 TODO） */
   motionEnabled: boolean
   setMotionEnabled: (enabled: boolean) => void
-  /** 共享骨架 shimmer 相位（false=亮 true=暗；motion 关闭时恒 false） */
-  shimmerPhase: boolean
+  /** 共享骨架扫光相位（0–3 数值相位，全周期 1.5s；motion 关闭时恒 0）。
+   *  数值宽骨架块据其平移渐变亮带（扫光）；弹性宽块退化为 opacity 呼吸亮/暗。 */
+  shimmerPhase: number
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
@@ -48,15 +49,16 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [motionEnabled, setMotionEnabledState] = useState<boolean>(
     config.get<boolean>('motionEnabled', true),
   )
-  const [shimmerPhase, setShimmerPhase] = useState(false)
+  const [shimmerPhase, setShimmerPhase] = useState(0)
 
-  // 共享 shimmer 时钟：1.5s 周期（§5.9），motion 关闭时不跑
+  // 共享 shimmer 时钟：1.5s 全周期（§5.9），0–3 四相位每 375ms 步进一次；
+  // motion 关闭时归 0（静态骨架）
   useEffect(() => {
     if (!motionEnabled) {
-      setShimmerPhase(false)
+      setShimmerPhase(0)
       return
     }
-    const id = setInterval(() => setShimmerPhase((p) => !p), 750)
+    const id = setInterval(() => setShimmerPhase((p) => (p + 1) % 4), 375)
     return () => clearInterval(id)
   }, [motionEnabled])
 

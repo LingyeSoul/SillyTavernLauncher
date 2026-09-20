@@ -63,7 +63,7 @@ export function NavItem({ icon, label, active, onClick, testId }: NavItemProps) 
       />
       <text
         style={{
-          fontSize: 13,
+          fontSize: t.fs.field,
           fontWeight: 400,
           color: active ? t.ember : t.text.secondary,
           fontFamily: t.font.sans,

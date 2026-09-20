@@ -14,10 +14,12 @@ import { uiStateActions } from '../../stores/uiState'
 import { layout } from '../../theme'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
+import { Chip } from '../components/Chip'
+import { IconButton } from '../components/IconButton'
+import { PageHeader } from '../components/PageHeader'
 import { EmptyState } from '../components/EmptyState'
 import { SkeletonCards } from '../components/Skeleton'
 import { Tooltip } from '../components/Tooltip'
-import { ICONS } from '../components/icons'
 
 const TEXTS = {
   title: '版本管理',
@@ -95,52 +97,32 @@ export function VersionView() {
         paddingLeft: layout.padFormX,
         paddingRight: layout.padFormX,
       }}>
-      {/* workspace-heading */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-        }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <text style={{ fontSize: 26, fontWeight: 600, color: t.text.primary, fontFamily: t.font.sans }}>
-            {TEXTS.title}
-          </text>
-          <text style={{ fontSize: 13, color: t.text.muted, fontFamily: t.font.mono }}>
-            {subtitle}
-          </text>
-        </div>
-        <Tooltip label={TEXTS.refreshTip}>
-          <div
-            onClick={() => void loadVersions()}
-            role="button"
-            aria-label={TEXTS.refreshTip}
-            testId="version-refresh"
-            style={{
-              width: 32,
-              height: 32,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: t.radius.sm,
-              cursor: loading ? 'not-allowed' : 'pointer',
-              opacity: loading ? 0.32 : 1,
-              hover: { backgroundColor: t.bg.hover },
-            }}>
-            <svg source={ICONS.refresh} style={{ width: 19, height: 19, color: t.text.secondary }} />
-          </div>
-        </Tooltip>
-      </div>
-
-      <div style={{ height: 16 }} />
+      {/* workspace-heading（PageHeader 收口） */}
+      <PageHeader
+        title={TEXTS.title}
+        subtitle={subtitle}
+        subtitleMono
+        actions={
+          <Tooltip label={TEXTS.refreshTip}>
+            <IconButton
+              icon="refresh"
+              iconSize={19}
+              size={32}
+              label={TEXTS.refreshTip}
+              disabled={loading}
+              onClick={() => void loadVersions()}
+              testId="version-refresh"
+            />
+          </Tooltip>
+        }
+      />
 
       {error && (
-        <text style={{ fontSize: 13, color: t.status.error, fontFamily: t.font.sans, marginBottom: 8 }}>
+        <text style={{ fontSize: t.fs.field, color: t.status.error, fontFamily: t.font.sans, marginBottom: 8 }}>
           {`${TEXTS.loadFailed}: ${error}`}
         </text>
       )}
-      <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 8 }}>
+      <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 8 }}>
         {TEXTS.listHint}
       </text>
 
@@ -212,33 +194,17 @@ function VersionCard({ entry, current }: { entry: VersionEntry; current: boolean
           拼接文案必须合成单个模板字面量子节点，否则行数翻倍撑破卡片 */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
-          <text style={{ fontSize: 13, fontWeight: 600, fontFamily: t.font.mono, color: t.text.primary }}>
+          <text style={{ fontSize: t.fs.field, fontWeight: 600, fontFamily: t.font.mono, color: t.text.primary }}>
             {`v${entry.version}`}
           </text>
-          <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>{date}</text>
+          <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>{date}</text>
         </div>
-        <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>
+        <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
           {`${TEXTS.sourcePrefix} tag ${entry.tag.tag_name}`}
         </text>
       </div>
       <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-        {current && (
-          <div
-            style={{
-              display: 'flex',
-              paddingLeft: 6,
-              paddingRight: 6,
-              paddingTop: 2,
-              paddingBottom: 2,
-              borderWidth: 1,
-              borderColor: t.ember,
-              borderRadius: 3,
-            }}>
-            <text style={{ fontSize: 11, fontFamily: t.font.mono, color: t.ember }}>
-              {TEXTS.currentChip}
-            </text>
-          </div>
-        )}
+        {current && <Chip accent>{TEXTS.currentChip}</Chip>}
         {!current && (
           <Button
             variant="quiet"

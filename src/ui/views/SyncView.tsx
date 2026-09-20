@@ -16,6 +16,8 @@ import { layout } from '../../theme'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
 import { Card, SectionTitle } from '../components/Card'
+import { Chip } from '../components/Chip'
+import { PageHeader } from '../components/PageHeader'
 import { EmptyState } from '../components/EmptyState'
 import { Input } from '../components/Input'
 import { ProgressBar } from '../components/ProgressBar'
@@ -214,20 +216,18 @@ export function SyncView() {
         paddingLeft: layout.padFormX,
         paddingRight: layout.padFormX,
       }}>
-      {/* workspace-heading */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 16 }}>
-        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'baseline', gap: 12 }}>
-          <text style={{ fontSize: 26, fontWeight: 600, color: t.text.primary, fontFamily: t.font.sans }}>
-            {TEXTS.title}
-          </text>
-          <text style={{ fontSize: 13, color: t.text.secondary, fontFamily: t.font.sans }}>
-            {`状态: ${statusText(status)}`}
-          </text>
-        </div>
-        <text style={{ fontSize: 13, fontWeight: 600, color: t.status.error, fontFamily: t.font.sans }}>
-          {TEXTS.warning}
-        </text>
-      </div>
+      {/* workspace-heading（PageHeader 收口）；安全提示降级为 caption 级说明——
+          红字保留给真异常（减法：status.error 是异常色，非常驻装饰） */}
+      <PageHeader title={TEXTS.title} subtitle={`状态: ${statusText(status)}`} />
+      <text
+        style={{
+          fontSize: t.fs.caption,
+          color: t.text.muted,
+          fontFamily: t.font.sans,
+          marginBottom: t.space.sectionGap,
+        }}>
+        {TEXTS.warning}
+      </text>
 
       {/* 服务器配置 */}
       <Card>
@@ -245,7 +245,7 @@ export function SyncView() {
           <Input value={port} onChange={setPort} width={96} testId="sync-port" />
         </div>
         <div style={{ height: 8 }} />
-        <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.mono }} testId="sync-server-url">
+        <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.mono }} testId="sync-server-url">
           {serverUrlText}
         </text>
       </Card>
@@ -318,25 +318,11 @@ export function SyncView() {
                 borderColor: t.border.subtle,
                 borderRadius: t.radius.md,
               }}>
-              <div
-                style={{
-                  display: 'flex',
-                  paddingLeft: 6,
-                  paddingRight: 6,
-                  paddingTop: 2,
-                  paddingBottom: 2,
-                  borderWidth: 1,
-                  borderColor: t.border.default,
-                  borderRadius: 3,
-                }}>
-                <text style={{ fontSize: 11, fontFamily: t.font.mono, color: t.amber }}>
-                  {`服务器 ${i + 1}`}
-                </text>
-              </div>
-              <text style={{ fontSize: 12, fontFamily: t.font.mono, color: t.text.secondary, flexGrow: 1, minWidth: 0 }}>
+              <Chip color={t.amber}>{`服务器 ${i + 1}`}</Chip>
+              <text style={{ fontSize: t.fs.caption, fontFamily: t.font.mono, color: t.text.secondary, flexGrow: 1, minWidth: 0 }}>
                 {server.serverUrl}
               </text>
-              <text style={{ fontSize: 11, color: t.text.muted, fontFamily: t.font.sans, flexShrink: 0 }}>
+              <text style={{ fontSize: t.fs.micro, color: t.text.muted, fontFamily: t.font.sans, flexShrink: 0 }}>
                 {server.info?.auth_required ? TEXTS.authRequired : TEXTS.noAuth}
               </text>
               <Button
@@ -358,7 +344,7 @@ export function SyncView() {
       {(syncing || status === 'syncing') && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: t.space.sectionGap }}>
           <ProgressBar testId="sync-progress" />
-          <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>
+          <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
             {TEXTS.syncingText}
           </text>
         </div>
@@ -384,13 +370,13 @@ export function SyncView() {
             justifyContent: 'flex-end',
           }}>
           {logs.length === 0 ? (
-            <text style={{ fontSize: 12, fontFamily: t.font.mono, color: t.text.disabled }}>—</text>
+            <text style={{ fontSize: t.fs.caption, fontFamily: t.font.mono, color: t.text.disabled }}>—</text>
           ) : (
             // 7 行 × lineHeight 16 = 112 ≤ 容器 120（原 14px 行高裁掉下伸部约 4px）
             logs.slice(-7).map((entry) => (
               <text
                 key={entry.id}
-                style={{ fontSize: 12, lineHeight: 16, fontFamily: t.font.mono, color: logColor(entry.level) }}>
+                style={{ fontSize: t.fs.caption, lineHeight: 16, fontFamily: t.font.mono, color: logColor(entry.level) }}>
                 {entry.message}
               </text>
             ))

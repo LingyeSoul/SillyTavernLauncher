@@ -5,6 +5,7 @@
  */
 import { editorTheme, useTheme, useThemeContext } from '../theme'
 import { Button } from '../components/Button'
+import { Chip } from '../components/Chip'
 import { Modal } from '../components/Modal'
 import { useUiState } from '../../stores/uiState'
 import { openUrl } from '../../services/platform'
@@ -23,27 +24,6 @@ export interface UpdateAvailableDialogProps {
   latestVersion: string
   changelog: string | null
   downloadUrl: string
-}
-
-function VersionChip({ version }: { version: string }) {
-  const t = useTheme()
-  return (
-    <div
-      style={{
-        display: 'flex',
-        paddingLeft: 6,
-        paddingRight: 6,
-        paddingTop: 2,
-        paddingBottom: 2,
-        borderWidth: 1,
-        borderColor: t.border.default,
-        borderRadius: 3,
-      }}>
-      <text style={{ fontSize: 11, fontFamily: t.font.mono, color: t.text.secondary }}>
-        {`v${version}`}
-      </text>
-    </div>
-  )
 }
 
 export function UpdateAvailableDialog({
@@ -81,11 +61,11 @@ export function UpdateAvailableDialog({
       }>
       {/* 版本对 */}
       <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <VersionChip version={currentVersion} />
-        <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.mono }}>→</text>
-        <VersionChip version={latestVersion} />
+        <Chip>{`v${currentVersion}`}</Chip>
+        <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.mono }}>→</text>
+        <Chip>{`v${latestVersion}`}</Chip>
       </div>
-      <text style={{ fontSize: 13, color: isBeta ? t.status.warning : t.text.secondary, fontFamily: t.font.sans, marginBottom: 8 }}>
+      <text style={{ fontSize: t.fs.field, color: isBeta ? t.status.warning : t.text.secondary, fontFamily: t.font.sans, marginBottom: 8 }}>
         {isBeta ? TEXTS.betaNotice : TEXTS.releaseNotice}
       </text>
 
@@ -103,7 +83,7 @@ export function UpdateAvailableDialog({
         {changelog ? (
           <markdown source={changelog} theme={editorTheme(t, mode)} />
         ) : (
-          <text style={{ fontSize: 13, color: t.text.muted, fontFamily: t.font.sans }}>
+          <text style={{ fontSize: t.fs.field, color: t.text.muted, fontFamily: t.font.sans }}>
             {TEXTS.noChangelog}
           </text>
         )}

@@ -80,4 +80,29 @@ describe('六视图切换', () => {
     await app.screenshot({ path: join(SHOTS_DIR, 'view-version-cards.png') })
     expectShotExists('view-version-cards.png')
   }, 120_000)
+
+  it('浅色主题：骨架 elevated 与卡片边框可辨，截图落盘（O6 视觉抽检）', async () => {
+    session = await launchE2E({ setupCompleted: true, seedSt: true, theme: 'light' })
+    const app = session.app
+
+    // 加载中的骨架卡（elevated 块叠在白色卡片上）是 O6 核心检验面：
+    // 等视图入场动画（240ms）结束而 git 加载未完成的窗口期截屏
+    await app.getByTestId('nav-version').click()
+    await sleep(350)
+    await app.screenshot({ path: join(SHOTS_DIR, 'view-version-light-loading.png') })
+    expectShotExists('view-version-light-loading.png')
+
+    // 等真实卡片渲染（骨架退场）再截一张稳态图
+    await app.getByTestId('version-switch-1.17.0').waitFor({ timeoutMs: 10_000 })
+    await sleep(300)
+    await app.screenshot({ path: join(SHOTS_DIR, 'view-version-light.png') })
+    expectShotExists('view-version-light.png')
+
+    // 设置页卡片（surface 白卡 + 1px subtle 边框分层）浅色可辨性
+    await app.getByTestId('nav-settings').click()
+    await app.getByTestId('setting-check-env').waitFor({ timeoutMs: 10_000 })
+    await sleep(300)
+    await app.screenshot({ path: join(SHOTS_DIR, 'view-settings-light.png') })
+    expectShotExists('view-settings-light.png')
+  }, 120_000)
 })

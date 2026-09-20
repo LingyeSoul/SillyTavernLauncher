@@ -4,6 +4,7 @@
  * 最深可命中盒子，轨道 div 会吞掉点击（text/svg 会被跳过，div 盒子不会），事件到不了根
  * 节点 onClick；轨道穿透后命中落在持有 onClick 的根节点。圆点滑动 = motion.div（M3）。
  */
+import { useState } from 'react'
 import { motion } from '@gpuix/react'
 import { useMotion, useTheme } from '../theme'
 
@@ -18,9 +19,13 @@ export interface SwitchProps {
 export function Switch({ on, onChange, label, disabled = false, testId }: SwitchProps) {
   const t = useTheme()
   const { enabled: motionEnabled } = useMotion()
+  const [focused, setFocused] = useState(false)
   return (
     <div
       onClick={disabled ? undefined : () => onChange(!on)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      tabIndex={disabled ? undefined : 0}
       role="switch"
       aria-selected={on}
       aria-label={label}
@@ -43,6 +48,9 @@ export function Switch({ on, onChange, label, disabled = false, testId }: Switch
           backgroundColor: on ? t.ember : t.bg.hover,
           borderWidth: 1,
           borderColor: on ? t.ember : t.border.subtle,
+          boxShadow: focused
+            ? { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 3, color: t.glow.ember }
+            : undefined,
         }}>
         <motion.div
           initial={false}
@@ -60,7 +68,7 @@ export function Switch({ on, onChange, label, disabled = false, testId }: Switch
         />
       </div>
       {label && (
-        <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans }}>{label}</text>
+        <text style={{ fontSize: t.fs.field, color: t.text.primary, fontFamily: t.font.sans }}>{label}</text>
       )}
     </div>
   )

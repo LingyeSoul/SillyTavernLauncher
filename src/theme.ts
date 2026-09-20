@@ -5,6 +5,10 @@
  * 偏离声明 O1–O5 见同文档 §1.C：侧栏 168（DEVIATION: O1 原设计 192，用户要求
  * 改窄，NavItem/footer 布局预算 168 下均有富余）、无顶栏、表单 padding 20/24、
  * 微软雅黑 + Consolas、无玻璃态。
+ * 偏离声明 O6（2026-09-20，同文档 §1.C）：亮色 bg.elevated 由 #FFFFFF 改为
+ * #F0F3F6——原值使骨架块/进度轨道/扩展图标回退等 elevated 填充元素在白色卡片上
+ * 不可辨（仅靠 1px 边级别无填充对比）；卡片本身仍为 surface 白底，分层语言
+ * （B1 elevation 0 + 边框）不变，暗色侧不动。
  */
 
 export interface ThemeTokens {
@@ -36,8 +40,9 @@ export const dark: ThemeTokens = {
 
 export const light: ThemeTokens = {
   ember: '#9D4C23', amber: '#34756C', gold: '#956914',
+  // DEVIATION: O6 — elevated 原 #FFFFFF（dt 成对表），白卡上不可辨，改 #F0F3F6
   bg: { deep: '#EDF0F2', base: '#F6F7F8', surface: '#FFFFFF',
-        elevated: '#FFFFFF', hover: '#E9EDF0', overlay: '#FFFFFF' },
+        elevated: '#F0F3F6', hover: '#E9EDF0', overlay: '#FFFFFF' },
   text: { primary: '#242A30', secondary: '#626C76', muted: '#68737E', disabled: '#8A959F' },
   border: { subtle: '#E0E5E9', default: '#CBD3DA', strong: '#9AA6B0' },
   status: { error: '#BA3B50', warning: '#956914', info: '#356FA8', success: '#327653' },

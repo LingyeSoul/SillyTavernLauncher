@@ -1,6 +1,8 @@
 /**
  * Radio（设计 §5.2）：16 圆 · 边 1.5 · 选中 = ember + 6px 内点（pointerEvents:'none'）。
+ * 键盘可达：tabIndex 0 + onFocus/onBlur 状态驱动 ember 聚焦辉环（同 Input 降级 #4）。
  */
+import { useState } from 'react'
 import { useTheme } from '../theme'
 
 export interface RadioProps {
@@ -12,9 +14,13 @@ export interface RadioProps {
 
 export function Radio({ checked, label, onChange, testId }: RadioProps) {
   const t = useTheme()
+  const [focused, setFocused] = useState(false)
   return (
     <div
       onClick={onChange}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      tabIndex={0}
       role="radio"
       aria-selected={checked}
       testId={testId}
@@ -36,6 +42,9 @@ export function Radio({ checked, label, onChange, testId }: RadioProps) {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
+          boxShadow: focused
+            ? { offsetX: 0, offsetY: 0, blurRadius: 0, spreadRadius: 3, color: t.glow.ember }
+            : undefined,
         }}>
         {checked && (
           <div
@@ -52,7 +61,7 @@ export function Radio({ checked, label, onChange, testId }: RadioProps) {
       {label && (
         <text
           style={{
-            fontSize: 13,
+            fontSize: t.fs.field,
             color: checked ? t.text.primary : t.text.secondary,
             fontFamily: t.font.sans,
           }}>

@@ -27,8 +27,9 @@ import { uiStateActions } from '../../stores/uiState'
 import { useThemeContext } from '../theme'
 import { layout, THEME_ACCENTS, type ThemeAccentId } from '../../theme'
 import { Button } from '../components/Button'
+import { Card, SectionTitle } from '../components/Card'
 import { Input } from '../components/Input'
-import { SectionTitle } from '../components/Card'
+import { PageHeader } from '../components/PageHeader'
 import { Select } from '../components/Select'
 import { Switch } from '../components/Switch'
 
@@ -190,7 +191,7 @@ export function SettingsView() {
           {label}
         </text>
         {desc && (
-          <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>{desc}</text>
+          <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>{desc}</text>
         )}
       </div>
       <Switch on={on} onChange={onChange} testId={`setting-${key}`} />
@@ -358,7 +359,7 @@ export function SettingsView() {
         )}
         <text
           style={{
-            fontSize: 13,
+            fontSize: t.fs.field,
             fontWeight: active ? 600 : 400,
             color: active ? t.ember : t.text.secondary,
             fontFamily: t.font.sans,
@@ -386,14 +387,7 @@ export function SettingsView() {
           paddingLeft: layout.padFormX,
           paddingRight: layout.padFormX,
         }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 16 }}>
-          <text style={{ fontSize: 26, fontWeight: 600, color: t.text.primary, fontFamily: t.font.sans }}>
-            {TEXTS.title}
-          </text>
-          <text style={{ fontSize: 13, color: t.text.muted, fontFamily: t.font.sans }}>
-            {TEXTS.subtitle}
-          </text>
-        </div>
+        <PageHeader title={TEXTS.title} subtitle={TEXTS.subtitle} />
 
         {/* tab 栏：三项 + 底部 1px 分隔线（激活下划线压线） */}
         <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -423,7 +417,7 @@ export function SettingsView() {
       {/* ==================== 环境 tab（默认）==================== */}
       {activeTab === 'env' && (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', marginBottom: 16 }}>
+          <Card>
             <SectionTitle title={TEXTS.sectionEnvSwitch} />
             {switchRow('use_sys_env', TEXTS.useSysEnv, TEXTS.useSysEnvDesc, settings.useSysEnv, (v) => settings.update({ useSysEnv: v }))}
             {switchRow('patchgit', TEXTS.patchgit, TEXTS.patchgitDesc, settings.patchgit, (v) => settings.update({ patchgit: v }))}
@@ -440,11 +434,11 @@ export function SettingsView() {
                 testId="setting-mirror"
               />
             </div>
-            <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans, marginTop: 4 }}>
+            <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans, marginTop: 4 }}>
               {TEXTS.mirrorHint}
             </text>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
+          </Card>
+          <Card>
             <SectionTitle title={TEXTS.sectionTools} />
             <div style={{ display: 'flex', flexDirection: 'row', gap: 8 }}>
               <Button variant="default" icon="settings" onClick={handleCheckEnv} testId="setting-check-env">
@@ -454,7 +448,7 @@ export function SettingsView() {
                 {TEXTS.startCmd}
               </Button>
             </div>
-          </div>
+          </Card>
         </div>
       )}
 
@@ -462,7 +456,7 @@ export function SettingsView() {
       {activeTab === 'st' && (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {/* 启动参数 */}
-          <div style={{ display: 'flex', flexDirection: 'column', marginBottom: 16 }}>
+          <Card>
             <SectionTitle title={TEXTS.sectionLaunchArgs} />
             {switchRow('use_optimize_args', TEXTS.useOptimizeArgs, TEXTS.useOptimizeArgsDesc, settings.useOptimizeArgs, (v) => settings.update({ useOptimizeArgs: v }))}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
@@ -483,14 +477,14 @@ export function SettingsView() {
                   {TEXTS.save}
                 </Button>
               </div>
-              <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>
+              <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
                 {TEXTS.customArgsDesc}
               </text>
             </div>
-          </div>
+          </Card>
 
           {/* 网络 */}
-          <div style={{ display: 'flex', flexDirection: 'column', marginBottom: 16 }}>
+          <Card>
             <SectionTitle title={TEXTS.sectionNetwork} />
             <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', minHeight: 40, gap: 12 }}>
               <div style={{ flexGrow: 1, minWidth: 0 }}>
@@ -517,7 +511,7 @@ export function SettingsView() {
                   {TEXTS.save}
                 </Button>
               </div>
-              <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>
+              <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
                 {TEXTS.portDesc}
               </text>
             </div>
@@ -567,13 +561,13 @@ export function SettingsView() {
               }
               settings.reload()
             })}
-          </div>
+          </Card>
 
           {/* 酒馆更新 */}
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <Card>
             <SectionTitle title={TEXTS.sectionUpdate} />
             {switchRow('stcheckupdate', TEXTS.stcheckupdate, TEXTS.stcheckupdateDesc, settings.stcheckupdate, (v) => settings.update({ stcheckupdate: v }))}
-          </div>
+          </Card>
         </div>
       )}
 
@@ -581,21 +575,21 @@ export function SettingsView() {
       {activeTab === 'launcher' && (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {/* 更新（镜像行已移入环境 tab 的运行环境区，此处仅启动器更新检查） */}
-          <div style={{ display: 'flex', flexDirection: 'column', marginBottom: 16 }}>
+          <Card>
             <SectionTitle title={TEXTS.sectionUpdate} />
             {switchRow('checkupdate', TEXTS.checkupdate, TEXTS.checkupdateDesc, settings.checkupdate, (v) => settings.update({ checkupdate: v }))}
-          </div>
+          </Card>
 
           {/* 启动器（tray 已按 D1 移除） */}
-          <div style={{ display: 'flex', flexDirection: 'column', marginBottom: 16 }}>
+          <Card>
             <SectionTitle title={TEXTS.sectionLauncher} />
             {switchRow('autostart', TEXTS.autostart, TEXTS.autostartDesc, settings.autostart, (v) => settings.update({ autostart: v }))}
             {switchRow('reduce_motion', TEXTS.reduceMotion, TEXTS.reduceMotionDesc, !motionEnabled, (v) => setMotionEnabled(!v))}
-          </div>
+          </Card>
 
           {/* 外观（主题色预设：色板行，点击即存即生效；预览色取当前模式侧的 ember，
               激活项以 2px text.primary 描边标识——全部色板统一 2px 边宽避免选中态抖动） */}
-          <div style={{ display: 'flex', flexDirection: 'column', marginBottom: 16 }}>
+          <Card>
             <SectionTitle title={TEXTS.sectionAppearance} />
             <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', minHeight: 40, gap: 12 }}>
               <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans, flexShrink: 0 }}>
@@ -627,13 +621,13 @@ export function SettingsView() {
                 })}
               </div>
             </div>
-            <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>
+            <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
               {`${TEXTS.accentHintPrefix}：${THEME_ACCENTS[accent].label} · 切换后立即生效`}
             </text>
-          </div>
+          </Card>
 
           {/* 终端（字号/字体族即时生效；自定义字体名走 Input+保存，同 customArgs 模式） */}
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <Card>
             <SectionTitle title={TEXTS.sectionTerminal} />
             <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 4 }}>
               <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans, flexShrink: 0 }}>
@@ -647,7 +641,7 @@ export function SettingsView() {
                 testId="setting-terminal-font-size"
               />
             </div>
-            <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 12 }}>
+            <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 12 }}>
               {TEXTS.terminalFontSizeHint}
             </text>
             <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 4 }}>
@@ -665,7 +659,7 @@ export function SettingsView() {
                 testId="setting-terminal-font-family"
               />
             </div>
-            <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 12 }}>
+            <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 12 }}>
               {TEXTS.terminalFontFamilyHint}
             </text>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 }}>
@@ -686,7 +680,7 @@ export function SettingsView() {
                   {TEXTS.save}
                 </Button>
               </div>
-              <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>
+              <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
                 {TEXTS.terminalFontCustomDesc}
               </text>
             </div>
@@ -704,7 +698,7 @@ export function SettingsView() {
                 {TERMINAL_FONT_PREVIEW_TEXT}
               </text>
             </div>
-          </div>
+          </Card>
         </div>
       )}
       </div>

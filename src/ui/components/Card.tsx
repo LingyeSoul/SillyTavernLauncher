@@ -1,6 +1,7 @@
 /**
  * Card（设计 §5.5）：elevation 0 + 1px 边框（B1：暗色下卡片禁阴影，分层靠边框与阶梯）。
- * Section 标题：15px/600 text.primary + 可选计数 12px text.muted。
+ * Section 标题：15px/600 text.primary（§5.5 配方值；§2.B 的 fs.h3=16 归对话框标题）
+ * + 可选计数 fs.caption text.muted。
  */
 import type { ReactNode } from 'react'
 import type { StyleDesc } from '@gpuix/react'
@@ -51,7 +52,7 @@ export function SectionTitle({ title, count, style }: SectionTitleProps) {
         {title}
       </text>
       {count !== undefined && (
-        <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>{count}</text>
+        <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>{count}</text>
       )}
     </div>
   )
