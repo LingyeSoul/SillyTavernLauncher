@@ -41,6 +41,8 @@ export function SkeletonBlock({ width = '100%', height = 16 }: SkeletonBlockProp
             top: 0,
             bottom: 0,
             width: stripeW,
+            // 填充子元素铁律：渐变填充盒不吃点击（当前骨架下无交互元素，口径统一）
+            pointerEvents: 'none',
             background: {
               type: 'linear-gradient',
               angle: 90,
