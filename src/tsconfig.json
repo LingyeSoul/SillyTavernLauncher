@@ -13,5 +13,5 @@
     "noEmit": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["*.ts", "*.tsx", "ui/**/*.ts", "ui/**/*.tsx", "services/**/*.ts", "stores/**/*.ts", "tests/**/*.ts", "tests/**/*.tsx"]
+  "include": ["*.ts", "*.tsx", "ui/**/*.ts", "ui/**/*.tsx", "services/**/*.ts", "stores/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts", "tests/**/*.tsx"]
 }
