@@ -12,10 +12,12 @@ export interface ChipProps {
   color?: string
   /** 强调态：边框与文字用主题色 ember（VersionView"当前"芯片） */
   accent?: boolean
+  /** 覆盖默认 alignSelf:'flex-start'（行布局防拉伸）；居中列传 'center' */
+  alignSelf?: 'flex-start' | 'center' | 'flex-end' | 'stretch' | 'auto'
   testId?: string
 }
 
-export function Chip({ children, color, accent = false, testId }: ChipProps) {
+export function Chip({ children, color, accent = false, alignSelf = 'flex-start', testId }: ChipProps) {
   const t = useTheme()
   const tone = accent ? t.ember : (color ?? t.text.secondary)
   return (
@@ -23,7 +25,7 @@ export function Chip({ children, color, accent = false, testId }: ChipProps) {
       testId={testId}
       style={{
         display: 'flex',
-        alignSelf: 'flex-start',
+        alignSelf,
         paddingLeft: 6,
         paddingRight: 6,
         paddingTop: 2,

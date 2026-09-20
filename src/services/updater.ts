@@ -20,6 +20,12 @@
  */
 import { getConfigStore } from './configStore'
 import { errMsg, logError } from './errorLog'
+import {
+  fetchWithTlsFallback,
+  type CaProvider,
+  type FetchLikeX,
+  TlsInterceptError,
+} from './httpClient'
 
 export interface UpdateCheckResult {
   has_error: boolean
@@ -39,11 +45,19 @@ const USER_AGENT = 'SillyTavernLauncher/1.0'
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>
 
+/** 版本抓取链路的失败归因（供 checkForUpdates 组装针对性错误提示） */
+export interface UpdateFetchOutcome {
+  /** raw + API 任一链路命中 TLS 拦截（加速工具/网关换证书） */
+  tlsIntercepted?: boolean
+}
+
 export interface UpdaterOptions {
   currentVersion: string
   /** 镜像读取（默认 configStore 的 github.mirror；测试注入） */
   getMirror?: () => string
   fetchImpl?: FetchLike
+  /** 系统证书库 PEM 提供者（证书校验失败时回退注入；测试注入避免触 PowerShell） */
+  caProvider?: CaProvider
   /** 远端请求超时（毫秒），默认 10000 */
   timeoutMs?: number
 }
@@ -71,8 +85,10 @@ export function normalizeVersion(input: string): string {
     const num = betaMatch[1]
     return num ? `${main}-beta.${num}` : `${main}-beta`
   }
-  // 其他后缀：空白折叠为 '.' 作为 pre-release 标识符分隔
-  return `${main}-${suffix.replace(/\s+/g, '.')}`
+  // 其他后缀（alpha/rc 等已带连字符的 semver pre-release 形态）：先去前导
+  // 分隔符再拼 '-'，避免 '2.0.0--alpha.0' 双横线；空白折叠为 '.' 作分隔
+  const cleanSuffix = suffix.replace(/^[\s.-]+/, '').replace(/\s+/g, '.')
+  return cleanSuffix ? `${main}-${cleanSuffix}` : main
 }
 
 /** ← is_beta_version：测试版标识清单（大小写变体逐一列出，1:1） */
@@ -175,16 +191,27 @@ export function withMirrorPrefix(mirror: string, url: string): string {
 // 远端版本抓取
 // ---------------------------------------------------------------------------
 
-async function fetchText(url: string, timeoutMs: number, fetchImpl: FetchLike): Promise<string | null> {
+/**
+ * 单 URL 抓取：证书校验失败时经系统证书库回退重试（httpClient 层）。
+ * TlsInterceptError 记入 outcome 后按普通网络失败返回 null。
+ */
+async function fetchText(
+  url: string,
+  timeoutMs: number,
+  fetchImpl: FetchLike,
+  caProvider: CaProvider | undefined,
+  outcome: UpdateFetchOutcome | undefined,
+): Promise<string | null> {
   try {
-    const response = await fetchImpl(url, {
+    const response = await fetchWithTlsFallback(url, {
       headers: { 'User-Agent': USER_AGENT },
       signal: AbortSignal.timeout(timeoutMs),
-    })
+    }, { fetchImpl: fetchImpl as unknown as FetchLikeX, caProvider })
     if (response.status === 200) return await response.text()
     logError(`[updater] 请求失败，状态码: ${response.status} url: ${url}`)
     return null
   } catch (err) {
+    if (err instanceof TlsInterceptError && outcome) outcome.tlsIntercepted = true
     logError(`[updater] 网络错误: ${errMsg(err)} url: ${url}`)
     return null
   }
@@ -196,12 +223,13 @@ async function fetchText(url: string, timeoutMs: number, fetchImpl: FetchLike): 
  */
 export async function fetchLatestVersionFromRaw(
   options: UpdaterOptions,
+  outcome?: UpdateFetchOutcome,
 ): Promise<string | null> {
   const timeoutMs = options.timeoutMs ?? 10_000
   const fetchImpl = options.fetchImpl ?? fetch
   const mirror = getGithubMirror(options.getMirror)
   const rawUrl = withMirrorPrefix(mirror, RAW_PACKAGE_JSON_URL)
-  const content = await fetchText(rawUrl, timeoutMs, fetchImpl)
+  const content = await fetchText(rawUrl, timeoutMs, fetchImpl, options.caProvider, outcome)
   if (content === null) return null
   try {
     const data = JSON.parse(content) as { version?: unknown }
@@ -215,12 +243,13 @@ export async function fetchLatestVersionFromRaw(
 /** ← get_latest_release_version 的 API 回退（releases/latest tag_name） */
 export async function fetchLatestVersionFromApi(
   options: UpdaterOptions,
+  outcome?: UpdateFetchOutcome,
 ): Promise<string | null> {
   const timeoutMs = options.timeoutMs ?? 10_000
   const fetchImpl = options.fetchImpl ?? fetch
   const mirror = getGithubMirror(options.getMirror)
   const apiUrl = withMirrorPrefix(mirror, RELEASES_API_URL)
-  const content = await fetchText(apiUrl, timeoutMs, fetchImpl)
+  const content = await fetchText(apiUrl, timeoutMs, fetchImpl, options.caProvider, outcome)
   if (content === null) return null
   try {
     const data = JSON.parse(content) as { tag_name?: unknown; name?: unknown }
@@ -383,15 +412,19 @@ export function htmlToMarkdown(htmlContent: string): string {
   return markdownLines.join('\n\n')
 }
 
-/** ← fetch_changelog：抓取页面并提取 vp-doc 区块 */
+/** ← fetch_changelog：抓取页面并提取 vp-doc 区块（证书校验失败时系统 CA 回退） */
 export async function fetchChangelog(options: UpdaterOptions = { currentVersion: '' }): Promise<string | null> {
   const timeoutMs = options.timeoutMs ?? 15_000
-  const fetchImpl = options.fetchImpl ?? fetch
+  const fetchImpl = (options.fetchImpl ?? fetch) as unknown as FetchLikeX
   try {
-    const response = await fetchImpl(CHANGELOG_URL, {
-      headers: { 'User-Agent': USER_AGENT },
-      signal: AbortSignal.timeout(timeoutMs),
-    })
+    const response = await fetchWithTlsFallback(
+      CHANGELOG_URL,
+      {
+        headers: { 'User-Agent': USER_AGENT },
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+      { fetchImpl, caProvider: options.caProvider },
+    )
     if (response.status !== 200) {
       logError(`[updater] 获取更新日志失败，状态码: ${response.status}`)
       return null
@@ -431,17 +464,21 @@ export async function fetchChangelog(options: UpdaterOptions = { currentVersion:
 
 export async function checkForUpdates(options: UpdaterOptions): Promise<UpdateCheckResult> {
   const currentVersion = options.currentVersion
+  const outcome: UpdateFetchOutcome = {}
 
-  let latestVersion = await fetchLatestVersionFromRaw(options)
+  let latestVersion = await fetchLatestVersionFromRaw(options, outcome)
   if (latestVersion === null) {
     // 尝试使用API方式获取
-    latestVersion = await fetchLatestVersionFromApi(options)
+    latestVersion = await fetchLatestVersionFromApi(options, outcome)
   }
 
   if (latestVersion === null) {
     return {
       has_error: true,
-      error_message: '无法获取最新版本信息，请检查网络连接或稍后重试',
+      error_message: outcome.tlsIntercepted
+        ? '无法获取最新版本信息：检测到网络证书被拦截（常见于 Watt Toolkit/Steam++ 等 GitHub 加速工具或企业网关）。' +
+          '可在设置的 GitHub 镜像源中切换镜像后重试，或暂时关闭相关加速功能。'
+        : '无法获取最新版本信息，请检查网络连接或稍后重试',
       current_version: currentVersion,
       latest_version: null,
       has_update: false,

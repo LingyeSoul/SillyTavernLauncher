@@ -6,9 +6,10 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   COMMIT_HASH_RE,
+  GIT_SCHANNEL_FALLBACK_ARGS,
   TAG_NAME_RE,
   checkGitStatus,
   checkoutStTag,
@@ -16,8 +17,10 @@ import {
   cleanupGitState,
   getCurrentCommit,
   getStTags,
+  isGitSslFailure,
   runGit,
   switchGitRemote,
+  type GitExecutor,
 } from '../services/git'
 
 const GIT = { gitExecutable: 'git' } as const
@@ -83,6 +86,52 @@ describe('runGit（← run_git_command，数组参数、绝不 shell）', () => 
   it('cwd 不存在时返回失败而不抛出', async () => {
     const result = await runGit(['status'], join(repoDir, 'nope'), GIT)
     expect(result.ok).toBe(false)
+  })
+})
+
+describe('runGit SSL 回退（Windows 系统证书库 / schannel）', () => {
+  const SSL_STDERR =
+    "fatal: unable to access 'https://github.com/SillyTavern/SillyTavern.git/': " +
+    'SSL certificate problem: unable to get local issuer certificate'
+
+  it('isGitSslFailure：openssl 后端的证书信任链失败特征', () => {
+    expect(isGitSslFailure(SSL_STDERR)).toBe(true)
+    expect(isGitSslFailure('fatal: unable to access https://x/: server certificate verification failed. CAfile')).toBe(true)
+    expect(isGitSslFailure("fatal: unable to access 'https://x/': SSL certificate problem: self-signed certificate in certificate chain")).toBe(true)
+    expect(isGitSslFailure('error: pathspec did not match')).toBe(false)
+    expect(isGitSslFailure('')).toBe(false)
+  })
+
+  it('证书失败 → 追加 schannel 参数重试一次并返回重试结果', async () => {
+    const calls: string[][] = []
+    const executor: GitExecutor = async (cmd, _cwd) => {
+      calls.push(cmd)
+      if (cmd.includes('http.sslBackend=schannel')) {
+        return { exitCode: 0, stdout: 'refs', stderr: '', ok: true }
+      }
+      return { exitCode: 1, stdout: '', stderr: SSL_STDERR, ok: false }
+    }
+    const result = await runGit(['ls-remote', 'origin'], repoDir, { ...GIT, executor })
+    expect(result.ok).toBe(true)
+    expect(calls).toHaveLength(2)
+    // 回退参数必须夹在 git 与子命令之间（git -c k=v ls-remote）
+    expect(calls[1]?.slice(0, GIT_SCHANNEL_FALLBACK_ARGS.length + 1)).toEqual([
+      'git',
+      ...GIT_SCHANNEL_FALLBACK_ARGS,
+    ])
+    expect(calls[1]?.slice(GIT_SCHANNEL_FALLBACK_ARGS.length + 1)).toEqual(['ls-remote', 'origin'])
+  })
+
+  it('非证书失败不触发重试', async () => {
+    const executor: GitExecutor = vi.fn(async () => ({
+      exitCode: 128,
+      stdout: '',
+      stderr: "fatal: 'origin' does not appear to be a git repository",
+      ok: false,
+    }))
+    const result = await runGit(['fetch', 'origin'], repoDir, { ...GIT, executor })
+    expect(result.ok).toBe(false)
+    expect(executor).toHaveBeenCalledTimes(1)
   })
 })
 

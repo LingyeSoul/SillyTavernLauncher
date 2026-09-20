@@ -153,4 +153,40 @@ describe('设置页交互', () => {
 
     await app.screenshot({ path: join(SHOTS_DIR, 'settings-terminal-font.png') })
   }, 120_000)
+
+  // 智能滚动回归（2026-09-20）：环境 tab 在默认 644 窗口高下内容装得下，
+  // 修复前真实窗口滚轮仍可把 overflow:scroll 容器推出越界偏移（实测内容位移
+  // 34px 起且可把整窗绘制滚没）；SmartScrollArea 实测装得下时翻 'hidden'，
+  // 非滚动容器 → 滚轮必须无效（bounds 纹丝不动）
+  it('环境 tab 内容装得下：滚轮无效（无越界偏移）', async () => {
+    session = await launchE2E({ setupCompleted: true })
+    const app = session.app
+
+    await app.getByTestId('nav-settings').click()
+    await app.getByTestId('setting-start-cmd').waitFor({ timeoutMs: 10_000 })
+    // SmartScrollArea 测量在挂载后 ~16ms 轮询完成，留出翻 'hidden' 的时间
+    await sleep(600)
+
+    const before = await app.getByTestId('setting-start-cmd').bounds()
+    expect(before, 'setting-start-cmd 应有 bounds').not.toBeNull()
+    // 环境卡底部（before.y+height）应在窗口内：内容确实装得下（前提自检）
+    expect(before!.y + before!.height).toBeLessThan(644)
+
+    // 连续下压滚轮（内容区固定坐标），内容不得位移
+    for (let i = 0; i < 3; i++) {
+      await app.mouse.wheel({ x: 600, y: 400 }, 0, -400)
+      await sleep(150)
+    }
+    const after = await app.getByTestId('setting-start-cmd').bounds()
+    expect(after!.y, '装得下的内容被滚轮推移（智能滚动失效）').toBe(before!.y)
+
+    // 顶栏为固定区，同样不得受滚轮影响
+    const tabBefore = await app.getByTestId('settings-tab-env').bounds()
+    await app.mouse.wheel({ x: 600, y: 400 }, 0, -400)
+    await sleep(300)
+    const tabAfter = await app.getByTestId('settings-tab-env').bounds()
+    expect(tabAfter!.y, '固定头被滚轮推移（越界偏移破坏绘制）').toBe(tabBefore!.y)
+
+    await app.screenshot({ path: join(SHOTS_DIR, 'settings-smart-scroll.png') })
+  }, 120_000)
 })

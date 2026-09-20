@@ -1,6 +1,8 @@
 /**
- * 关于视图（设计 §4.6，单滚动型居中布局）：logo + 版本芯片（D5 规范化）+
+ * 关于视图（设计 §4.6，居中固定布局）：logo + 版本芯片（D5 规范化）+
  * 5 链接按钮（检查更新 = 唯一 primary）。打开链接 = cmd /c start（platform.openUrl）。
+ * 无 workspace-heading；DEVIATION: §4.6 原单滚动型，2026-09-20 去滚动容器
+ * （内容短小整体自管，用户要求，O11 回写）；AppShell 亦不包外层滚动容器。
  */
 import { useState } from 'react'
 import type { ReactElement } from 'react'
@@ -11,6 +13,7 @@ import { uiStateActions } from '../../stores/uiState'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
 import { Chip } from '../components/Chip'
+import { FieldHint } from '../components/FieldHint'
 import { LOGO_DATA_URL } from '../assets/logo'
 
 const TEXTS = {
@@ -22,7 +25,6 @@ const TEXTS = {
   bilibili: '访问作者 B 站',
   donate: '打赏作者',
   checkUpdate: '检查更新',
-  platformLine: 'Windows · GPUIX',
   checking: '检查中...',
 } as const
 
@@ -104,11 +106,9 @@ export function AboutView() {
         <text style={{ fontSize: t.fs.h2, fontWeight: 600, color: t.text.primary, fontFamily: t.font.sans }}>
           SillyTavernLauncher
         </text>
-        {/* D5 规范化版本芯片（Chip 收口） */}
-        <Chip>{`v${normalizeVersion(APP_VERSION)}`}</Chip>
-        <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
-          {TEXTS.author}
-        </text>
+        {/* D5 规范化版本芯片（Chip 收口；居中列覆盖默认 flex-start 对齐） */}
+        <Chip alignSelf="center">{`v${normalizeVersion(APP_VERSION)}`}</Chip>
+        <FieldHint>{TEXTS.author}</FieldHint>
 
         <div style={{ height: 24 }} />
 
@@ -127,11 +127,6 @@ export function AboutView() {
             {checking ? TEXTS.checking : TEXTS.checkUpdate}
           </Button>
         </div>
-
-        <div style={{ height: 24 }} />
-        <text style={{ fontSize: t.fs.micro, color: t.text.muted, fontFamily: t.font.sans }}>
-          {TEXTS.platformLine}
-        </text>
       </div>
     </div>
   )

@@ -1,7 +1,10 @@
 /**
- * AppShell（设计 §3）：侧栏 168px（DEVIATION: 原设计 192，用户要求改窄；bg-deep + 右 1px border-subtle）+ 主区三种形态
- * （终端自管滚动 / 设置页自管滚动：标题+tab 栏固定、仅 tab 内容区滚动 / 其余单滚动
- * 容器；全应用任何时刻只有一个垂直滚动容器，铁律——自管视图的外层不得再包 overflow:scroll）。
+ * AppShell（设计 §3）：侧栏 168px（DEVIATION: 原设计 192，用户要求改窄；bg-deep + 右 1px border-subtle）+ 主区两种形态
+ * （终端自管滚动 / 其余视图自管滚动：2026-09-20 起全部非终端视图统一为"标题区固定、
+ * 仅内容区滚动"——DEVIATION: §3.A/§4.2-4.4 原单滚动型 heading 随内容滚动，经
+ * O11 回写；版本/同步/扩展/设置四视图共用 PageScaffold（设置页 tab 经 scrollKey
+ * 重挂），关于页居中布局整体自管；全应用任何时刻只有一个垂直滚动容器，铁律——自管
+ * 视图的外层不得再包 overflow:scroll）。
  * - footer：ST 状态芯片（运行中呼吸微光 = 全应用唯一无限动画实例 M7）+ 主题切换
  *   + 退出启动器入口（DEVIATION: GPUIX 无 onClose 拦截，窗口 X 直接退出为已知行为，
  *     退出保护收敛到主界面的显式入口走 exitConfirm）。
@@ -83,36 +86,17 @@ export function AppShell() {
         }}>
         {view === 'terminal' ? (
           <TerminalView />
-        ) : view === 'settings' ? (
-          // 设置页自管滚动（标题+tab 栏固定、仅 tab 内容滚动）：外层不包滚动容器
-          // （嵌套滚动禁止），M1 入场动画保留
+        ) : (
+          // 非终端视图统一自管滚动（固定头 + 内容区 SmartScrollArea，实测超高才
+          // 开滚动；外层不包滚动容器，嵌套滚动禁止），M1 入场动画保留
           <motion.div
             key={view}
             initial={{ opacity: 0, top: 6 }}
             animate={{ opacity: 1, top: 0 }}
             transition={{ duration: dur.enter, ease: EASE_OUT_QUAD }}
             style={{ position: 'relative', flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <SettingsView />
+            <CurrentView />
           </motion.div>
-        ) : (
-          <div
-            style={{
-              flexGrow: 1,
-              minHeight: 0,
-              overflow: 'scroll',
-              display: 'flex',
-              flexDirection: 'column',
-            }}>
-            {/* M1 视图切换入场：240ms power2.out，位移 6px（top 等效 translateY） */}
-            <motion.div
-              key={view}
-              initial={{ opacity: 0, top: 6 }}
-              animate={{ opacity: 1, top: 0 }}
-              transition={{ duration: dur.enter, ease: EASE_OUT_QUAD }}
-              style={{ position: 'relative', display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
-              <CurrentView />
-            </motion.div>
-          </div>
         )}
       </div>
       {/* Toast 层嵌在外壳内（根层级的 anchored 浮层会把基础树挤成 8px，GPUIX 0.9.0 实测） */}

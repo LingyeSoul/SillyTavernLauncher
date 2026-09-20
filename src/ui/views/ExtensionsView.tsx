@@ -1,5 +1,7 @@
 /**
- * 扩展视图（设计 §4.4，单滚动型）：全局/用户双列表 + 安装/删除/移动。
+ * 扩展视图（设计 §4.4，固定头型 PageScaffold，2026-09-20 对齐设置页）：
+ * DEVIATION: §4.4 原单滚动型（heading 随内容滚动），现推广固定头并 SmartScroll
+ * 化（O11 回写）。workspace-heading + 安装按钮组固定不随内容滚动，全局/用户双列表滚动。
  * 扩展卡图标：无图标资源时回退 28px bg-elevated + 首字母（manifest 无图标字段的常态）。
  * 安装/删除/移动全部经对话框确认（dialogs/gitInstall、zipInstall、deleteExtension）。
  */
@@ -15,7 +17,9 @@ import { layout } from '../../theme'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
 import { EmptyState } from '../components/EmptyState'
+import { FieldHint } from '../components/FieldHint'
 import { PageHeader } from '../components/PageHeader'
+import { PageScaffold } from '../components/PageScaffold'
 import { SectionTitle } from '../components/Card'
 import { Tooltip } from '../components/Tooltip'
 
@@ -63,37 +67,29 @@ export function ExtensionsView() {
   }, [refresh, extensionsVersion])
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        paddingTop: layout.padFormY,
-        paddingBottom: layout.padFormY,
-        paddingLeft: layout.padFormX,
-        paddingRight: layout.padFormX,
-      }}>
-      {/* workspace-heading（PageHeader 收口）+ 安装按钮 */}
-      <PageHeader
-        title={TEXTS.title}
-        subtitle={TEXTS.subtitle}
-        actions={
-          <div style={{ display: 'flex', flexDirection: 'row', gap: 8 }}>
-            <Button variant="primary" icon="box" onClick={() => uiStateActions.openDialog({ kind: 'gitInstall' })} testId="ext-git-install">
-              {TEXTS.gitInstall}
-            </Button>
-            <Button variant="default" icon="archive" onClick={() => uiStateActions.openDialog({ kind: 'zipInstall' })} testId="ext-zip-install">
-              {TEXTS.zipInstall}
-            </Button>
-          </div>
-        }
-      />
+    <PageScaffold
+      contentKey={`${globalExts.length}-${userExts.length}`}
+      header={
+        <PageHeader
+          title={TEXTS.title}
+          subtitle={TEXTS.subtitle}
+          actions={
+            <div style={{ display: 'flex', flexDirection: 'row', gap: 8 }}>
+              <Button variant="primary" icon="box" onClick={() => uiStateActions.openDialog({ kind: 'gitInstall' })} testId="ext-git-install">
+                {TEXTS.gitInstall}
+              </Button>
+              <Button variant="default" icon="archive" onClick={() => uiStateActions.openDialog({ kind: 'zipInstall' })} testId="ext-zip-install">
+                {TEXTS.zipInstall}
+              </Button>
+            </div>
+          }
+        />
+      }>
 
       {/* 全局扩展（列表型 section 不包 Card：行自身即卡片，同 SyncView 发现列表先例） */}
       <div style={{ marginBottom: layout.padFormY }}>
         <SectionTitle title={TEXTS.globalSection} count={globalExts.length} />
-        <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 8 }}>
-          {TEXTS.globalPathHint}
-        </text>
+        <FieldHint style={{ marginBottom: t.space.fieldGap }}>{TEXTS.globalPathHint}</FieldHint>
         {globalExts.length === 0 ? (
           <EmptyState icon="puzzle" title={TEXTS.emptyGlobal} hint={TEXTS.emptyHint} />
         ) : (
@@ -104,16 +100,14 @@ export function ExtensionsView() {
       {/* 用户扩展 */}
       <div>
         <SectionTitle title={TEXTS.userSection} count={userExts.length} />
-        <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 8 }}>
-          {TEXTS.userPathHint}
-        </text>
+        <FieldHint style={{ marginBottom: t.space.fieldGap }}>{TEXTS.userPathHint}</FieldHint>
         {userExts.length === 0 ? (
           <EmptyState icon="puzzle" title={TEXTS.emptyUser} hint={TEXTS.emptyHint} />
         ) : (
           userExts.map((ext) => <ExtensionCard key={ext.path} ext={ext} onChanged={refresh} />)
         )}
       </div>
-    </div>
+    </PageScaffold>
   )
 }
 

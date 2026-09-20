@@ -1,5 +1,8 @@
 /**
- * 版本视图（设计 §4.2，单滚动型）：版本卡片列表 + 切换确认 + 刷新。
+ * 版本视图（设计 §4.2，固定头型 PageScaffold，2026-09-20 对齐设置页）：
+ * DEVIATION: §4.2 原单滚动型（heading 随内容滚动），现推广固定头并 SmartScroll
+ * 化（O11 回写）。workspace-heading（标题/当前版本/列表提示/刷新按钮）固定不随
+ * 内容滚动，仅版本卡片列表区滚动。
  * - 当前版本卡：glow.ember 底 + 左 2px ember 条 + [当前] 芯片。
  * - 刷新中显示 5 张骨架卡（§5.9，D3：禁 spinner 顶替）。
  * - 版本数据来自 services/git.getStTags（视图经 hook 消费服务，不绕过）。
@@ -11,12 +14,13 @@ import type { GitTag } from '../../services/types'
 import { getStLifecycle, useStState } from '../../stores/stState'
 import { useTerminalLogs } from '../../stores/terminalLogs'
 import { uiStateActions } from '../../stores/uiState'
-import { layout } from '../../theme'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
 import { Chip } from '../components/Chip'
 import { IconButton } from '../components/IconButton'
 import { PageHeader } from '../components/PageHeader'
+import { PageScaffold } from '../components/PageScaffold'
+import { FieldHint } from '../components/FieldHint'
 import { EmptyState } from '../components/EmptyState'
 import { SkeletonCards } from '../components/Skeleton'
 import { Tooltip } from '../components/Tooltip'
@@ -88,43 +92,38 @@ export function VersionView() {
     : TEXTS.subtitleNone
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        paddingTop: layout.padFormY,
-        paddingBottom: layout.padFormY,
-        paddingLeft: layout.padFormX,
-        paddingRight: layout.padFormX,
-      }}>
-      {/* workspace-heading（PageHeader 收口） */}
-      <PageHeader
-        title={TEXTS.title}
-        subtitle={subtitle}
-        subtitleMono
-        actions={
-          <Tooltip label={TEXTS.refreshTip}>
-            <IconButton
-              icon="refresh"
-              iconSize={19}
-              size={32}
-              label={TEXTS.refreshTip}
-              disabled={loading}
-              onClick={() => void loadVersions()}
-              testId="version-refresh"
-            />
-          </Tooltip>
-        }
-      />
-
+    <PageScaffold
+      contentKey={`${loading}-${versions?.length ?? 0}-${error ?? ''}`}
+      header={
+        <>
+          <PageHeader
+            title={TEXTS.title}
+            subtitle={subtitle}
+            subtitleMono
+            actions={
+              <Tooltip label={TEXTS.refreshTip}>
+                <IconButton
+                  icon="refresh"
+                  iconSize={19}
+                  size={32}
+                  label={TEXTS.refreshTip}
+                  disabled={loading}
+                  onClick={() => void loadVersions()}
+                  testId="version-refresh"
+                />
+              </Tooltip>
+            }
+          />
+          {/* 列表提示（升级引导）：常驻固定区，不随列表滚走；与分隔线的间距统一
+              sectionGap token（SyncView 安全警示同款，勿写裸值） */}
+          <FieldHint style={{ marginBottom: t.space.sectionGap }}>{TEXTS.listHint}</FieldHint>
+        </>
+      }>
       {error && (
         <text style={{ fontSize: t.fs.field, color: t.status.error, fontFamily: t.font.sans, marginBottom: 8 }}>
           {`${TEXTS.loadFailed}: ${error}`}
         </text>
       )}
-      <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 8 }}>
-        {TEXTS.listHint}
-      </text>
 
       {loading && <SkeletonCards count={5} />}
 
@@ -149,7 +148,7 @@ export function VersionView() {
             current={(currentVersion?.version ?? '').replace(/^v/, '') === entry.version}
           />
         ))}
-    </div>
+    </PageScaffold>
   )
 }
 
