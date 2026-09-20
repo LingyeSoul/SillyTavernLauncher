@@ -20,10 +20,12 @@
  * - 版本三处同步：version.ts ↔ package.json（此处校验）→ 文件名 + PE 元数据
  * - --windows-hide-console：GUI 子系统，双击不弹黑窗（exe 内 console.log
  *   仍写入 logs/，诊断不受影响）
- * - 冒烟验证：临时目录冷启动 exe，要求进程存活 ≥5s 且产生引导副作用
- *   （config.json / agreement_cache.json / logs/ 任一）；STL_SKIP_AGREEMENT_RECHECK=1
- *   对齐 E2E 种子环境，不打远端。冒烟会在本机短暂弹出启动器窗口后强杀，
- *   与 E2E 行为一致
+ * - 冒烟验证：临时目录冷启动 exe，判定信号 = 进程存活 ≥5s 且主窗口已创建
+ *   （GetTopWindow/GetWindow 链 标题+PID 双匹配，复用 services/windowIcon 枚举）。
+ *   不依赖磁盘副作用与网络——旧版等 config/agreement/logs 落盘，而冷启动唯一
+ *   可靠落盘是 EULA 远端抓取缓存，网络抖动即误报（RCA 2026-09-20）。
+ *   STL_SKIP_AGREEMENT_RECHECK=1 对齐 E2E 种子环境（首启 EULA 仍会后台抓
+ *   远端协议，但不参与判定）。冒烟会在本机短暂弹出启动器窗口后强杀，与 E2E 一致
  *
  * DEVIATION: 子进程不经 services/runtime.ts——那是应用运行时纪律；本脚本与
  *   scripts/verify-*.ts 同构，直接 Bun.spawnSync + 数组参数（仍禁 shell 拼接）。
@@ -31,11 +33,11 @@
  *   应用运行时产物，打包脚本不得污染安装根目录）。
  */
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { APP_VERSION } from '../version'
-import { decodePngRgba, resizeRgba, encodePngRgba, ICON_SIZES } from '../services/windowIcon'
+import { decodePngRgba, resizeRgba, encodePngRgba, ICON_SIZES, findWindowByTitleAndPid } from '../services/windowIcon'
 
 /** 项目根 = src/ 的上一级（启动器安装根，config/logs/env 均相对它） */
 const SRC_ROOT = join(import.meta.dir, '..')
@@ -43,6 +45,8 @@ const DIST_DIR = join(SRC_ROOT, '..', 'dist')
 const LOGO_PNG = join(SRC_ROOT, 'assets', 'logo.png')
 const SKIP_TESTS = process.argv.includes('--skip-tests')
 const SKIP_SMOKE = process.argv.includes('--skip-smoke')
+/** 冒烟探测的窗口标题（与 app.tsx WINDOW_OPTIONS.title / --windows-title 同值） */
+const SMOKE_WINDOW_TITLE = 'SillyTavernLauncher'
 
 /** 阶段门：失败即终止打包（闭环红线——不打包过不了门禁的代码） */
 function gate(name: string, run: () => number | boolean): void {
@@ -218,7 +222,7 @@ async function main(): Promise<void> {
   console.log(`\n✔ onefile 打包完成：dist/${exeName}`)
 }
 
-/** 冒烟：临时目录冷启动，要求存活 ≥5s 且产生引导副作用，finally 强杀 */
+/** 冒烟：临时目录冷启动，要求存活 ≥5s 且主窗口已创建（标题+PID 双匹配），finally 强杀 */
 async function runSmoke(exePath: string): Promise<VerifyResult> {
   const smokeDir = join(tmpdir(), `stl-onefile-smoke-${Date.now()}`)
   mkdirSync(smokeDir, { recursive: true })
@@ -229,10 +233,6 @@ async function runSmoke(exePath: string): Promise<VerifyResult> {
     env: { ...process.env, STL_SKIP_AGREEMENT_RECHECK: '1' },
   })
   try {
-    const bootArtifact = () =>
-      existsSync(join(smokeDir, 'config.json')) ||
-      existsSync(join(smokeDir, 'agreement_cache.json')) ||
-      existsSync(join(smokeDir, 'logs'))
     const deadline = Date.now() + 15_000
     let aliveMs = 0
     while (Date.now() < deadline) {
@@ -241,11 +241,20 @@ async function runSmoke(exePath: string): Promise<VerifyResult> {
       }
       await Bun.sleep(500)
       aliveMs += 500
-      if (aliveMs >= 5_000 && bootArtifact()) {
-        return { ok: true, message: `冒烟通过：存活 ${aliveMs}ms + 引导副作用已产生` }
+      let hwnd = 0
+      try {
+        hwnd = await findWindowByTitleAndPid(SMOKE_WINDOW_TITLE, proc.pid)
+      } catch (err) {
+        return { ok: false, message: `冒烟异常：窗口探测失败（${err instanceof Error ? err.message : String(err)}）` }
+      }
+      if (aliveMs >= 5_000 && hwnd !== 0) {
+        return { ok: true, message: `冒烟通过：存活 ${aliveMs}ms + 主窗口已创建（pid=${proc.pid}）` }
       }
     }
-    return { ok: false, message: '冒烟超时：进程存活但 15s 内未见引导副作用（config/agreement/logs）' }
+    return {
+      ok: false,
+      message: `冒烟超时：进程存活但 15s 内未检测到主窗口（标题+PID 双匹配，pid=${proc.pid}）`,
+    }
   } finally {
     proc.kill()
     await proc.exited

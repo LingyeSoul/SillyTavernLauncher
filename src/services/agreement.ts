@@ -9,10 +9,24 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { atomicWriteFileSync } from './atomicFs'
-import { htmlToMarkdown } from './updater'
+import { htmlToMarkdown, type FetchLike } from './updater'
 
 export const AGREEMENT_URL = 'https://sillytavern.lingyesoul.top/agreement'
 export const AGREEMENT_CACHE_FILE = 'agreement_cache.json'
+
+/** 网络容错：失败自动重试次数与退避基数（1s→2s→4s 指数退避，总尝试 1+3 次） */
+const AGREEMENT_RETRIES = 3
+const AGREEMENT_RETRY_BASE_DELAY_MS = 1_000
+
+export interface FetchAgreementOptions {
+  fetchImpl?: FetchLike
+  /** 失败后的自动重试次数，默认 3 */
+  retries?: number
+  /** 重试退避基数（毫秒），默认 1000；测试传 0 跳过等待 */
+  baseDelayMs?: number
+  /** 缓存写入目录，默认 process.cwd()（测试注入临时目录避免污染仓库） */
+  cacheDir?: string
+}
 
 export interface AgreementDocument {
   date: string
@@ -69,12 +83,12 @@ export function resolveAgreementVersion(html: string, parsed: AgreementDocument)
   return parsed.date || fetchDate(html) || contentFingerprint(parsed.content)
 }
 
-/**
- * 抓取并解析远端协议文档；失败抛错（由调用方决定降级行为）。
- * 成功时同步刷新本地缓存（date 与缓存版本存同一值，避免两处取值不一致重弹）。
- */
-export async function fetchAgreementDocument(): Promise<AgreementDocument | null> {
-  const response = await fetch(AGREEMENT_URL, {
+/** 单次抓取 + 解析 + 缓存（重试的最小单元） */
+async function fetchAgreementOnce(
+  fetchImpl: FetchLike,
+  cacheDir: string,
+): Promise<AgreementDocument> {
+  const response = await fetchImpl(AGREEMENT_URL, {
     headers: { 'User-Agent': 'SillyTavernLauncher/2.0' },
     signal: AbortSignal.timeout(10_000),
   })
@@ -85,11 +99,42 @@ export async function fetchAgreementDocument(): Promise<AgreementDocument | null
   const date = resolveAgreementVersion(html, parsed)
   try {
     atomicWriteFileSync(
-      join(process.cwd(), AGREEMENT_CACHE_FILE),
+      join(cacheDir, AGREEMENT_CACHE_FILE),
       JSON.stringify({ date, content: parsed.content }),
     )
   } catch (err) {
     console.error(`[agreement] 缓存协议失败: ${err instanceof Error ? err.message : String(err)}`)
   }
   return { date, content: parsed.content }
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * 抓取并解析远端协议文档；失败自动重试（默认 3 次，指数退避），重试耗尽抛出
+ * 最后一次错误（由调用方决定降级行为）。网络异常 / 非 200 / 解析失败均触发重试
+ * ——网关错误页与截断响应同样表现为后两者。
+ * 成功时同步刷新本地缓存（date 与缓存版本存同一值，避免两处取值不一致重弹）。
+ */
+export async function fetchAgreementDocument(
+  options: FetchAgreementOptions = {},
+): Promise<AgreementDocument | null> {
+  const fetchImpl = options.fetchImpl ?? fetch
+  const retries = options.retries ?? AGREEMENT_RETRIES
+  const baseDelayMs = options.baseDelayMs ?? AGREEMENT_RETRY_BASE_DELAY_MS
+  const cacheDir = options.cacheDir ?? process.cwd()
+
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetchAgreementOnce(fetchImpl, cacheDir)
+    } catch (err) {
+      if (attempt >= retries) throw err
+      const delayMs = baseDelayMs * 2 ** attempt
+      console.warn(
+        `[agreement] 获取协议失败（第 ${attempt + 1}/${retries + 1} 次尝试）：` +
+          `${err instanceof Error ? err.message : String(err)}，${delayMs}ms 后自动重试`,
+      )
+      await sleep(delayMs)
+    }
+  }
 }
