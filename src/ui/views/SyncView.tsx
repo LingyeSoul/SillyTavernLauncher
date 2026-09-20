@@ -4,16 +4,20 @@
  * DEVIATION: 设计文档 §4.3 的"mini 日志卡 overflow scroll"与 GPUIX 嵌套滚动铁律冲突
  *   （本视图自身已在唯一滚动容器内），改为固定高度 120 + 50 行环形缓冲 + 截尾显示
  *   （overflow hidden，最新行始终可见）。铁律优先。
- * DEVIATION: Flet 版首启同步服务器的 30s 倒计时警告对话框未迁移（设计文档 §4.7
- *   对话框总表 12 项中不包含它）；安全提示以视图内红字警示承担（文案照搬）。
+ * DEVIATION: Flet 版首启同步服务器的 30s 倒计时警告对话框已于 2026-09-20 迁移
+ *   （ui/dialogs/SyncFirstRunDialog，经 uiState 对话框栈挂载）；视图内安全警示
+ *   文案保留作为常驻补偿（旧版行为）。
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { DiscoveredServer } from '../../services/sync/manager'
 import type { SyncLogLevel } from '../../services/sync/server'
+import { getConfigStore } from '../../services/configStore'
 import { getSyncManager, useSyncState, type SyncLogEntry } from '../../stores/syncState'
+import { useUiState } from '../../stores/uiState'
 import { getLocalIp } from '../../services/network'
 import { layout } from '../../theme'
 import { useTheme } from '../theme'
+import { shouldShowFirstRunDialog } from '../dialogs/SyncFirstRunDialog'
 import { Button } from '../components/Button'
 import { Card, SectionTitle } from '../components/Card'
 import { Chip } from '../components/Chip'
@@ -128,28 +132,53 @@ export function SyncView() {
     }
   }, [refreshStatus, syncLog])
 
-  const toggleServer = (on: boolean): void => {
+  // ← toggle_server 的启动分支（首启警告对话框确认后也走这里）
+  const startServer = (): void => {
     const m = getSyncManager()
     setServerToggling(true)
     void (async () => {
       try {
-        if (on) {
-          const portNum = /^\d+$/.test(port) ? Number(port) : 9999
-          const ok = await m.startSyncServer({ port: portNum, host: host.trim() || undefined })
-          if (!ok) syncLog('启动同步服务失败', 'error')
-          // manager 可能把陈旧监听地址回退为当前局域网 IP（config 自愈），输入框同步刷新
-          else setHost(m.serverHost)
-        } else {
-          const ok = await m.stopSyncServer()
-          if (!ok) syncLog('停止同步服务失败', 'error')
-        }
+        const portNum = /^\d+$/.test(port) ? Number(port) : 9999
+        const ok = await m.startSyncServer({ port: portNum, host: host.trim() || undefined })
+        if (!ok) syncLog('启动同步服务失败', 'error')
+        // manager 可能把陈旧监听地址回退为当前局域网 IP（config 自愈），输入框同步刷新
+        else setHost(m.serverHost)
       } catch (err) {
-        syncLog(`切换服务器状态时出错: ${err instanceof Error ? err.message : String(err)}`, 'error')
+        syncLog(`启动同步服务时出错: ${err instanceof Error ? err.message : String(err)}`, 'error')
       } finally {
         setServerToggling(false)
         refreshStatus()
       }
     })()
+  }
+
+  // ← toggle_server 的停止分支
+  const stopServer = (): void => {
+    const m = getSyncManager()
+    setServerToggling(true)
+    void (async () => {
+      try {
+        const ok = await m.stopSyncServer()
+        if (!ok) syncLog('停止同步服务失败', 'error')
+      } catch (err) {
+        syncLog(`停止同步服务时出错: ${err instanceof Error ? err.message : String(err)}`, 'error')
+      } finally {
+        setServerToggling(false)
+        refreshStatus()
+      }
+    })()
+  }
+
+  // ← _on_server_toggle：开启且未展示过首启警告 → 推入 30s 倒计时对话框，
+  // 用户确认关闭后才真正启动服务器（onConfirm=startServer，模态期间
+  // port/host 不可编辑，闭包捕获值与确认时一致）；关闭/已提示过路径行为不变
+  const toggleServer = (on: boolean): void => {
+    if (on && shouldShowFirstRunDialog(getConfigStore())) {
+      useUiState.getState().openDialog({ kind: 'syncFirstRun', onConfirm: startServer })
+      return
+    }
+    if (on) startServer()
+    else stopServer()
   }
 
   const scanServers = (): void => {

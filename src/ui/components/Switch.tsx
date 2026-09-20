@@ -73,3 +73,57 @@ export function Switch({ on, onChange, label, disabled = false, testId }: Switch
     </div>
   )
 }
+
+export interface SwitchRowProps {
+  label: string
+  /** 可选描述行；警示描述（descWarning）转 warning 色 */
+  desc?: string
+  descWarning?: boolean
+  on: boolean
+  onChange: (v: boolean) => void
+  testId?: string
+  /** 紧凑档：对话框内 34/44；默认常规档：设置页 40/48 */
+  compact?: boolean
+}
+
+/** 开关行：标签（可选描述）左 + Switch 右。SettingsView.switchRow 与
+ *  WhitelistDialogs.renderSwitchRow 的共享形状（同款排版去重，两处历史
+ *  行高差以 compact 档位区分，不让裸数字穿越组件边界）。 */
+export function SwitchRow({
+  label,
+  desc,
+  descWarning = false,
+  on,
+  onChange,
+  testId,
+  compact = false,
+}: SwitchRowProps) {
+  const t = useTheme()
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'row',
+        alignItems: 'center',
+        minHeight: desc ? (compact ? 44 : 48) : compact ? 34 : 40,
+        gap: 12,
+      }}>
+      <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0, gap: 2 }}>
+        <text style={{ fontSize: 13, fontWeight: 500, color: t.text.primary, fontFamily: t.font.sans }}>
+          {label}
+        </text>
+        {desc && (
+          <text
+            style={{
+              fontSize: t.fs.caption,
+              color: descWarning ? t.status.warning : t.text.muted,
+              fontFamily: t.font.sans,
+            }}>
+            {desc}
+          </text>
+        )}
+      </div>
+      <Switch on={on} onChange={onChange} testId={testId} />
+    </div>
+  )
+}

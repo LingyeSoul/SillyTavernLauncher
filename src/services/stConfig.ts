@@ -399,8 +399,9 @@ export class StConfig {
     return this.save() ? 'healed' : 'save-failed'
   }
 
-  /** ← sync_whitelists：unified 模式下 IP/Host 白名单双向同步 */
-  syncWhitelists(source: 'ip' | 'host' = 'ip'): void {
+  /** ← sync_whitelists：unified 模式下 IP/Host 白名单双向同步；返回落盘结果
+   *  （save 契约：保存失败必须可被调用方感知，unified 路径不做结果黑洞） */
+  syncWhitelists(source: 'ip' | 'host' = 'ip'): boolean {
     if (source === 'ip') {
       const newHosts: string[] = []
       if (this.hostWhitelistHosts.includes('localhost')) {
@@ -427,7 +428,7 @@ export class StConfig {
       }
       this.whitelistIps = newIps
     }
-    this.save()
+    return this.save()
   }
 
   /** 当前托管字段的纯数据视图 */
