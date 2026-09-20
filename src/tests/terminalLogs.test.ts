@@ -7,7 +7,7 @@
  *   （旧版无覆盖，本次补上）与 classifyLogLevel。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createTerminalEngine, type EngineRow } from '../services/terminalEngine'
+import { computeCols, createTerminalEngine, MIN_COLS, type EngineRow } from '../services/terminalEngine'
 import {
   __resetTerminalLogsForTests,
   classifyLogLevel,
@@ -109,6 +109,47 @@ describe('terminalEngine（← parse_ansi_text 迁移 + 扩充）', () => {
     expect(rows[1]?.text).toHaveLength(500)
   })
 
+  it('setCols 收窄后新行按新列数折行，既有行不重排', async () => {
+    const batches: EngineRow[][] = []
+    const engine = createTerminalEngine((rows) => batches.push(rows))
+    engine.writeLine('a'.repeat(50))
+    await vi.waitFor(() => {
+      expect(batches.flat().length).toBe(1)
+    })
+    engine.setCols(20)
+    engine.writeLine('b'.repeat(50))
+    await vi.waitFor(() => {
+      expect(batches.flat().length).toBe(4)
+    })
+    const rows = batches.flat()
+    expect(rows[0]?.text).toHaveLength(50)
+    expect(rows.slice(1).map((r) => r.text)).toEqual(['b'.repeat(20), 'b'.repeat(20), 'b'.repeat(10)])
+  })
+
+  it('setCols 放宽后新行按更宽折行', async () => {
+    const batches: EngineRow[][] = []
+    const engine = createTerminalEngine((rows) => batches.push(rows))
+    engine.setCols(80)
+    engine.writeLine('c'.repeat(150))
+    await vi.waitFor(() => {
+      expect(batches.flat().length).toBe(2)
+    })
+    const rows = batches.flat()
+    expect(rows[0]?.text).toHaveLength(80)
+    expect(rows[1]?.text).toHaveLength(70)
+  })
+
+  it('setCols 低于下限按 MIN_COLS 钳制', async () => {
+    const batches: EngineRow[][] = []
+    const engine = createTerminalEngine((rows) => batches.push(rows))
+    engine.setCols(5)
+    engine.writeLine('d'.repeat(45))
+    await vi.waitFor(() => {
+      expect(batches.flat().length).toBe(3)
+    })
+    expect(batches.flat().map((r) => r.text)).toEqual(['d'.repeat(20), 'd'.repeat(20), 'd'.repeat(5)])
+  })
+
   it('多行写入保序 + tag 透传', async () => {
     const rows = await runEngine(
       [
@@ -158,6 +199,19 @@ describe('terminalLogs store（引擎接线）', () => {
     expect(useTerminalLogs.getState().lines[0]?.text).toBe('after')
   })
 
+  it('setCols 透传引擎：收窄后 append 的长行按新列数入库', async () => {
+    useTerminalLogs.getState().setCols(20)
+    useTerminalLogs.getState().appendLine('e'.repeat(50))
+    await vi.waitFor(() => {
+      expect(useTerminalLogs.getState().lines).toHaveLength(3)
+    })
+    expect(useTerminalLogs.getState().lines.map((l) => l.text)).toEqual([
+      'e'.repeat(20),
+      'e'.repeat(20),
+      'e'.repeat(10),
+    ])
+  })
+
   it('flood 限流：超 60 行/秒进入 flood 模式并禁用新行动画', async () => {
     for (let i = 0; i < 130; i++) {
       useTerminalLogs.getState().appendLine(`line-${i}`)
@@ -172,6 +226,35 @@ describe('terminalLogs store（引擎接线）', () => {
     const last = useTerminalLogs.getState().lines[129]
     expect(last?.animate).toBe(false)
     expect(last?.text).toBe('line-129')
+  })
+})
+
+describe('computeCols（视口像素宽 → 折行列数）', () => {
+  // 默认布局：800 窗宽 − 168 侧栏 − 1 分隔线 − 2×12 主区 padding − 2×1 卡片边框 − 2×8 列表 padding = 589px
+  const DEFAULT_PX = 589
+
+  it('默认布局 12px Consolas → 88 列', () => {
+    expect(computeCols(DEFAULT_PX, 12, 'Consolas')).toBe(88)
+  })
+
+  it('字体族大小写不敏感，且取逗号列表首项', () => {
+    expect(computeCols(DEFAULT_PX, 12, 'consolas')).toBe(88)
+    expect(computeCols(DEFAULT_PX, 12, 'Cascadia Mono, Consolas')).toBe(computeCols(DEFAULT_PX, 12, 'cascadia mono'))
+  })
+
+  it('未收录字体按 0.6em 保守回退（宁可早折行也不溢出）', () => {
+    expect(computeCols(DEFAULT_PX, 12, 'Some Unknown Mono')).toBe(81)
+  })
+
+  it('字号增大列数减少', () => {
+    expect(computeCols(DEFAULT_PX, 24, 'Consolas')).toBe(44)
+  })
+
+  it('极端窄窗/非法输入钳制到 MIN_COLS', () => {
+    expect(computeCols(30, 12, 'Consolas')).toBe(MIN_COLS)
+    expect(computeCols(0, 12, 'Consolas')).toBe(MIN_COLS)
+    expect(computeCols(NaN, 12, 'Consolas')).toBe(MIN_COLS)
+    expect(computeCols(DEFAULT_PX, 0, 'Consolas')).toBe(MIN_COLS)
   })
 })
 

@@ -53,6 +53,8 @@ interface TerminalLogsState {
   floodMode: boolean
   appendLine: (text: string, stream?: 'stdout' | 'stderr') => void
   appendBatch: (items: Array<{ text: string; stream?: 'stdout' | 'stderr' }>) => void
+  /** 视口折行列数校准（窗口宽/字号/字体变化；透传引擎 setCols） */
+  setCols: (cols: number) => void
   clear: () => void
 }
 
@@ -111,6 +113,10 @@ export const useTerminalLogs = create<TerminalLogsState>(() => ({
 
   appendLine: (text, stream = 'stdout') => {
     engine.writeLine(text, stream)
+  },
+
+  setCols: (cols) => {
+    engine.setCols(cols)
   },
 
   clear: () => {
