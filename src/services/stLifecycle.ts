@@ -12,6 +12,11 @@
  * - Phase 3（设计计划 §7）：embedded 模式依赖安装路由 bun install
  *   （--production --registry=npmmirror，重试链 cache clean → install --force），
  *   安装前幂等消解 bun.lock（.git/info/exclude）；portable/system 命令串不变（D3）。
+ * - 2026-09-21 真机竞态修复（安装中点启动 → 半成品 node_modules 缺包秒崩）：
+ *   ① 安装进程挂 kind='st-install' 且安装期间落「未完成」标记（env.markDepsPending），
+ *      startSt/restartSt 互斥拒绝；② 安装退出码非 0 不再按「依赖安装完成」放行；
+ *   ③ 启动成功以探针窗口判定——START_PROBE_MS 内进程秒退 = 启动失败（退出码进日志），
+ *      不再 spawn 即成即报「✓ 启动成功」；存活过窗口的晚退另给归因日志。
  * - git pull --rebase --autostash；package-lock 冲突恢复 ≤2 重试；
  *   _with_callback 变体追加 npm cache clean --force + node_modules 重装重试 ≤2。
  * - 启动命令 "<node>" server.js [--max-old-space-size=4096] [校验过的自定义参数]，
@@ -47,7 +52,14 @@ import {
   validateCustomArgs,
   type ExecuteProcessOptions,
 } from './processManager'
-import { checkNodeModules, checkStInstalled, resolvePortableEnv, type PortableEnvPaths } from './env'
+import {
+  checkNodeModules,
+  checkStInstalled,
+  clearDepsPending,
+  markDepsPending,
+  resolvePortableEnv,
+  type PortableEnvPaths,
+} from './env'
 import { getStConfig, type PrivateFilterHealResult } from './stConfig'
 import { IS_WINDOWS, spawnSyncCmd, which } from './runtime'
 import { ensureDirSync } from './atomicFs'
@@ -73,6 +85,16 @@ import type { BoolMessage, ProcessInfo, SyncSpawnResult } from './types'
 export const ST_REPO_URL = 'https://github.com/SillyTavern/SillyTavern.git'
 export const NPM_MIRROR_REGISTRY = 'https://registry.npmmirror.com'
 export const EXPECTED_ST_REMOTE = ST_REPO_URL
+
+/**
+ * 启动成功探针窗口（2026-09-21 真机修复）：spawn 后窗口内进程即退出 = 启动失败。
+ *
+ * 背景：缺包/端口占用等启动期故障会让 server.js 秒退（实测 bun 缺包退出码 1，
+ * 错误出现在数百毫秒内），而旧实现 spawn 成功即成即报「✓ SillyTavern启动成功」，
+ * 真机日志出现「启动成功」与崩溃报错同屏。窗口取 2.5s：覆盖启动期崩溃的常见
+ * 时间尺度，又不显著拖慢正常启动的成功反馈（ST 就绪实测 ~5-22s，远在窗口外）。
+ */
+export const START_PROBE_MS = 2500
 
 // ---------------------------------------------------------------------------
 // 纯函数：命令构造（便于测试断言）
@@ -472,6 +494,17 @@ export interface StLifecycleDeps {
   getActiveProcessesCount?: () => number
   /** ST 服务进程是否在运行（← Python is_running 显式标志语义；默认按 kind='st-server' 检查） */
   hasStServerProcess?: () => boolean
+  /**
+   * 依赖安装进程是否进行中（2026-09-21 真机竞态修复：安装中点启动 → 半成品
+   * node_modules 缺包崩溃）。默认按 kind='st-install' 检查活动注册表；
+   * 测试注入以驱动互斥守卫分支。
+   */
+  hasInstallProcess?: (kind: string) => boolean
+  /**
+   * 启动成功探针窗口（毫秒）：spawn 后窗口内进程即退出 = 启动失败，不误报
+   * 「✓ 启动成功」；<=0 关闭探针（测试基建）。默认 START_PROBE_MS。
+   */
+  startProbeMs?: number
   stopAllProcesses?: (onEvent?: (message: string) => void) => Promise<boolean>
   whichFn?: (binary: string) => string | null
   portableEnv?: (envRoot?: string) => PortableEnvPaths
@@ -656,6 +689,64 @@ export class StLifecycle {
     return (this.deps.hasStServerProcess ?? hasActiveProcess)('st-server')
   }
 
+  /** 依赖安装是否进行中（2026-09-21 真机竞态：安装进程在活动注册表 = 未完成） */
+  private installInFlight(): boolean {
+    return (this.deps.hasInstallProcess ?? hasActiveProcess)('st-install')
+  }
+
+  /**
+   * 依赖安装执行（统一挂载点，2026-09-21 真机修复）：
+   * - 安装进程注册 kind='st-install' —— startSt/restartSt 的互斥守卫依据；
+   * - 进程已起即落「未完成」标记、失败收尾补落（bun 可能中途才建出 node_modules；
+   *   失败/中断保留标记 → checkNodeModules 拒绝启动半成品树）；
+   * - 仅在退出码 0 时清除标记（成功才算树可信）。
+   * spawn 失败（进程未起、树未被触碰）不落标记，不给健康树误挂惩罚。
+   */
+  private async executeDepsInstall(
+    command: string,
+  ): Promise<{ exitCode: number | null; proc: ProcessInfo | null }> {
+    const proc = await this.executeCommand(command, this.stDir, 'st-install')
+    if (!proc) return { exitCode: null, proc: null }
+    markDepsPending(this.stDir)
+    const exitCode = await this.waitProcess(proc)
+    if (exitCode === 0) clearDepsPending(this.stDir)
+    else markDepsPending(this.stDir)
+    return { exitCode, proc }
+  }
+
+  /**
+   * 启动成功探针（2026-09-21 真机修复）：/spawn 后窗口内进程即退出 = 启动失败。
+   * 缺包、端口占用等启动期故障会让 server.js 秒退（实测 bun 缺包退出码 1）；
+   * 旧实现 spawn 成功即报「✓ 启动成功」，真机出现「成功」与崩溃同屏。
+   * 窗口内存活 = 成功（不等待监听信号——ST 首启 webpack 编译实测 ~22s 才就绪）。
+   */
+  private async probeStart(proc: ProcessInfo): Promise<{ exited: boolean; exitCode: number | null }> {
+    const probeMs = this.deps.startProbeMs ?? START_PROBE_MS
+    if (probeMs <= 0) return { exited: false, exitCode: null }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const exited = proc.proc.exited.then(
+        (code) => ({ exited: true as const, exitCode: code ?? proc.proc.exitCode ?? null }),
+        () => ({ exited: true as const, exitCode: proc.proc.exitCode ?? null }),
+      )
+      const alive = new Promise<{ exited: false; exitCode: null }>((resolve) => {
+        timer = setTimeout(() => resolve({ exited: false, exitCode: null }), probeMs)
+      })
+      return await Promise.race([exited, alive])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+
+  /** 启动后晚退日志（进程存活过探针窗口后死亡时给终端一个归因行，不静默消失） */
+  private logLateExit(proc: ProcessInfo): void {
+    void proc.proc.exited
+      .then((code) => {
+        this.log(`SillyTavern 进程已退出（退出码 ${code ?? proc.proc.exitCode ?? '未知'}）`)
+      })
+      .catch(() => undefined)
+  }
+
   /** ← _record_download */
   private recordDownload(action: string): void {
     try {
@@ -740,16 +831,16 @@ export class StLifecycle {
           }
           this.log('正在安装依赖...')
           // Phase 3（设计计划 §7）：embedded 路由 bun install；portable/system 命令串不变（D3）
-          const proc = await this.executeCommand(
-            await this.resolveInstallCommand(tools),
-            this.stDir,
-          )
-          if (proc) {
-            await this.waitProcess(proc)
-            this.log('依赖安装完成')
-            return { ok: true, message: '依赖安装完成' }
+          // 2026-09-21 修复：退出码判定 + 未完成标记（失败不报完成，见 executeDepsInstall）
+          const install = await this.executeDepsInstall(await this.resolveInstallCommand(tools))
+          if (!install.proc) return { ok: false, message: '创建npm install进程失败' }
+          if (install.exitCode !== 0) {
+            const message = `依赖安装失败（退出码 ${install.exitCode ?? '未知'}），请重试安装`
+            this.log(message)
+            return { ok: false, message }
           }
-          return { ok: false, message: '创建npm install进程失败' }
+          this.log('依赖安装完成')
+          return { ok: true, message: '依赖安装完成' }
         }
         this.log('未找到nodejs')
         return { ok: true, message: 'SillyTavern已安装，未找到nodejs' }
@@ -790,14 +881,14 @@ export class StLifecycle {
         if (!checkNodeModules(this.stDir)) {
           this.log('正在安装依赖...')
           // Phase 3（设计计划 §7）：embedded 路由 bun install；portable/system 命令串不变（D3）
-          const depProcess = await this.executeCommand(
-            await this.resolveInstallCommand(tools),
-            this.stDir,
-          )
-          if (depProcess) {
-            await this.waitProcess(depProcess)
-            this.log('依赖安装完成')
+          // 2026-09-21 修复：退出码判定 + 未完成标记（失败不得继续按「安装完成」放行）
+          const install = await this.executeDepsInstall(await this.resolveInstallCommand(tools))
+          if (!install.proc || install.exitCode !== 0) {
+            const message = `SillyTavern安装完成，但依赖安装失败（退出码 ${install.exitCode ?? '未知'}），请重试安装`
+            this.log(message)
+            return { ok: false, message }
           }
+          this.log('依赖安装完成')
         } else {
           this.log('依赖项已安装')
         }
@@ -876,6 +967,14 @@ export class StLifecycle {
   /** ← start_sillytavern（首次启动确认对话框由 UI 层处理 has_started_st） */
   async startSt(): Promise<StartStResult> {
     try {
+      // 依赖安装互斥（2026-09-21 真机竞态）：安装进程在跑 = node_modules 半成品，
+      // 此时启动必然缺包崩溃（真机：装到一半点启动 → Cannot find package 秒退）
+      if (this.installInFlight()) {
+        const message = '依赖安装进行中，请等待安装完成后再启动'
+        this.log(message)
+        return { ok: false, message, proc: null }
+      }
+
       this.log('正在启动SillyTavern...')
 
       const validation = validatePathForNpm(this.baseDir)
@@ -935,8 +1034,16 @@ export class StLifecycle {
 
       const proc = await this.executeCommand(command, this.stDir, 'st-server')
       if (proc) {
+        // 2026-09-21：探针窗口内进程即退出 = 启动失败（缺包/端口占用等），不误报成功
+        const outcome = await this.probeStart(proc)
+        if (outcome.exited) {
+          const message = `SillyTavern启动失败：进程已退出（退出码 ${outcome.exitCode ?? '未知'}），请检查上方日志`
+          this.log(message)
+          return { ok: false, message, proc }
+        }
         this.log('✓ SillyTavern启动成功')
         // 进程退出后的状态复位由调用方（UI 层）在 whenSettled 后处理
+        this.logLateExit(proc)
         return { ok: true, message: '✓ SillyTavern启动成功', proc }
       }
       return { ok: false, message: '创建进程失败', proc: null }
@@ -973,6 +1080,12 @@ export class StLifecycle {
 
   /** ← restart_sillytavern（路径检查仅中文+空格，1:1） */
   async restartSt(): Promise<StartStResult> {
+    // 依赖安装互斥（restart 会 stopAllProcesses 杀光全部子进程——含安装进程，先拦）
+    if (this.installInFlight()) {
+      const message = '依赖安装进行中，请等待安装完成后再重启'
+      this.log(message)
+      return { ok: false, message, proc: null }
+    }
     this.log('正在重启SillyTavern...')
     try {
       const stop = this.deps.stopAllProcesses ?? stopAllProcesses
@@ -1031,7 +1144,15 @@ export class StLifecycle {
 
       const proc = await this.executeCommand(command, this.stDir, 'st-server')
       if (proc) {
+        // 2026-09-21：与 startSt 同款启动探针（秒退 = 重启失败，不误报成功）
+        const outcome = await this.probeStart(proc)
+        if (outcome.exited) {
+          const message = `重启失败：进程已退出（退出码 ${outcome.exitCode ?? '未知'}），请检查上方日志`
+          this.log(message)
+          return { ok: false, message, proc }
+        }
         this.log('SillyTavern已重启')
+        this.logLateExit(proc)
         return { ok: true, message: 'SillyTavern已重启', proc }
       }
       this.log('重启失败')
@@ -1094,6 +1215,9 @@ export class StLifecycle {
    * 消解前置），重试首步 cache clean 替换为 `install --force`（bun 无 cache clean
    * 等价，忽略缓存强制重装）；node_modules 删除重试链原样保留。portable/system
    * 命令串与重试链逐字节不变（D3 零回归）。
+   *
+   * 2026-09-21：主安装经 executeDepsInstall 统一挂载（未完成标记 + kind='st-install'）；
+   * 重试链的 cache/--force 步同样挂 kind（互斥守卫覆盖到重试窗口）。
    */
   private async runNpmInstallWithRetry(tools: Toolchain, withAutoStart: boolean): Promise<BoolMessage> {
     const npmExe = tools.npmExe ?? ''
@@ -1101,8 +1225,7 @@ export class StLifecycle {
     for (;;) {
       this.log('正在安装依赖...')
       const installCommand = await this.resolveInstallCommand(tools)
-      const proc = await this.executeCommand(installCommand, this.stDir)
-      const exitCode = proc ? await this.waitProcess(proc) : null
+      const { exitCode } = await this.executeDepsInstall(installCommand)
       if (exitCode === 0) {
         this.log('依赖安装成功')
         return { ok: true, message: '依赖安装成功' }
@@ -1118,7 +1241,7 @@ export class StLifecycle {
       const cacheCommand = tools.embedded
         ? buildBunInstallForceCommand(npmExe)
         : buildNpmCacheCleanCommand(npmExe)
-      const cacheProcess = await this.executeCommand(cacheCommand, this.stDir)
+      const cacheProcess = await this.executeCommand(cacheCommand, this.stDir, 'st-install')
       if (cacheProcess) await this.waitProcess(cacheProcess)
       // 删除node_modules
       const nodeModulesPath = join(this.stDir, 'node_modules')
@@ -1401,6 +1524,12 @@ export class StLifecycle {
         logError(`[stLifecycle] ${errorMsg}`)
         return { ok: false, message: errorMsg }
       }
+      // 依赖安装互斥（2026-09-21）：安装进行中切版本 = 边装边换树，先拦
+      if (this.installInFlight()) {
+        const errorMsg = '依赖安装进行中，请等待安装完成后再切换版本'
+        this.log(errorMsg)
+        return { ok: false, message: errorMsg }
+      }
 
       this.log(`开始切换到版本 v${versionInfo.version}...`)
 
@@ -1485,15 +1614,19 @@ export class StLifecycle {
       this.log('正在执行 npm install，这可能需要几分钟...')
       // Phase 3（设计计划 §7）：embedded 路由 bun install（§7 单命令设计，--production
       // 统一两变体）；portable/system 命令串不变（D3）
-      const proc = await this.executeCommand(
+      // 2026-09-21 修复：退出码判定 + 未完成标记（失败不得报「✓ 安装完成」）
+      const install = await this.executeDepsInstall(
         await this.resolveInstallCommand(tools, 'no-omit'),
-        this.stDir,
       )
-      if (!proc) {
+      if (!install.proc) {
         this.log('错误: 无法执行npm install')
         return { ok: false, message: '无法执行npm install' }
       }
-      await this.waitProcess(proc)
+      if (install.exitCode !== 0) {
+        const message = `npm依赖安装失败（退出码 ${install.exitCode ?? '未知'}）`
+        this.log(message)
+        return { ok: false, message }
+      }
       this.log('✓ npm依赖安装完成')
       return { ok: true, message: 'npm依赖安装完成' }
     } catch (err) {

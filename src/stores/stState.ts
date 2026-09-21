@@ -101,7 +101,13 @@ export const useStState = create<StStateState>((set, get) => ({
   },
 
   installSt: async () => {
-    if (get().busy.install) return
+    // 跨操作互斥（2026-09-21 真机竞态：安装中点启动 → 半成品依赖直接崩）：
+    // 安装/启动/更新三者共享 ST 目录与 node_modules，任一进行中不接受新操作。
+    const busy = get().busy
+    if (busy.install || busy.start || busy.update) {
+      appendLog('已有安装/启动/更新操作进行中，已忽略本次安装请求')
+      return
+    }
     set((s) => ({ busy: { ...s.busy, install: true } }))
     try {
       const result = await getStLifecycle().installSt()
@@ -115,7 +121,11 @@ export const useStState = create<StStateState>((set, get) => ({
   },
 
   startSt: async () => {
-    if (get().busy.start) return
+    const busy = get().busy
+    if (busy.start || busy.install || busy.update) {
+      appendLog('已有安装/启动/更新操作进行中，已忽略本次启动请求')
+      return
+    }
     set((s) => ({ busy: { ...s.busy, start: true } }))
     try {
       const config = getConfigStore()
@@ -153,7 +163,11 @@ export const useStState = create<StStateState>((set, get) => ({
   },
 
   updateSt: async () => {
-    if (get().busy.update) return
+    const busy = get().busy
+    if (busy.update || busy.install || busy.start) {
+      appendLog('已有安装/启动/更新操作进行中，已忽略本次更新请求')
+      return
+    }
     set((s) => ({ busy: { ...s.busy, update: true } }))
     try {
       const result = await getStLifecycle().updateSt()

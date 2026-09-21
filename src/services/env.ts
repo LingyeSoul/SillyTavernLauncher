@@ -9,8 +9,9 @@
  *   （照搬 terminal.py 的扩展名探测顺序，Node 包的 POSIX 脚本与
  *   .cmd 启动器伴生，必须优先选择 Win32 可执行文件）。
  */
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
+import { errMsg, logError } from './errorLog'
 import { IS_WINDOWS, isFile, spawnSyncCmd, which } from './runtime'
 
 /** ← env.py Env 的路径集合 */
@@ -55,9 +56,52 @@ export function checkStInstalled(stDir: string): boolean {
   return isFile(join(stDir, 'package.json')) && isFile(join(stDir, 'server.js'))
 }
 
-/** ← Env.check_nodemodules */
+/**
+ * 依赖安装「未完成」标记（2026-09-21 真机竞态修复）：
+ * 任一安装链路（embedded bun / portable npm）开始时落盘、成功退出后清除。
+ *
+ * 背景：安装进行中 node_modules 是半成品，而旧 checkNodeModules 只看目录存在——
+ * 真机上「装到一半点启动」通过检查，server.js 模块解析当场崩（Cannot find
+ * package 'yargs-parser' / 'bytes'）。标记在位 = 树不可信（安装中/上次安装失败/
+ * 被中断），启动一律拒绝，直到下一次安装成功。
+ *
+ * 落点选择 node_modules 根：bun install 实测不清理根下未知文件；目录被删除
+ * （重装重试链）时标记随目录自然失效，与新树状态一致。
+ */
+export const DEPS_PENDING_MARKER = '.stl-deps-pending'
+
+export function depsPendingMarkerPath(stDir: string): string {
+  return join(stDir, 'node_modules', DEPS_PENDING_MARKER)
+}
+
+/**
+ * 依赖安装开始/失败收尾：落「未完成」标记。目录不存在时跳过——checkNodeModules
+ * 对缺失目录本就返回 false，且不得抢建目录（删除重试链的 force 步骤观测依赖
+ * 「删除后目录不存在」的既有语义）。失败仅日志不抛。
+ */
+export function markDepsPending(stDir: string): void {
+  try {
+    const nodeModulesPath = join(stDir, 'node_modules')
+    if (!existsSync(nodeModulesPath)) return
+    writeFileSync(join(nodeModulesPath, DEPS_PENDING_MARKER), new Date().toISOString(), 'utf8')
+  } catch (err) {
+    logError(`[env] 依赖未完成标记写入失败（不阻断安装）: ${errMsg(err)}`)
+  }
+}
+
+/** 依赖安装成功：清除「未完成」标记。失败仅日志不抛。 */
+export function clearDepsPending(stDir: string): void {
+  try {
+    rmSync(depsPendingMarkerPath(stDir), { force: true })
+  } catch (err) {
+    logError(`[env] 依赖未完成标记清除失败（不阻断安装）: ${errMsg(err)}`)
+  }
+}
+
+/** ← Env.check_nodemodules；增强：安装「未完成」标记在位视作未装好 */
 export function checkNodeModules(stDir: string): boolean {
-  return existsSync(join(stDir, 'node_modules'))
+  if (!existsSync(join(stDir, 'node_modules'))) return false
+  return !existsSync(depsPendingMarkerPath(stDir))
 }
 
 // ---------------------------------------------------------------------------

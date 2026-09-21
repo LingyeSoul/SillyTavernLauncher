@@ -33,6 +33,7 @@ import {
   type Toolchain,
 } from '../services/stLifecycle'
 import type { ExecuteProcessOptions } from '../services/processManager'
+import { checkNodeModules, depsPendingMarkerPath } from '../services/env'
 import type { ProcessInfo, SyncSpawnResult } from '../services/types'
 
 // stConfig 全局单例替换为内存假对象（避免 auto_proxy 懒默认测试写真实 config.yaml）
@@ -118,15 +119,63 @@ function fakeProcess(exitCode: number): ProcessInfo {
   }
 }
 
-/** executeProcessAsync mock：按命令脚本化退出码（null = 进程创建失败） */
+/** 存活进程模型（server.js）：exited 挂起——启动探针窗口内不退出 = 启动成功 */
+function fakeRunningProcess(): ProcessInfo {
+  return {
+    pid: 1,
+    command: 'test',
+    createdAt: Date.now(),
+    proc: {
+      pid: 1,
+      stdout: new ReadableStream(),
+      stderr: new ReadableStream(),
+      exited: new Promise<number>(() => undefined),
+      exitCode: null,
+      kill: () => undefined,
+    },
+    whenSettled: Promise.resolve(),
+  }
+}
+
+/** 延迟退出模型：delayMs 后以 exitCode 退出（复现缺包秒崩的启动期死亡） */
+function fakeDelayedExitProcess(exitCode: number, delayMs: number): ProcessInfo {
+  let code: number | null = null
+  let resolveExited: (value: number) => void = () => undefined
+  const exited = new Promise<number>((resolve) => {
+    resolveExited = resolve
+  })
+  setTimeout(() => {
+    code = exitCode
+    resolveExited(exitCode)
+  }, delayMs)
+  return {
+    pid: 1,
+    command: 'test',
+    createdAt: Date.now(),
+    proc: {
+      pid: 1,
+      stdout: new ReadableStream(),
+      stderr: new ReadableStream(),
+      exited,
+      get exitCode() {
+        return code
+      },
+      kill: () => undefined,
+    },
+    whenSettled: Promise.resolve(),
+  }
+}
+
+/** executeProcessAsync mock：按命令脚本化结果（'running' = 存活服务进程，null = 进程创建失败） */
 function makeExecHarness(
-  script: (command: string, index: number) => number | null,
+  script: (command: string, index: number) => number | null | 'running',
 ): { deps: StLifecycleDeps; calls: ExecuteProcessOptions[] } {
   const calls: ExecuteProcessOptions[] = []
   const fn = async (options: ExecuteProcessOptions): Promise<ProcessInfo | null> => {
     calls.push(options)
     const code = script(options.command, calls.length)
     if (code === null) return null
+    if (code === 'running') return fakeRunningProcess()
     return fakeProcess(code)
   }
   return { deps: { executeProcessAsync: fn }, calls }
@@ -168,6 +217,9 @@ function makeLifecycle(
   const deps: StLifecycleDeps = {
     getActiveProcessesCount: () => 0,
     stopAllProcesses: vi.fn(async () => true),
+    // 测试基建：默认关闭启动探针（fake 进程多为「已退出」模型，探针语义另有专测）；
+    // 0 = 跳过探针，保持既有用例的 spawn 即成语义
+    startProbeMs: 0,
     ...(parts.deps ?? {}),
   }
   if (parts.portable) {
@@ -564,6 +616,165 @@ describe('startSt（← start_sillytavern）', () => {
     const env = harness.calls[0]?.env as Record<string, string>
     expect(env.PATH.startsWith(join(root, 'env'))).toBe(true)
     expect(env.PATH).toContain(join(root, 'env', 'cmd'))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 2026-09-21 真机三收口：安装互斥 / 安装退出码 / 启动成功探针
+// ---------------------------------------------------------------------------
+
+describe('安装-启动互斥与启动探针（2026-09-21 真机竞态修复）', () => {
+  it('startSt：依赖安装进行中 → 拒绝启动（不 spawn，提示等待安装完成）', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const lifecycle = makeLifecycle({
+      deps: { ...harness.deps, hasInstallProcess: () => true },
+    })
+
+    const result = await lifecycle.startSt()
+    expect(result.ok).toBe(false)
+    expect(result.proc).toBeNull()
+    expect(result.message).toContain('依赖安装进行中')
+    expect(harness.calls.length).toBe(0)
+  })
+
+  it('restartSt：依赖安装进行中 → 先拦（不 stopAllProcesses 误杀安装进程）', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const stop = vi.fn(async () => true)
+    const lifecycle = makeLifecycle({
+      deps: { ...harness.deps, hasInstallProcess: () => true, stopAllProcesses: stop },
+    })
+
+    const result = await lifecycle.restartSt()
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('依赖安装进行中')
+    expect(stop).not.toHaveBeenCalled()
+    expect(harness.calls.length).toBe(0)
+  })
+
+  it('startSt：探针窗口内进程秒退 → 启动失败（不误报「✓ 启动成功」）', async () => {
+    setupSt({ nodeModules: true })
+    // 缺包秒崩复现：spawn 后 10ms 以退出码 1 死亡（bun 实测缺包退出码 = 1）
+    const calls: ExecuteProcessOptions[] = []
+    const deps: StLifecycleDeps = {
+      startProbeMs: 200,
+      executeProcessAsync: async (options) => {
+        calls.push(options)
+        return fakeDelayedExitProcess(1, 10)
+      },
+    }
+    const lifecycle = makeLifecycle({ deps })
+
+    const result = await lifecycle.startSt()
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('启动失败')
+    expect(result.message).toContain('退出码 1')
+    expect(logs.some((message) => message.includes('SillyTavern启动失败'))).toBe(true)
+    expect(logs.some((message) => message.includes('✓ SillyTavern启动成功'))).toBe(false)
+    expect(calls[0]?.kind).toBe('st-server')
+  })
+
+  it('startSt：进程存活过探针窗口 → 成功；晚退给出归因日志', async () => {
+    setupSt({ nodeModules: true })
+    const deps: StLifecycleDeps = {
+      startProbeMs: 30,
+      executeProcessAsync: async () => fakeRunningProcess(),
+    }
+    const lifecycle = makeLifecycle({ deps })
+
+    const result = await lifecycle.startSt()
+    expect(result.ok).toBe(true)
+    expect(result.message).toBe('✓ SillyTavern启动成功')
+  })
+
+  it('restartSt：探针窗口内秒退 → 重启失败（同一收口口径）', async () => {
+    setupSt({ nodeModules: true })
+    const deps: StLifecycleDeps = {
+      startProbeMs: 200,
+      executeProcessAsync: async () => fakeDelayedExitProcess(1, 10),
+    }
+    const lifecycle = makeLifecycle({ deps })
+
+    const result = await lifecycle.restartSt()
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('重启失败')
+    expect(logs.some((message) => message.includes('SillyTavern已重启'))).toBe(false)
+  })
+})
+
+describe('安装退出码与「未完成」标记（2026-09-21 真机修复）', () => {
+  it('installSt（已安装缺依赖）：安装失败退出码非 0 → 不报完成 + 标记保留（启动被拒）', async () => {
+    const stDir = setupSt() // 无 node_modules
+    // 真实 bun/npm 安装会先建出 node_modules 再失败——fake 同步建模（标记落盘前置）
+    const harness = makeExecHarness((command) => {
+      if (command.includes('install')) {
+        mkdirSync(join(stDir, 'node_modules'), { recursive: true })
+        return 1
+      }
+      return 0
+    })
+    const lifecycle = makeLifecycle({ deps: harness.deps })
+
+    const result = await lifecycle.installSt()
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('依赖安装失败')
+    expect(result.message).toContain('退出码 1')
+    // 半成品树：未完成标记必须保留 → checkNodeModules 拒绝
+    expect(existsSync(depsPendingMarkerPath(stDir))).toBe(true)
+    expect(checkNodeModules(stDir)).toBe(false)
+    // 后续启动被依赖检查拦下（不会带着残树崩）
+    const startResult = await lifecycle.startSt()
+    expect(startResult.ok).toBe(false)
+    expect(startResult.message).toContain('依赖未安装')
+  })
+
+  it('installSt（已安装缺依赖）：安装成功 → 标记清除、依赖检查恢复', async () => {
+    const stDir = setupSt() // 无 node_modules
+    // 安装成功建模：真实安装会建出 node_modules 后退出码 0
+    const harness = makeExecHarness((command) => {
+      if (command.includes('install')) {
+        mkdirSync(join(stDir, 'node_modules'), { recursive: true })
+        return 0
+      }
+      return 0
+    })
+    const lifecycle = makeLifecycle({ deps: harness.deps })
+
+    const result = await lifecycle.installSt()
+    expect(result.ok).toBe(true)
+    expect(result.message).toBe('依赖安装完成')
+    expect(existsSync(depsPendingMarkerPath(stDir))).toBe(false)
+    expect(checkNodeModules(stDir)).toBe(true)
+    // 安装进程挂 kind='st-install'（互斥守卫依据）
+    expect(harness.calls[0]?.kind).toBe('st-install')
+  })
+
+  it('installSt（全新安装）：clone 成功但依赖安装失败 → 如实回报失败并保留标记', async () => {
+    const stDir = join(root, 'SillyTavern')
+    // clone 成功、install 失败；install 先建出 node_modules（真实安装形态）
+    const harness = makeExecHarness((_command, index) => {
+      if (index === 1) return 0
+      mkdirSync(join(stDir, 'node_modules'), { recursive: true })
+      return 1
+    })
+    const lifecycle = makeLifecycle({ deps: harness.deps })
+
+    const result = await lifecycle.installSt()
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('依赖安装失败')
+    expect(existsSync(depsPendingMarkerPath(stDir))).toBe(true)
+  })
+
+  it('installNpmDependencies：退出码非 0 → 不报「✓ 安装完成」', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 3)
+    const lifecycle = makeLifecycle({ deps: harness.deps })
+
+    const result = await lifecycle.installNpmDependencies()
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('退出码 3')
+    expect(logs.some((message) => message.includes('✓ npm依赖安装完成'))).toBe(false)
   })
 })
 

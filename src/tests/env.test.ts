@@ -2,7 +2,7 @@
  * ← env.py / env_sys.py 迁移验证：便携 env 路径、ST 安装检测、
  * 系统模式 git/node 探测、Node ≥18 版本比较、Windows 扩展名探测。
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -11,8 +11,11 @@ import {
   checkNodeModules,
   checkStInstalled,
   checkSysEnv,
+  clearDepsPending,
   compareVersions,
+  depsPendingMarkerPath,
   getGitRootDir,
+  markDepsPending,
   probeSystemGit,
   probeSystemNode,
   resolveExecutableExtension,
@@ -64,6 +67,26 @@ describe('便携 env 路径解析（← env.py Env）', () => {
     const stDir = join(tempDir, 'SillyTavern')
     expect(checkNodeModules(stDir)).toBe(false)
     mkdirSync(join(stDir, 'node_modules'), { recursive: true })
+    expect(checkNodeModules(stDir)).toBe(true)
+  })
+
+  it('checkNodeModules：安装「未完成」标记在位视作未装好（2026-09-21 真机竞态）', () => {
+    const stDir = join(tempDir, 'SillyTavern')
+    // 目录不存在时标记为 no-op（不抢建目录；checkNodeModules 本就拒绝）
+    markDepsPending(stDir)
+    expect(existsSync(depsPendingMarkerPath(stDir))).toBe(false)
+    expect(checkNodeModules(stDir)).toBe(false)
+    // 目录就位（安装已开始动树）→ 标记可落
+    mkdirSync(join(stDir, 'node_modules'), { recursive: true })
+    markDepsPending(stDir)
+    expect(existsSync(depsPendingMarkerPath(stDir))).toBe(true)
+    expect(checkNodeModules(stDir)).toBe(false)
+    // 安装成功收尾 → 标记清除 → 恢复可启动
+    clearDepsPending(stDir)
+    expect(existsSync(depsPendingMarkerPath(stDir))).toBe(false)
+    expect(checkNodeModules(stDir)).toBe(true)
+    // 幂等：重复清除不抛
+    clearDepsPending(stDir)
     expect(checkNodeModules(stDir)).toBe(true)
   })
 })

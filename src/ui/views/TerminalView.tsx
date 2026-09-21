@@ -261,11 +261,12 @@ export function TerminalView() {
   }> = [
     {
       key: 'install', label: TEXTS.install, tip: TEXTS.installTip, icon: 'download',
-      disabled: running || busy.install, onClick: handleInstall, variant: 'default',
+      // 跨操作互斥（2026-09-21 真机竞态）：安装/启动/更新共享 ST 目录，互斥禁用
+      disabled: running || busy.install || busy.start || busy.update, onClick: handleInstall, variant: 'default',
     },
     {
       key: 'start', label: TEXTS.start, tip: TEXTS.startTip, icon: 'play',
-      disabled: running || busy.start, onClick: handleStart, variant: 'primary',
+      disabled: running || busy.start || busy.install || busy.update, onClick: handleStart, variant: 'primary',
     },
     {
       key: 'stop', label: TEXTS.stop, tip: TEXTS.stopTip, icon: 'stop',
@@ -274,7 +275,7 @@ export function TerminalView() {
     },
     {
       key: 'update', label: TEXTS.update, tip: TEXTS.updateTip, icon: 'refresh',
-      disabled: running || busy.update, onClick: () => void updateSt(), variant: 'default',
+      disabled: running || busy.update || busy.install || busy.start, onClick: () => void updateSt(), variant: 'default',
     },
     {
       key: 'clear', label: TEXTS.clear, tip: TEXTS.clearTip, icon: 'trash',
