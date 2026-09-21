@@ -618,6 +618,31 @@ describe('currentVersionEmbedded（describe --tags --abbrev=0 + rev-parse HEAD �
     const notRepo = await currentVersionEmbedded(join(workDir, 'nope'))
     expect(notRepo).toEqual({ version: null, commit: null })
   })
+
+  /**
+   * 分块扩窗契约（2026-09-21 版本页「未安装」修复）：tag 落在首个窗口之外时，
+   * 窗口须倍增再回溯直至命中——结果与全量回溯（git describe）全等。
+   * 注入 walkWindow=1：c4(HEAD) 窗口[1]→[2] 皆无 tag，扩到 [4] 才命中 c2 的 tag。
+   */
+  it('tag 在首个窗口之外：扩窗回溯仍命中，且与 git describe 全等', async () => {
+    const repoDir = await initLocalRepo() // c1 → c2（HEAD）
+    await runGit(['tag', '1.13.0'], repoDir, GIT) // tag 打在 c2
+    writeFileSync(join(repoDir, 'a.txt'), 'v3\n', 'utf8')
+    await runGit(['add', '.'], repoDir, GIT)
+    await runGit(['commit', '-m', 'c3'], repoDir, GIT)
+    writeFileSync(join(repoDir, 'a.txt'), 'v4\n', 'utf8')
+    await runGit(['add', '.'], repoDir, GIT)
+    await runGit(['commit', '-m', 'c4'], repoDir, GIT) // HEAD 距 tag 3 个提交
+
+    const result = await currentVersionEmbedded(repoDir, { walkWindow: 1 })
+    const describe = await runGit(['describe', '--tags', '--abbrev=0'], repoDir, GIT)
+    expect(result.version).toBe('1.13.0')
+    expect(describe.stdout.trim()).toBe('1.13.0')
+
+    // 窗口穷尽（历史里确无带 tag 的祖先）→ 与默认窗口同结果
+    const wide = await currentVersionEmbedded(repoDir)
+    expect(wide.version).toBe(result.version)
+  })
 })
 
 describe('caProvider 默认接线（F6 生产契约：劫持网络下 TLS 回退的唯一通道）', () => {

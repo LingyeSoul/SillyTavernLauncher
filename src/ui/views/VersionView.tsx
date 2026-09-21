@@ -8,9 +8,12 @@
  * - 版本数据来自 services/git.getStTags（视图经 hook 消费服务，不绕过）。
  * - 列表/加载/错误状态暂存于 stores/versionState（2026-09-20）：切页卸载不丢
  *   缓存，切回直接渲染已暂存数据，不再重走骨架动画与重复 git 扫描；手动刷新
- *   先 refreshVersion 再 reloadVersions 强制重拉（对齐原内联 loadVersions 语义，
- *   刷新后「当前」芯片同步校正）。挂载时静默 refreshVersion（本地 git describe）
- *   保证「当前」芯片在终端页更新/切版本后仍准确。
+ *   强制重拉列表（对齐原内联 loadVersions 语义）。挂载与手动刷新都两路并行
+ *   （2026-09-21）：串行时列表被当前版本读取阻塞，且两读各读一份 pack。
+ * - 副标题口径（2026-09-21 修复「能启动酒馆却提示未安装」）：未安装只由 stState
+ *   .installed（ST 目录完整性）决定；当前版本读取中 → 读取中...；已安装但读不出
+ *   （非 Git 仓库/无 tag/失败）→ 未知。此前 currentVersion 为空一律显「未安装」，
+ *   慢读窗口内与事实相反。
  * - 真实版本卡 stagger 入场（theme.ts stagger token）：每项 opacity 0→1 +
  *   top 4→0（≤6px 位移纪律），延迟按序递增、超过 maxItems 封顶；motion 的
  *   initial 仅挂载时生效——同 key 数据刷新天然不重播，无需额外状态。
@@ -35,7 +38,11 @@ import { Tooltip } from '../components/Tooltip'
 const TEXTS = {
   title: '版本管理',
   subtitlePrefix: '当前',
+  /** 未安装（ST 目录不完整）时才可断言未安装；版本读取中/失败不得冒充 */
   subtitleNone: '未安装',
+  subtitleLoading: '读取中...',
+  /** 已安装但版本不可读（非 Git 仓库 / 无 tag / 读取失败） */
+  subtitleUnknown: '未知',
   refreshTip: '刷新版本列表',
   currentChip: '当前',
   switchTo: '切换到此版本',
@@ -51,6 +58,8 @@ export function VersionView() {
   const t = useTheme()
   const { enabled: motionEnabled } = useMotion()
   const currentVersion = useStState((s) => s.currentVersion)
+  const versionLoading = useStState((s) => s.versionLoading)
+  const installed = useStState((s) => s.installed)
   const refreshVersion = useStState((s) => s.refreshVersion)
   const versions = useVersionState((s) => s.versions)
   const loading = useVersionState((s) => s.loading)
@@ -59,27 +68,35 @@ export function VersionView() {
   const reloadVersions = useVersionState((s) => s.reloadVersions)
 
   useEffect(() => {
-    void (async () => {
-      // 先刷当前版本（本地 git describe，快）再拉列表：保证卡片渲染时「当前」芯片就绪
-      await refreshVersion()
-      await ensureVersions()
-    })()
+    // 当前版本与版本列表并行拉取：列表不再等当前版本读出（此前串行 + 慢读
+    // 让整页空窗数十秒，见 2026-09-21 版本页「未安装」实测）。
+    // allSettled：两路各自 try-catch + logError，这里只为兜住意外拒绝的 unhandled 噪音
+    void Promise.allSettled([refreshVersion(), ensureVersions()])
   }, [refreshVersion, ensureVersions])
 
-  /** 手动刷新：先刷「当前」版本再强制重拉列表（对齐原内联 loadVersions 语义），
-   *  刷新后「当前」芯片随终端页切版本/更新立即校正 */
+  /** 手动刷新：与挂载同口径两路并行重拉——「当前」芯片与列表互不等待，且并行共用
+   *  一份 pack 缓冲（串行两读各读一份 pack，见 services/isoGit 读缓存说明） */
   const handleReload = (): void => {
-    void (async () => {
-      await refreshVersion()
-      await reloadVersions()
-    })()
+    void Promise.allSettled([refreshVersion(), reloadVersions()])
   }
 
+  // 副标题口径：未安装只看安装态，读取中/不可读不得冒充「未安装」（用户能在终端
+  // 页启动酒馆，却在版本页看到未安装 = 事实错误；2026-09-21 实测修复）
   const subtitle = currentVersion
-    ? `${TEXTS.subtitlePrefix} ${currentVersion.version ?? ''}${
-        currentVersion.commit ? ` · Commit ${currentVersion.commit.slice(0, 7)}` : ''
-      }`
-    : TEXTS.subtitleNone
+    ? currentVersion.version
+      ? `${TEXTS.subtitlePrefix} ${currentVersion.version}${
+          currentVersion.commit ? ` · Commit ${currentVersion.commit.slice(0, 7)}` : ''
+        }`
+      : currentVersion.commit
+        ? `Commit ${currentVersion.commit.slice(0, 7)}`
+        : installed
+          ? TEXTS.subtitleUnknown
+          : TEXTS.subtitleNone
+    : versionLoading
+      ? TEXTS.subtitleLoading
+      : installed
+        ? TEXTS.subtitleUnknown
+        : TEXTS.subtitleNone
 
   return (
     <PageScaffold

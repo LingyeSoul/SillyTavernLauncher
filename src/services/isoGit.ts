@@ -180,6 +180,53 @@ export function applyStMirrorPrefix(url: string, mirror: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// 进程内 Git 读缓存（性能契约，2026-09-21 版本页「未安装」实测根因）
+// ---------------------------------------------------------------------------
+
+/**
+ * isomorphic-git 的 packfile 索引/包缓冲缓存：读操作期间共享，最后一个读操作
+ * 结束即释放。
+ *
+ * 为什么必须共享：iso 的每个命令各接收一个 cache 对象，不传即每次调用新建空
+ * cache——每次对象读取都要重新整读并解析 pack 索引（ST 仓库 .idx 2.46MB、十万级
+ * 对象）并整读 pack 文件。实测单次 tag 解析 295ms：逐 tag 解析 103 个 = 29s，
+ * 加上全历史回溯共 40s+ 才出数——期间「当前版本」恒空，版本页头部误显「未安装」。
+ * 共享同一 cache 后同组调用降到 0.5s（同机实测 60×）；版本页两路读并行发起时
+ * 也共用同一份 pack 缓冲（否则各读一份）。
+ *
+ * 为什么归零即释放：缓存里是 pack 文件缓冲与解压出的对象——ST 仓库一次版本读取
+ * 实测常驻 440MB ArrayBuffer，进程级常驻对启动器不可接受；归零释放后 GC 可回收
+ * （实测 rss 530MB → 49MB）。pack 内容寻址（文件名含内容哈希），变更类操作也会
+ * 显式失效，故不存在读到旧对象的窗口。
+ */
+const isoReadCache: Record<string, unknown> = {}
+
+/** 进行中的读操作数：0 → 1 时缓存自然重建，归零时释放 */
+let activeIsoReads = 0
+
+/**
+ * 释放读缓存（pack 索引与包缓冲对外失去引用，内存可回收）。
+ * 有读操作在进行中时不动——缓存归最后一个读操作收尾释放，避免读到一半被抽走。
+ */
+function releaseIsoReadCache(): void {
+  if (activeIsoReads > 0) return
+  for (const key of Reflect.ownKeys(isoReadCache)) {
+    Reflect.deleteProperty(isoReadCache, key)
+  }
+}
+
+/** 读操作包装：操作内全部 iso 调用共享缓存；最后一个操作结束即释放（内存归零） */
+async function withIsoReadCache<T>(read: () => Promise<T>): Promise<T> {
+  activeIsoReads += 1
+  try {
+    return await read()
+  } finally {
+    activeIsoReads -= 1
+    releaseIsoReadCache()
+  }
+}
+
+// ---------------------------------------------------------------------------
 // StRepoOps 接口（设计计划 §8.2 签名逐字对齐）
 // ---------------------------------------------------------------------------
 
@@ -473,6 +520,7 @@ export class IsoGitOps implements StRepoOps {
         url: effectiveUrl,
         ref: 'release',
         onProgress: this.progressLogger(),
+        cache: isoReadCache,
       })
       // remote 存镜像前缀会影响外部工具与 ST 自身读到的地址——统一回写官方 URL
       // （实际抓取 URL 每次操作时经 resolveFetchUrl 现算，D6 内存前缀语义）；
@@ -497,6 +545,8 @@ export class IsoGitOps implements StRepoOps {
         logError(`[isoGit] 克隆失败后清理残留失败: ${errMsg(cleanupErr)}`)
       }
       return { ok: false, message: `安装失败: ${message}`, exitCode: 1 }
+    } finally {
+      releaseIsoReadCache()
     }
   }
 
@@ -511,6 +561,7 @@ export class IsoGitOps implements StRepoOps {
         url,
         tags: true, // 对齐 git fetch --all 的 tag 透传（版本页数据源）
         onProgress: this.progressLogger(),
+        cache: isoReadCache,
       })
       return { ok: true, message: 'Git更新成功', exitCode: 0 }
     } catch (err) {
@@ -518,6 +569,8 @@ export class IsoGitOps implements StRepoOps {
       logError(`[isoGit] fetch 失败: ${message}`)
       this.log(`Git抓取失败: ${message}`)
       return { ok: false, message, exitCode: 1 }
+    } finally {
+      releaseIsoReadCache()
     }
   }
 
@@ -592,6 +645,7 @@ export class IsoGitOps implements StRepoOps {
         remote: 'origin',
         url: fetchUrl,
         onProgress: this.progressLogger(),
+        cache: isoReadCache,
       })
       return { ok: true, message: 'Git更新成功', exitCode: 0 }
     } catch (err) {
@@ -611,7 +665,7 @@ export class IsoGitOps implements StRepoOps {
         // reset --hard origin/release：分支指针对齐 + checkout force 重写索引与工作区；
         // checkout(ref: 'release') 会将 HEAD 重挂为 refs/heads/release（覆盖 detached HEAD）
         await isoWriteRef({ fs: nodeFs, dir, ref: 'refs/heads/release', value: target, force: true })
-        await isoCheckout({ fs: nodeFs, dir, ref: 'release', force: true })
+        await isoCheckout({ fs: nodeFs, dir, ref: 'release', force: true, cache: isoReadCache })
         this.log('已快照本地更改并强制对齐 origin/release')
         return { ok: true, message: '已快照本地更改并强制对齐 origin/release', exitCode: 0 }
       } catch (resetErr) {
@@ -619,6 +673,8 @@ export class IsoGitOps implements StRepoOps {
         logError(`[isoGit] 强制对齐失败: ${message}`)
         return { ok: false, message: `Git更新失败且强制对齐失败: ${message}`, exitCode: 1 }
       }
+    } finally {
+      releaseIsoReadCache()
     }
   }
 
@@ -647,7 +703,7 @@ export class IsoGitOps implements StRepoOps {
       this.deleteTrackedDirtyFiles(dir, whitelisted.join('\n'))
       // checkout(force) = git checkout <tag> + reset --hard 的合并语义：
       // HEAD 挂到 tag commit（detached，对齐 git 行为）并重写索引与工作区
-      await isoCheckout({ fs: nodeFs, dir, ref: tag, force: true })
+      await isoCheckout({ fs: nodeFs, dir, ref: tag, force: true, cache: isoReadCache })
       this.log(`成功切换到 tag ${tag}`)
       return { ok: true, message: `成功切换到 tag ${tag}`, exitCode: 0 }
     } catch (err) {
@@ -661,6 +717,8 @@ export class IsoGitOps implements StRepoOps {
       const message = errMsg(err)
       logError(`[isoGit] checkoutTag 失败: ${message}`)
       return { ok: false, message: `切换失败: ${message}`, exitCode: 1 }
+    } finally {
+      releaseIsoReadCache()
     }
   }
 
@@ -679,27 +737,29 @@ export class IsoGitOps implements StRepoOps {
    * 未跟踪（??）在后。
    */
   async statusPorcelain(dir: string): Promise<string> {
-    try {
-      const tracked = await isoListFiles({ fs: nodeFs, dir })
-      // mtime 顶到未来 +5s：compareStats 任一字段不等即判「文件已变」并重哈希；
-      // 未来时间与索引里的历史 mtime 必差 ≥1 秒，绕开秒级取整——即使索引写入
-      // 与本次检查同秒也确定性生效（真时间顶到 now 会撞同秒窗口）
-      const future = new Date(Date.now() + 5000)
-      for (const relPath of tracked) {
-        try {
-          nodeFs.utimesSync(join(dir, relPath), future, future)
-        } catch {
-          // 文件已删除/被占用：交给矩阵按缺失/现状处理
+    return withIsoReadCache(async () => {
+      try {
+        const tracked = await isoListFiles({ fs: nodeFs, dir, cache: isoReadCache })
+        // mtime 顶到未来 +5s：compareStats 任一字段不等即判「文件已变」并重哈希；
+        // 未来时间与索引里的历史 mtime 必差 ≥1 秒，绕开秒级取整——即使索引写入
+        // 与本次检查同秒也确定性生效（真时间顶到 now 会撞同秒窗口）
+        const future = new Date(Date.now() + 5000)
+        for (const relPath of tracked) {
+          try {
+            nodeFs.utimesSync(join(dir, relPath), future, future)
+          } catch {
+            // 文件已删除/被占用：交给矩阵按缺失/现状处理
+          }
         }
+      } catch (err) {
+        // 非仓库或读树失败：直接走矩阵（矩阵自身的错误语义对外保留）
+        logError(`[isoGit] porcelain 前置 stat 顶除失败（继续矩阵路径）: ${errMsg(err)}`)
       }
-    } catch (err) {
-      // 非仓库或读树失败：直接走矩阵（矩阵自身的错误语义对外保留）
-      logError(`[isoGit] porcelain 前置 stat 顶除失败（继续矩阵路径）: ${errMsg(err)}`)
-    }
-    // refresh:false——矩阵全程只读索引：顶除产生的伪 stat 绝不回写索引，
-    // 否则 refresh 会把未来 mtime 持久化，下一次顶除撞同秒再次误判（实测）
-    const matrix = await isoStatusMatrix({ fs: nodeFs, dir, refresh: false })
-    return synthesizePorcelain(matrix).join('\n')
+      // refresh:false——矩阵全程只读索引：顶除产生的伪 stat 绝不回写索引，
+      // 否则 refresh 会把未来 mtime 持久化，下一次顶除撞同秒再次误判（实测）
+      const matrix = await isoStatusMatrix({ fs: nodeFs, dir, refresh: false, cache: isoReadCache })
+      return synthesizePorcelain(matrix).join('\n')
+    })
   }
 
   async listTags(dir: string): Promise<string[]> {
@@ -758,6 +818,7 @@ export class IsoGitOps implements StRepoOps {
         depth,
         singleBranch: true,
         onProgress: this.progressLogger(),
+        cache: isoReadCache,
       })
       // 同 cloneRelease：仓库本地 core.autocrlf=false，外部真 git 视角零 CRLF 歧义
       await isoSetConfig({ fs: nodeFs, dir, path: 'core.autocrlf', value: false })
@@ -772,6 +833,8 @@ export class IsoGitOps implements StRepoOps {
         logError(`[isoGit] 浅克隆失败后清理残留失败: ${errMsg(cleanupErr)}`)
       }
       return { ok: false, message, exitCode: 1 }
+    } finally {
+      releaseIsoReadCache()
     }
   }
 }
@@ -791,10 +854,10 @@ export function createIsoGitOps(options: IsoGitOpsOptions = {}): IsoGitOps {
 async function resolveTagCommitOid(dir: string, tagName: string): Promise<string | null> {
   try {
     const refOid = await isoResolveRef({ fs: nodeFs, dir, ref: `refs/tags/${tagName}` })
-    const { type } = await isoReadObject({ fs: nodeFs, dir, oid: refOid })
+    const { type } = await isoReadObject({ fs: nodeFs, dir, oid: refOid, cache: isoReadCache })
     if (type === 'tag') {
       // 附注 tag：ref 指向 tag 对象，剥壳取其目标 commit
-      const tag = await isoReadTag({ fs: nodeFs, dir, oid: refOid })
+      const tag = await isoReadTag({ fs: nodeFs, dir, oid: refOid, cache: isoReadCache })
       return tag.tag.object
     }
     return refOid
@@ -834,67 +897,86 @@ export async function getStTagsEmbedded(stDir?: string): Promise<TagsResult> {
   if (!existsSync(join(dir, '.git'))) {
     return { ok: false, data: null, message: 'SillyTavern目录不是Git仓库' }
   }
-  try {
-    const allTags = await isoListTags({ fs: nodeFs, dir })
-    const versions: Record<string, { commit: string; date: string; tag_name: string }> = {}
-    for (const tag of allTags) {
-      const versionStr = normalizeVersion(tag)
-      if (!VERSION_TAG_RE.test(versionStr) || !versionGte1130(versionStr)) continue
-      const commitOid = await resolveTagCommitOid(dir, tag)
-      if (commitOid === null) continue
-      const { commit } = await isoReadCommit({ fs: nodeFs, dir, oid: commitOid })
-      versions[versionStr] = {
-        commit: commitOid,
-        date: authorDateIso(commit.author.timestamp, commit.author.timezoneOffset),
-        tag_name: tag,
+  return withIsoReadCache(async () => {
+    try {
+      const allTags = await isoListTags({ fs: nodeFs, dir })
+      const versions: Record<string, { commit: string; date: string; tag_name: string }> = {}
+      for (const tag of allTags) {
+        const versionStr = normalizeVersion(tag)
+        if (!VERSION_TAG_RE.test(versionStr) || !versionGte1130(versionStr)) continue
+        const commitOid = await resolveTagCommitOid(dir, tag)
+        if (commitOid === null) continue
+        const { commit } = await isoReadCommit({ fs: nodeFs, dir, oid: commitOid, cache: isoReadCache })
+        versions[versionStr] = {
+          commit: commitOid,
+          date: authorDateIso(commit.author.timestamp, commit.author.timezoneOffset),
+          tag_name: tag,
+        }
       }
+      const latest = Object.keys(versions).sort((a, b) => compareVersions(b, a))[0] ?? ''
+      return {
+        ok: true,
+        data: { versions, latest },
+        message: `成功获取 ${Object.keys(versions).length} 个版本`,
+      }
+    } catch (err) {
+      const message = `获取tag列表时出错: ${errMsg(err)}`
+      logError(`[isoGit] ${message}`)
+      return { ok: false, data: null, message }
     }
-    const latest = Object.keys(versions).sort((a, b) => compareVersions(b, a))[0] ?? ''
-    return {
-      ok: true,
-      data: { versions, latest },
-      message: `成功获取 ${Object.keys(versions).length} 个版本`,
-    }
-  } catch (err) {
-    const message = `获取tag列表时出错: ${errMsg(err)}`
-    logError(`[isoGit] ${message}`)
-    return { ok: false, data: null, message }
-  }
+  })
 }
+
+/** 祖先回溯首个窗口（提交数）；未命中则倍增进窗，直至命中或历史穷尽 */
+const ANCESTRY_WALK_WINDOW = 512
 
 /**
  * stState.refreshVersion 的 embedded 等价实现（当前版本芯片）：
  * `git describe --tags --abbrev=0` + `git rev-parse HEAD` 的进程内等价——
  * HEAD 精确命中 tag 直接用；否则沿 HEAD 祖先回溯取最近 tag（describe 语义）。
  * 失败/无 tag → version null（对齐 spawn 侧 describe 失败置 null 的行为）。
+ *
+ * 回溯分块扩窗（2026-09-21 版本页「未安装」实测修复）：此前一次 `isoLog` 拉全
+ * 历史（ST 仓库 1.18 万提交、约 5s），叠加逐 tag 无缓存解析共 40s+ 才出结果。
+ * 现按窗口倍增进窗，命中首个带 tag 的祖先即停——窗口单调扩张、log 序不变，故
+ * 结果与全量回溯全等；命中点通常在数百提交内，代价降到单窗口。
+ * （walkWindow 为测试注入口：小窗口验证扩窗路径）
  */
 export async function currentVersionEmbedded(
   stDir?: string,
+  options: { walkWindow?: number } = {},
 ): Promise<{ version: string | null; commit: string | null }> {
   const dir = stDir ?? join(process.cwd(), 'SillyTavern')
-  try {
-    const head = await isoResolveRef({ fs: nodeFs, dir, ref: 'HEAD' })
-    const allTags = await isoListTags({ fs: nodeFs, dir })
-    // commit → tag（后写覆盖：同 commit 多 tag 时取其一，仅影响展示用哪个名字）
-    const tagByCommit = new Map<string, string>()
-    for (const tag of allTags) {
-      const commitOid = await resolveTagCommitOid(dir, tag)
-      if (commitOid !== null) tagByCommit.set(commitOid, tag)
-    }
-    let version = tagByCommit.get(head) ?? null
-    if (version === null && tagByCommit.size > 0) {
-      const ancestry = await isoLog({ fs: nodeFs, dir, ref: 'HEAD' })
-      for (const entry of ancestry) {
-        const hit = tagByCommit.get(entry.oid)
-        if (hit !== undefined) {
-          version = hit
-          break
+  const walkWindow = options.walkWindow ?? ANCESTRY_WALK_WINDOW
+  return withIsoReadCache(async () => {
+    try {
+      const head = await isoResolveRef({ fs: nodeFs, dir, ref: 'HEAD' })
+      const allTags = await isoListTags({ fs: nodeFs, dir })
+      // commit → tag（后写覆盖：同 commit 多 tag 时取其一，仅影响展示用哪个名字）
+      const tagByCommit = new Map<string, string>()
+      for (const tag of allTags) {
+        const commitOid = await resolveTagCommitOid(dir, tag)
+        if (commitOid !== null) tagByCommit.set(commitOid, tag)
+      }
+      let version = tagByCommit.get(head) ?? null
+      if (version === null && tagByCommit.size > 0) {
+        // 窗口不足则翻倍再回溯；ancestry 短于窗口 = 历史已穷尽 → 确无带 tag 的祖先
+        for (let depth = walkWindow; version === null; depth *= 2) {
+          const ancestry = await isoLog({ fs: nodeFs, dir, ref: 'HEAD', depth, cache: isoReadCache })
+          for (const entry of ancestry) {
+            const hit = tagByCommit.get(entry.oid)
+            if (hit !== undefined) {
+              version = hit
+              break
+            }
+          }
+          if (ancestry.length < depth) break
         }
       }
+      return { version, commit: head }
+    } catch (err) {
+      logError(`[isoGit] 读取当前版本失败: ${errMsg(err)}`)
+      return { version: null, commit: null }
     }
-    return { version, commit: head }
-  } catch (err) {
-    logError(`[isoGit] 读取当前版本失败: ${errMsg(err)}`)
-    return { version: null, commit: null }
-  }
+  })
 }
