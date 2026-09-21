@@ -806,11 +806,15 @@ async function resolveTagCommitOid(dir: string, tagName: string): Promise<string
 
 /** Unix 秒 + 时区偏移分 → git `--format=%aI` 形态（作者日期严格 ISO 8601 带偏移）。
  *  注意 isomorphic-git 的 timezoneOffset 沿用 JS Date.getTimezoneOffset 反号约定
- *  （UTC+8 → -480）：本地墙钟 = timestamp - offset，展示符号 = offset 反号 */
+ *  （UTC+8 → -480）：本地墙钟 = timestamp - offset，展示符号 = offset 反号。
+ *  零偏移是特例：git 打 `Z` 后缀（`+0000` 作者时间 → "2026-01-02T03:04:05Z"，
+ *  实测与 `%ai` 的 "+0000" 形态不同），非零才落 ±HH:MM——UTC 机器上两侧必须逐字节
+ *  相等（CI 即 UTC，本地 +08:00 走不到这条分支，见 isoGit.test 的零偏移用例） */
 function authorDateIso(timestamp: number, timezoneOffsetMinutes: number): string {
   const shifted = new Date((timestamp - timezoneOffsetMinutes * 60) * 1000)
   const base = shifted.toISOString().replace(/\.\d{3}Z$/, '')
-  const sign = timezoneOffsetMinutes <= 0 ? '+' : '-'
+  if (timezoneOffsetMinutes === 0) return `${base}Z`
+  const sign = timezoneOffsetMinutes < 0 ? '+' : '-'
   const abs = Math.abs(timezoneOffsetMinutes)
   const pad = (n: number): string => String(n).padStart(2, '0')
   return `${base}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`

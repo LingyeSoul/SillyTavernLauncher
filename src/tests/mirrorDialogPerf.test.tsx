@@ -26,6 +26,8 @@ const WINDOWED_ELEMENT_LIMIT = 320
 const SPEED_TEST_COMMIT_LIMIT = 6
 /** 测速链路 setStyle 上限：逐行 memo 后只有被测站那几行重发样式（修复前 21505） */
 const SPEED_TEST_STYLE_LIMIT = 1000
+/** 浮层挂载轮询上限（10ms/拍；正常一两拍即到，2s 只是负载机器的余量） */
+const MOUNT_WAIT_TICKS = 200
 
 let tempDir: string
 let originalCwd: string
@@ -39,7 +41,7 @@ let dialogModule: DialogModule
 let ThemeProvider: (props: { children: unknown }) => unknown
 let TooltipProvider: (props: { children: unknown }) => unknown
 let createElementFn: typeof import('react').createElement
-let testRoot: TestRoot
+let testRoot: TestRoot | undefined
 let renderer: TestRenderer
 
 /** 原生 mutation 计数：包装 applyBatch（batch facade 每次提交调一次） */
@@ -78,6 +80,9 @@ async function settle(ms = 30): Promise<void> {
 
 /** 每个用例前重建根：对话框是模态（anchored 浮层），跨用例复用会带上残余状态 */
 async function mountDialog(): Promise<void> {
+  // 旧根必须先卸载：每个根都是真实原生窗口，漏卸载的根会一路累积（门禁④是第 5 个），
+  // 在 CI 的 2 vCPU 上拖慢后续挂载
+  testRoot?.unmount()
   testRoot = createTestRoot({ width: 800, height: 644 })
   renderer = testRoot.renderer
   testRoot.root.render(
@@ -87,9 +92,16 @@ async function mountDialog(): Promise<void> {
       createElementFn(TooltipProvider as never, null, createElementFn(dialogModule.MirrorSettingsDialog as never)),
     ),
   )
-  await settle(40)
-  const list = renderer.findByTestId('mirror-list')
-  if (!list) throw new Error('对话框未挂载（mirror-list 不在树中）')
+  // Modal 走 `anchored deferred`：浮层在**真实时间**的下一拍才挂进保留树（实测与 flush
+  // 次数无关——连 flush 40 次也仍是空，2ms 睡眠 + 一次 flush 即到）。固定 40ms 单次
+  // 判定在负载机器上会赶不上（CI 曾报"对话框未挂载"）→ 有界轮询到真挂载为止
+  for (let i = 0; i < MOUNT_WAIT_TICKS; i += 1) {
+    await settle(10)
+    if (renderer.findByTestId('mirror-list')) return
+  }
+  throw new Error(
+    `对话框未挂载（mirror-list 不在树中，轮询 ${MOUNT_WAIT_TICKS} 拍；元素 ${renderer.getRetainedElementCount()}）`,
+  )
 }
 
 beforeAll(async () => {

@@ -526,6 +526,23 @@ describe('getStTagsEmbedded ↔ getStTags（spawn）等价性', () => {
     }
   })
 
+  it('零偏移作者时间：两侧同为 `…Z` 形态（git %aI 的 UTC 特例，机器时区无关）', async () => {
+    const repoDir = await initLocalRepo()
+    // 强制 +0000 作者时间：本地 +08:00 机器也能走到零偏移分支（CI 为 UTC，
+    // 曾经的实现打 "+00:00" 而 git 打 "Z"，仅在 UTC 机器上暴露）
+    writeFileSync(join(repoDir, 'utc.txt'), 'u\n', 'utf8')
+    await runGit(['add', '.'], repoDir, GIT)
+    await runGit(['commit', '--date=2026-01-02T03:04:05+00:00', '-m', 'utc-author'], repoDir, GIT)
+    await runGit(['tag', '1.16.0'], repoDir, GIT)
+
+    const authorDate = await runGit(['show', '1.16.0', '-s', '--format=%aI'], repoDir, GIT)
+    expect(authorDate.stdout.trim()).toBe('2026-01-02T03:04:05Z') // git 侧口径锚点
+    const embedded = await getStTagsEmbedded(repoDir)
+    const spawn = await getStTags(repoDir, GIT)
+    expect(embedded.data?.versions['1.16.0']?.date).toBe(authorDate.stdout.trim())
+    expect(spawn.data?.versions['1.16.0']?.date).toBe(authorDate.stdout.trim())
+  })
+
   it('附注 tag：embedded 剥壳取目标 commit + 作者日期；spawn 侧 commit 被 tag header 污染（既有怪癖，ST 官方 tag 为轻量不触发）', async () => {
     const repoDir = await initLocalRepo()
     await runGit(['tag', '-a', '1.15.0', '-m', 'annotated'], repoDir, GIT)
