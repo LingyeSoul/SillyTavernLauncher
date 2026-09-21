@@ -286,3 +286,110 @@ describe('镜像源对话框性能门禁③：shimmer 相位不波及对话框',
     getConfigStore().set('motionEnabled', false)
   }, 60_000)
 })
+
+describe('镜像源对话框性能门禁④：高速滚动下悬停/选中唯一性', () => {
+  /**
+   * 2026-09-21 上报"高速滚动下选项异常重复高亮"。
+   *
+   * 根因：行内本地 hover 态只由**自己**的 mouseLeave 清除，而高速滚动一帧内 GPUI
+   * 对滑过指针的多行连发 mouseEnter、leave 有丢失/乱序 → 各行的态各自为政，实测
+   * 一帧亮 4–5 行（慢速滚动下 enter/leave 配对正常，故既有慢滚 E2E 覆盖不到）。
+   * 修复 = 悬停状态提到父级单一槽位，"多行同亮"在数据结构上不可能。
+   *
+   * 复现钥匙：`dispatchScrollWheel`（不带 flush 的裸滚轮连发）制造一帧内大位移；
+   * `nativeSimulateScrollWheel` 每次自带 flush，慢滚永远复现不出来。
+   */
+  it('滚动风暴后带 hover 底色的行 ≤ 1、选中行 ≤ 1（修复前实测 4–5 行同亮）', async () => {
+    const { MIRROR_SOURCES } = await import('../services/mirrors')
+    const { getConfigStore } = await import('../services/configStore')
+    const { readSettings, useSettings } = await import('../stores/settings')
+    // 选站在列表深部：滚动后进窗，检验选中态跨推窗仍唯一
+    const selectedHost = MIRROR_SOURCES[Math.min(40, MIRROR_SOURCES.length - 1)]!.host
+    getConfigStore().set('github.enabled', true)
+    getConfigStore().set('github.auto', false)
+    getConfigStore().set('github.mirror', selectedHost)
+    getConfigStore().set('github.speedtest', { results: {}, failed: [], tested_at: '' })
+    useSettings.setState(readSettings())
+    await mountDialog()
+
+    const list = renderer.findByTestId('mirror-list')!
+    const listElement = renderer.getElement(list.id)!
+    const container =
+      listElement.parentId === null ? null : renderer.getElement(listElement.parentId)
+    expect(container, '列表外层容器应在树中').toBeDefined()
+    const containerBounds = renderer.getElementBounds(container!.id)
+    expect(containerBounds, '容器 bounds 可测（virtual-list 自身无 bounds）').not.toBeNull()
+    const cx = Math.round(containerBounds!.x + containerBounds!.width / 2)
+    const cy = Math.round(containerBounds!.y + 60)
+
+    /** 带 hover 底色的行（bg 只在"悬停且未选中"时非透明）与带选中勾的行 */
+    const highlightRows = (): { hovered: string[]; selected: string[] } => {
+      const hovered: string[] = []
+      const selected: string[] = []
+      const testIds = [
+        'mirror-row-official',
+        ...MIRROR_SOURCES.map((source) => `mirror-row-${source.host}`),
+      ]
+      for (const testId of testIds) {
+        const row = renderer.findByTestId(testId)
+        if (!row) continue
+        const bg = String(row.style.backgroundColor ?? '')
+        if (bg !== '' && bg !== 'transparent') hovered.push(testId.replace('mirror-row-', ''))
+        const svg = row.children
+          .map((id) => renderer.getElement(id))
+          .find((el) => el !== undefined && el.type === 'svg')
+        const color = String(svg?.style.color ?? '')
+        if (color !== '' && color !== 'transparent') {
+          selected.push(testId.replace('mirror-row-', ''))
+        }
+      }
+      return { hovered, selected }
+    }
+
+    const storm = (deltaY: number, count: number): void => {
+      for (let i = 0; i < count; i += 1) renderer.dispatchScrollWheel(cx, cy, 0, deltaY)
+      renderer.flush()
+      renderer.dispatchNativeEvents()
+      renderer.flush()
+    }
+
+    renderer.nativeSimulateMouseMove(cx, cy)
+    await settle(20)
+    const anchorBefore = renderer.getListScrollTop(list.id)?.[0] ?? 0
+    let anchorAfterFirstStorm = anchorBefore
+
+    for (let round = 0; round < 4; round += 1) {
+      storm(-240, 12)
+      if (round === 0) anchorAfterFirstStorm = renderer.getListScrollTop(list.id)?.[0] ?? 0
+      const down = highlightRows()
+      console.log(
+        `[mirror-gate] 风暴 ${round + 1}·下甩：锚 ${JSON.stringify(renderer.getListScrollTop(list.id))} | hover ${JSON.stringify(down.hovered)} | 选中 ${JSON.stringify(down.selected)}`,
+      )
+      expect(
+        down.hovered.length,
+        `高速下甩后多行同亮（${JSON.stringify(down.hovered)}）：逐行本地 hover 态累积回归`,
+      ).toBeLessThanOrEqual(1)
+      expect(
+        down.selected.length,
+        `高速下甩后选中态不唯一：${JSON.stringify(down.selected)}`,
+      ).toBeLessThanOrEqual(1)
+
+      storm(240, 8)
+      const up = highlightRows()
+      expect(
+        up.hovered.length,
+        `回甩后多行同亮（${JSON.stringify(up.hovered)}）`,
+      ).toBeLessThanOrEqual(1)
+      expect(
+        up.selected.length,
+        `回甩后选中态不唯一：${JSON.stringify(up.selected)}`,
+      ).toBeLessThanOrEqual(1)
+    }
+
+    // 非空转保证：风暴确实推动了列表（否则断言恒真、测不到东西）
+    expect(
+      anchorAfterFirstStorm,
+      `风暴未推动列表（锚 ${anchorBefore} → ${anchorAfterFirstStorm}）`,
+    ).toBeGreaterThan(anchorBefore)
+  }, 60_000)
+})
