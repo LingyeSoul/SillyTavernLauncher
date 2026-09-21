@@ -18,10 +18,12 @@ import type { ReactElement } from 'react'
 import { dirname, join } from 'node:path'
 import type { EnvMode } from '../../services/configStore'
 import { checkEnv, resolvePortableEnv, probeSystemGit, probeSystemNode } from '../../services/env'
+import { embeddedRuntimeVersion } from '../../services/embeddedRuntime'
 import { validateCustomArgs } from '../../services/processManager'
 import { launchCommandLine } from '../../services/platform'
 import { getStConfig, useSettings, TERMINAL_FONT_SIZE_PRESETS, validateTerminalFontFamily } from '../../stores/settings'
 import { DEFAULT_PRIVATE_ADDRESS_RANGES } from '../../services/stConfig'
+import { isValidMirrorHost } from '../../services/mirrors'
 import { useTerminalLogs } from '../../stores/terminalLogs'
 import { uiStateActions } from '../../stores/uiState'
 import { useThemeContext } from '../theme'
@@ -52,9 +54,10 @@ const TEXTS = {
   patchgit: '启用修改Git配置文件',
   patchgitDesc: '开启后修改系统环境的Git配置文件（镜像源改写）',
   mirrorLabel: 'GitHub 镜像',
-  mirrorHint: '当不使用官方源时，将使用镜像源加速下载',
+  mirrorSettings: '镜像源设置',
   sectionTools: '环境工具',
   checkEnv: '检查内置环境',
+  checkEnvEmbedded: '检查内置运行时',
   startCmd: '启动命令行',
   // 酒馆设置页
   sectionLaunchArgs: '启动参数',
@@ -136,11 +139,29 @@ const SETTINGS_TABS: Array<{ id: SettingsTabId; label: string }> = [
   { id: 'launcher', label: TEXTS.tabLauncher },
 ]
 
-const MIRROR_ITEMS = [
-  { value: 'github', label: '官方源 (github.com)' },
-  { value: 'gh-proxy.org', label: '镜像站点 (gh-proxy.org)' },
-  { value: 'gh.llkk.cc', label: '镜像站点 (gh.llkk.cc)' },
+/** 顶层二选一（加速侧的站点选择与测速在「镜像源设置」对话框内） */
+const MIRROR_MODE_ITEMS = [
+  { value: 'official', label: '官方源 (github.com)' },
+  { value: 'mirror', label: '加速镜像' },
 ]
+
+/**
+ * 镜像状态行文案：当前生效镜像 + 实测延迟 + 选优方式。
+ * 未选定（已开加速但自动选优没跑成功/没跑过）要明说，不能让用户以为已在加速。
+ * 注意：文案不得包含下拉项的完整标签（「加速镜像」/「官方源 (github.com)」）——
+ * E2E 的 getByText 是子串匹配，撞词会点到错误节点。
+ */
+function mirrorStatusText(settings: ReturnType<typeof useSettings.getState>): string {
+  if (!settings.mirrorEnabled) return '当前直连 github.com，不经过镜像加速'
+  const host = settings.mirrorHost
+  if (!isValidMirrorHost(host)) {
+    return '镜像加速已开启但尚未选定站点：请在「镜像源设置」中测速或手动选择，未选定期间按官方源访问'
+  }
+  const latency: number | undefined = settings.mirrorSpeedtest.results[host]
+  const latencyText = latency === undefined ? '' : ` · ${latency} ms`
+  const modeText = settings.mirrorAuto ? '自动测速选优' : '手动指定'
+  return `当前镜像：${host}${latencyText}（${modeText}）`
+}
 
 /** 环境模式下拉三选一（设计 §5.1 / D1：use_sys_env 开关的三态化后继；
  *  value 即 config 的 env_mode 键值） */
@@ -278,7 +299,8 @@ export function SettingsView() {
     settings.update({ envMode: v as EnvMode })
   }
 
-  /** ← in_env_check / sys_env_check：内置环境体检；system 模式改走系统探测 */
+  /** ← in_env_check / sys_env_check：内置环境体检；system 模式改走系统探测；
+   *  embedded 分支（设计 §5.4）：exe 自身即运行时，恒通过——仅报就绪，不做探测 */
   const handleCheckEnv = (): void => {
     if (settings.envMode === 'system') {
       const git = probeSystemGit()
@@ -293,7 +315,11 @@ export function SettingsView() {
       }
       return
     }
-    // TODO(phase5): embedded 专属分支（exe 自身即运行时，恒通过提示就绪）
+    if (settings.envMode === 'embedded') {
+      // 版本经 embeddedRuntimeVersion()：Node 测试宿主下 typeof 守卫兜底，不炸
+      uiStateActions.pushToast('success', `启动器内置运行时就绪（Bun ${embeddedRuntimeVersion()} · isomorphic-git）`)
+      return
+    }
     const paths = resolvePortableEnv(join(process.cwd(), 'env'))
     const result = checkEnv(paths)
     if (result === true) {
@@ -303,11 +329,13 @@ export function SettingsView() {
     }
   }
 
-  /** ← start_cmd：启动带便携 env PATH 的命令行 */
+  /** ← start_cmd：启动带便携 env PATH 的命令行；embedded 无 PATH 前置（§5.5） */
   const handleStartCmd = (): void => {
     const prependDirs: string[] = []
-    if (settings.envMode !== 'system') {
-      // TODO(phase5): embedded 专属分支（无 PATH 前置目录，直接 launchCommandLine([])）
+    if (settings.envMode === 'embedded') {
+      // embedded：exe 自身即运行时（Git 在进程内、无独立工具目录），无 PATH 可前置，
+      // 保留入口启动普通命令行（设计 §5.5）
+    } else if (settings.envMode !== 'system') {
       const paths = resolvePortableEnv(join(process.cwd(), 'env'))
       prependDirs.push(dirname(paths.nodeExe), paths.gitDir)
     } else {
@@ -377,20 +405,31 @@ export function SettingsView() {
             {/* patchgit 只影响系统 git 的 gitconfig 改写（D4：仅 system 模式渲染） */}
             {settings.envMode === 'system' &&
               switchRow('patchgit', TEXTS.patchgit, TEXTS.patchgitDesc, settings.patchgit, (v) => settings.update({ patchgit: v }))}
-            {/* 镜像行紧随 patchgit：两者同属 gitconfig 镜像链路（2026-09-20 自启动器页移入） */}
+            {/* 镜像行紧随 patchgit：两者同属 gitconfig 镜像链路（2026-09-20 自启动器页移入）
+                2026-09-21 镜像增强：顶层只做「官方源 / 加速镜像」二选一，具体站点与测速
+                收进「镜像源设置」对话框（不再把站名铺在设置页） */}
             <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12 }}>
               <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans, flexShrink: 0 }}>
                 {TEXTS.mirrorLabel}
               </text>
               <Select
-                items={MIRROR_ITEMS}
-                value={settings.mirror}
-                onValueChange={(v) => void settings.setMirror(v)}
+                items={MIRROR_MODE_ITEMS}
+                value={settings.mirrorEnabled ? 'mirror' : 'official'}
+                onValueChange={(v) => void settings.setMirrorMode(v === 'mirror' ? 'mirror' : 'official')}
                 width={200}
                 testId="setting-mirror"
               />
+              <Button
+                variant="default"
+                icon="settings"
+                onClick={() => uiStateActions.openDialog({ kind: 'mirrorSettings' })}
+                testId="setting-mirror-open">
+                {TEXTS.mirrorSettings}
+              </Button>
             </div>
-            <FieldHint style={{ marginTop: 4 }}>{TEXTS.mirrorHint}</FieldHint>
+            <FieldHint style={{ marginTop: 4 }} testId="setting-mirror-status">
+              {mirrorStatusText(settings)}
+            </FieldHint>
           </Card>
           <Card>
             <SectionTitle title={TEXTS.sectionTools} />
@@ -656,6 +695,7 @@ export function SettingsView() {
 }
 
 function envCheckLabel(envMode: EnvMode): string {
-  // TODO(phase5): embedded 专属文案（"启动器内置运行时就绪"）
+  // 三态各配文案：embedded 与 portable 的"内置"语义不同（exe 运行时 vs env/ 目录）
+  if (envMode === 'embedded') return TEXTS.checkEnvEmbedded
   return envMode === 'system' ? '检查系统环境' : TEXTS.checkEnv
 }

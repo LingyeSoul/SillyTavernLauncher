@@ -210,6 +210,15 @@ describe('全量 UI 渲染几何审计', () => {
     await audit('settings-select-open', 'audit-settings-select-open.png')
     await app.call('keystrokes', { keys: 'escape' })
     await sleep(SETTLE_MS)
+
+    // 镜像源设置对话框（2026-09-21 镜像增强）：55 行站点的模态长列表 + 模态滚动区
+    // （Modal maxHeight 560）是越界高发面，单列一个审计状态
+    await app.getByTestId('setting-mirror-open').click()
+    await app.getByTestId('mirror-list').waitFor({ timeoutMs: 10_000 })
+    await sleep(SETTLE_MS)
+    await audit('mirror-settings', 'audit-mirror-settings.png')
+    await app.getByTestId('mirror-close').click()
+    await sleep(SETTLE_MS)
     // 环境模式下拉三选一 + embedded 警告对话框（Embedded-All Phase 1 / D4）：
     // 种子 seedSt → env_mode='system'；点击目标项标签在"当前值 ≠ 目标值"时唯一
     // （触发器显示当前值标签，下拉项三选一，二者不重复命中）

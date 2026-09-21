@@ -26,6 +26,8 @@ import { render } from '@gpuix/react'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getConfigStore } from './services/configStore'
+import type { ConfigStore } from './services/configStore'
+import { createMirrorPingProbe, ensureMirrorSelection } from './services/mirrors'
 import { installCrashGuard } from './services/crashGuard'
 import { logError } from './services/errorLog'
 import { stopAllProcessesSync } from './services/processManager'
@@ -40,6 +42,8 @@ import { TooltipProvider } from './ui/components/Tooltip'
 import { LOGO_DATA_URL } from './ui/assets/logo'
 import { useStState } from './stores/stState'
 import { uiStateActions } from './stores/uiState'
+import { useSettings } from './stores/settings'
+import { useTerminalLogs } from './stores/terminalLogs'
 
 const RELEASES_URL = 'https://github.com/LingyeSoul/SillyTavernLauncher/releases/latest'
 
@@ -60,10 +64,44 @@ process.env.RUST_LOG ??=
 // crashGuard 只增不替：补 logs/Error_*.txt 落盘通道，退出语义不变。
 installCrashGuard()
 
+/**
+ * 启动期镜像源自愈（2026-09-21 镜像增强）：
+ * 自动模式下若尚未选定镜像站、或选定结果已过期（>12h），用 ping 测速选出最快镜像；
+ * 已有新鲜选定 → 直接返回（零网络开销，不打扰用户）。
+ * 返回 Promise 供 autostart 先行等待——首次安装的 clone 必须跑在选定的镜像上。
+ */
+function ensureMirrorAtStartup(config: ConfigStore): Promise<void> {
+  const enabled = config.get<boolean>('github.enabled', false)
+  const auto = config.get<boolean>('github.auto', true)
+  if (!enabled || !auto) return Promise.resolve()
+  if (process.env.STL_SKIP_MIRROR_AUTOSELECT === '1') return Promise.resolve()
+  return (async () => {
+    try {
+      const outcome = await ensureMirrorSelection({ probe: createMirrorPingProbe() })
+      if (outcome === null) return
+      useTerminalLogs.getState().appendLine(`[镜像] ${outcome.message}`)
+      if (outcome.exhausted) {
+        uiStateActions.pushToast('warning', outcome.message)
+        return
+      }
+      if (outcome.changed) uiStateActions.pushToast('info', outcome.message)
+      // 选中结果必须落到 gitconfig insteadOf：portable/system 的 git 加速靠它生效
+      // （embedded 走操作时内存前缀）。选优只写 config.json 而不落 gitconfig 会出现
+      // "测速选好了但 clone 仍走官方源"；这里无条件同步一次（覆盖手改配置/升级场景）
+      await useSettings.getState().syncMirrorToGit(outcome.host, true)
+    } catch (err) {
+      logError(`[startup] 镜像源自动选优失败: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  })()
+}
+
 /** ← main.py check_first_launch 的启动对话框序列 */
 function StartupFlow() {
   useEffect(() => {
     const config = getConfigStore()
+
+    // 0. 镜像源自愈（先于一切网络操作；autostart 时被 await，见步骤 4）
+    const mirrorReady = ensureMirrorAtStartup(config)
 
     // 1. 首次运行 → 欢迎问答
     if (config.get<boolean>('first_run', true)) {
@@ -124,8 +162,9 @@ function StartupFlow() {
     }
 
     // 4. 自动启动酒馆（D1 新语义：主窗口正常显示）
+    //    先等镜像选优落定：首次安装的 clone 要跑在选定镜像上（无选定则瞬间返回）
     if (config.get<boolean>('autostart', false)) {
-      void useStState.getState().startSt()
+      void mirrorReady.then(() => useStState.getState().startSt())
     }
   }, [])
   return null

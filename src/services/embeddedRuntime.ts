@@ -36,6 +36,18 @@ export function defaultEmbeddedExecPath(): string {
   return process.execPath
 }
 
+/**
+ * embedded 模式的宿主 Bun 版本（设置页体检 toast 展示用，设计 §5.4）。
+ *
+ * 纪律：vitest / ui 测试跑在 Node 下没有 Bun 全局——直接 `Bun.version` 会在测试里
+ * ReferenceError（AGENTS 测试防污染纪律的同族坑）。必须 typeof 守卫：
+ * Bun 宿主取真值；非 Bun 宿主（仅测试可达，生产 embedded 恒为 Bun）依次兜底
+ * `process.versions.bun` / 'unknown'，保证任何宿主下都是非空字符串。
+ */
+export function embeddedRuntimeVersion(): string {
+  return typeof Bun !== 'undefined' ? Bun.version : (process.versions.bun ?? 'unknown')
+}
+
 /** §9 CA 缓存文件路径（<root>/cache/win-ca.pem） */
 export function embeddedCaPemPath(baseDir?: string): string {
   return join(baseDir ?? process.cwd(), 'cache', 'win-ca.pem')

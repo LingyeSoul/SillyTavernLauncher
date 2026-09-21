@@ -29,6 +29,12 @@ export interface ModalProps {
   actions?: ReactNode
   /** 强选择模态（EULA/退出确认）：不响应 Escape */
   strong?: boolean
+  /**
+   * 面板最大高度（默认 480）。面板**不裁剪**内容——超出会画出面板压过动作区，
+   * 故长内容对话框须自行把内容压进预算（正文盒用 SmartScrollArea 钳滚动区）；
+   * 本值只提供更大的预算（镜像源设置的 55 行长列表用 560）。
+   */
+  maxHeight?: number
 }
 
 const EXIT_MS = 240
@@ -58,6 +64,7 @@ export function Modal({
   children,
   actions,
   strong = false,
+  maxHeight = 480,
 }: ModalProps) {
   const t = useTheme()
   const { enabled: motionEnabled } = useMotion()
@@ -158,7 +165,7 @@ export function Modal({
           style={{
             position: 'relative',
             width,
-            maxHeight: 480,
+            maxHeight,
             display: 'flex',
             flexDirection: 'column',
             backgroundColor: t.bg.overlay, // 不透明（浮层铁律）

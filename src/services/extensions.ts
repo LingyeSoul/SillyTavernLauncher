@@ -34,6 +34,15 @@ import { checkStInstalled } from './env'
 import { logError } from './errorLog'
 import { resolveGitExecutable } from './git'
 import { createIsoGitOps } from './isoGit'
+import {
+  activeMirrorHost,
+  applyMirrorPrefix,
+  createMirrorPingProbe,
+  createMirrorProbe,
+  failoverMirror,
+  isNetworkFailureText,
+  type MirrorFailoverOutcome,
+} from './mirrors'
 import { isDirSync, realpathBestEffort } from './atomicFs'
 import { spawnAsync } from './runtime'
 import type { BoolMessage } from './types'
@@ -267,6 +276,8 @@ export interface ExtensionManagerOptions {
   getEnvMode?: () => EnvMode
   /** embedded 浅克隆（Phase 4 设计 §8.3；默认 IsoGitOps.cloneDepth；测试注入 mock） */
   isoGitCloneDepth?: (url: string, dir: string, depth?: number) => Promise<BoolMessage>
+  /** 网络类克隆失败后的镜像兜底（默认 mirrors.failoverMirror + 真实探针；测试注入隔离网络） */
+  mirrorFailover?: (reason: string) => Promise<MirrorFailoverOutcome>
 }
 
 export class ExtensionManager {
@@ -276,11 +287,11 @@ export class ExtensionManager {
   private readonly gitRunner: GitRunner
   private readonly getEnvMode: () => EnvMode
   private readonly isoGitCloneDepth: (url: string, dir: string, depth?: number) => Promise<BoolMessage>
+  private readonly mirrorFailover: (reason: string) => Promise<MirrorFailoverOutcome>
 
   constructor(options: ExtensionManagerOptions = {}) {
     this.baseDir = options.baseDir ?? process.cwd()
-    this.getMirror =
-      options.getMirror ?? (() => getConfigStore().get<string>('github.mirror', 'github'))
+    this.getMirror = options.getMirror ?? activeMirrorHost
     this.logFn = options.log ?? (() => undefined)
     this.gitRunner = options.gitRunner ?? defaultGitRunner
     this.getEnvMode =
@@ -288,6 +299,14 @@ export class ExtensionManager {
     this.isoGitCloneDepth =
       options.isoGitCloneDepth ??
       ((url, dir, depth) => createIsoGitOps({ onLog: (message) => this.log(message) }).cloneDepth(url, dir, depth))
+    this.mirrorFailover =
+      options.mirrorFailover ??
+      ((reason) =>
+        failoverMirror(reason, {
+          // 候选探测走 ping（零批量负载）；当前镜像取证走一次真实请求（见 mirrors.ts）
+          probe: createMirrorPingProbe(),
+          verify: createMirrorProbe(),
+        }))
   }
 
   /** 单例晚到的 log 选项也能生效（原 first-wins 会把后续回调静默丢弃） */
@@ -469,18 +488,11 @@ export class ExtensionManager {
     }
   }
 
-  /** ← _apply_github_mirror：GitHub URL 前置镜像站 */
+  /** ← _apply_github_mirror：GitHub URL 前置镜像站。
+   *  DEVIATION（2026-09-21 镜像增强）：名单与前缀规则收敛到 mirrors.applyMirrorPrefix
+   *  （原先此处硬编码 gh-proxy.org / gh.llkk.cc 两站，新增镜像站要同步改三处）。 */
   applyGithubMirror(url: string): string {
-    const mirror = this.getMirror()
-    if (mirror === 'github') return url
-
-    const githubPatterns = [/^https?:\/\/github\.com\//, /^https?:\/\/raw\.githubusercontent\.com\//]
-    const isGithub = githubPatterns.some((pattern) => pattern.test(url))
-    if (!isGithub) return url
-
-    if (mirror === 'gh-proxy.org') return `https://gh-proxy.org/${url}`
-    if (mirror === 'gh.llkk.cc') return `https://gh.llkk.cc/${url}`
-    return url
+    return applyMirrorPrefix(url, this.getMirror())
   }
 
   /** ← install_from_git 内部的 URL 提取与校验（纯函数便于测试） */
@@ -554,47 +566,26 @@ export class ExtensionManager {
 
     try {
       this.log(`正在从 Git 安装扩展: ${extName}`)
-      // Phase 4（设计 §8.3）：embedded 模式无外部 git.exe——经 IsoGitOps 浅克隆
-      // （depth 1 + singleBranch）；URL 校验与镜像前缀逻辑在上游不变。
-      // isomorphic-git clone 不支持 AbortSignal，embedded 分支的取消语义为
-      // "整次安装作废"（失败/残留目录照常清理），DEVIATION 自 spawn 路径的即时中止。
-      if (this.getEnvMode() === 'embedded') {
-        const isoResult = await this.isoGitCloneDepth(repoUrl, targetPath, 1)
-        if (isoResult.ok) {
-          if (this.isValidExtension(targetPath)) {
-            this.log(`成功安装扩展: ${extName}`)
-            return { ok: true, message: `成功安装扩展: ${extName}` }
-          }
-          removeTree(targetPath, true)
-          return {
-            ok: false,
-            message: '安装的仓库不是有效的 SillyTavern 扩展（缺少 manifest.json 或 index.js）',
-          }
-        }
-        const isoError = isoResult.message.trim() || '未知错误'
-        return { ok: false, message: `Git 克隆失败: ${isoError}` }
-      }
-      // DEVIATION: 任务规格要求 --depth 1 浅克隆（Python 无）
-      const result = await this.gitRunner(
-        ['clone', '--depth', '1', '--', repoUrl, targetPath],
-        this.baseDir,
-        signal,
-      )
-
-      if (result.exitCode === 0) {
-        if (this.isValidExtension(targetPath)) {
-          this.log(`成功安装扩展: ${extName}`)
-          return { ok: true, message: `成功安装扩展: ${extName}` }
-        }
-        // 不是有效扩展，删除并返回错误
-        removeTree(targetPath, true)
-        return {
-          ok: false,
-          message: '安装的仓库不是有效的 SillyTavern 扩展（缺少 manifest.json 或 index.js）',
+      let attempt = await this.attemptClone(repoUrl, targetPath, signal)
+      // 网络类克隆失败 → 取证式镜像兜底（探活当前镜像，确不可达才切换）后重试一次；
+      // 手动模式/当前镜像仍可达时不动配置，按原样回报失败
+      if (!attempt.ok && attempt.networkish) {
+        const outcome = await this.mirrorFailover(attempt.message)
+        this.log(outcome.message)
+        if (outcome.switched) {
+          if (existsSync(targetPath)) removeTree(targetPath, true)
+          attempt = await this.attemptClone(
+            this.applyGithubMirror(originalUrl),
+            targetPath,
+            signal,
+          )
         }
       }
-      const errorMsg = result.stderr.trim() || '未知错误'
-      return { ok: false, message: `Git 克隆失败: ${errorMsg}` }
+      if (attempt.ok) {
+        this.log(`成功安装扩展: ${extName}`)
+        return { ok: true, message: `成功安装扩展: ${extName}` }
+      }
+      return { ok: false, message: attempt.message }
     } catch (err) {
       const errorMsg = `安装扩展失败: ${err instanceof Error ? err.message : String(err)}`
       logError(`[extensions] ${errorMsg}`)
@@ -602,6 +593,54 @@ export class ExtensionManager {
         removeTree(targetPath, true)
       }
       return { ok: false, message: errorMsg }
+    }
+  }
+
+  /**
+   * 单次 git 克隆尝试（Phase 4 设计 §8.3：embedded → IsoGitOps 浅克隆 depth 1 +
+   * singleBranch，spawn → git clone --depth 1 参数数组）。返回 networkish 供调用方
+   * 判定是否值得走镜像兜底重试——"目录已存在/产物无效"之类的本地失败不应触发换源。
+   */
+  private async attemptClone(
+    repoUrl: string,
+    targetPath: string,
+    signal?: AbortSignal,
+  ): Promise<{ ok: true } | { ok: false; networkish: boolean; message: string }> {
+    if (this.getEnvMode() === 'embedded') {
+      const isoResult = await this.isoGitCloneDepth(repoUrl, targetPath, 1)
+      if (isoResult.ok) return this.verifyClonedExtension(targetPath)
+      const isoError = isoResult.message.trim() || '未知错误'
+      return {
+        ok: false,
+        networkish: isNetworkFailureText(isoError),
+        message: `Git 克隆失败: ${isoError}`,
+      }
+    }
+    // DEVIATION: 任务规格要求 --depth 1 浅克隆（Python 无）
+    const result = await this.gitRunner(
+      ['clone', '--depth', '1', '--', repoUrl, targetPath],
+      this.baseDir,
+      signal,
+    )
+    if (result.exitCode === 0) return this.verifyClonedExtension(targetPath)
+    const errorMsg = result.stderr.trim() || '未知错误'
+    return {
+      ok: false,
+      networkish: isNetworkFailureText(errorMsg),
+      message: `Git 克隆失败: ${errorMsg}`,
+    }
+  }
+
+  /** 克隆产物校验：非有效扩展 → 清理目录并报错（两路径语义一致） */
+  private verifyClonedExtension(
+    targetPath: string,
+  ): { ok: true } | { ok: false; networkish: boolean; message: string } {
+    if (this.isValidExtension(targetPath)) return { ok: true }
+    removeTree(targetPath, true)
+    return {
+      ok: false,
+      networkish: false,
+      message: '安装的仓库不是有效的 SillyTavern 扩展（缺少 manifest.json 或 index.js）',
     }
   }
 

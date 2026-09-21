@@ -22,6 +22,7 @@ import { SyncFirstRunDialog } from './SyncFirstRunDialog'
 import { VersionSwitchDialog } from './VersionSwitchDialog'
 import { GitInstallDialog, ZipInstallDialog } from './InstallDialogs'
 import { DeleteExtensionDialog } from './DeleteExtensionDialog'
+import { MirrorSettingsDialog } from './MirrorSettingsDialog'
 
 export function DialogHost() {
   const dialogs = useUiState((s) => s.dialogs)
@@ -73,6 +74,8 @@ function DialogSlot({ dialog }: { dialog: DialogDescriptor }) {
       return <ZipInstallDialog />
     case 'deleteExtension':
       return <DeleteExtensionDialog ext={dialog.ext} />
+    case 'mirrorSettings':
+      return <MirrorSettingsDialog />
     default:
       return null
   }

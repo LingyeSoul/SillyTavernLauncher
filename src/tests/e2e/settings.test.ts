@@ -70,16 +70,45 @@ describe('设置页交互', () => {
     // 镜像已移入「环境」tab（默认激活），无需切 tab；更新检查仍在「启动器设置」tab
     await app.getByTestId('setting-mirror').waitFor({ timeoutMs: 10_000 })
 
-    // --- 1. 切镜像下拉：github → gh-proxy.org ---
+    // --- 1a. 镜像二选一：官方源 → 加速镜像（enabled 翻转；种子 host 为空时不联网）---
     await app.getByTestId('setting-mirror').click()
     // 下拉面板项（SelectPrimitive.Content 的 anchored 浮层）
-    await app.getByText('镜像站点 (gh-proxy.org)').waitFor({ timeoutMs: 5_000 })
-    await app.getByText('镜像站点 (gh-proxy.org)').click()
-    await expectToast(session, '镜像配置已更新')
+    await app.getByText('加速镜像').waitFor({ timeoutMs: 5_000 })
+    await app.getByText('加速镜像').click()
+    await expectToast(session, '尚未选定镜像站')
 
     let cfg = session.readConfig()
-    const github = cfg?.github as Record<string, unknown> | undefined
-    expect(github?.mirror, 'config.json github.mirror 应更新为 gh-proxy.org').toBe('gh-proxy.org')
+    let github = cfg?.github as Record<string, unknown> | undefined
+    expect(github?.enabled, 'config.json github.enabled 应为 true').toBe(true)
+
+    // --- 1b. 镜像源设置对话框：手动选定站点（纯本地，不发起测速）---
+    // 点击目标取列表首行（github.dpik.top：注册表首位，未测速时排序即注册表序）——
+    // 自动化 click 按元素 bounds 中心落点，而滚动子树内的 bounds 是**内容坐标**
+    // （视口 300px、内容 2243px，滚出视口外的行 y 会远超窗口高 → 点击落空）。
+    // 首行在视口内，坐标有效；要测更靠下的行得先 wheel 滚到它。
+    await app.getByTestId('setting-mirror-open').click()
+    await app.getByTestId('mirror-list').waitFor({ timeoutMs: 10_000 })
+    await app.getByTestId('mirror-row-github.dpik.top').click()
+    await expectToast(session, '已手动指定镜像：github.dpik.top')
+
+    cfg = session.readConfig()
+    github = cfg?.github as Record<string, unknown> | undefined
+    expect(github?.mirror, 'config.json github.mirror 应为手动选定的站点').toBe('github.dpik.top')
+    expect(github?.enabled).toBe(true)
+    // 手动选定 = 关闭自动选优（不再被自动切换掉用户的选择）
+    expect(github?.auto, '手动指定镜像后 auto 应为 false').toBe(false)
+    await app.getByTestId('mirror-close').click()
+    // 等对话框退场（240ms）+ 空档，避免残留行节点与下拉项撞文案
+    await sleep(400)
+
+    // --- 1c. 切回官方源：enabled 翻转回 false，host 保留（便于再切回加速）---
+    await app.getByTestId('setting-mirror').click()
+    await app.getByText('官方源 (github.com)').click()
+    await expectToast(session, '已切换到 GitHub 官方源')
+    cfg = session.readConfig()
+    github = cfg?.github as Record<string, unknown> | undefined
+    expect(github?.enabled).toBe(false)
+    expect(github?.mirror, '切回官方源保留已选 host').toBe('github.dpik.top')
 
     // --- 2. 切开关：checkupdate false → true（「启动器设置」tab）---
     await app.getByTestId('settings-tab-launcher').click()

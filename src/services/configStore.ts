@@ -46,7 +46,22 @@ export interface LauncherConfig {
   /** 用户是否已首次启动过 SillyTavern */
   has_started_st: boolean
   github: {
+    /** 是否使用加速镜像（false = 官方源 github.com）；UI 顶层二选一的落盘键 */
+    enabled: boolean
+    /** 选中的镜像 host（registry 内主机名）；'' = 尚未选定（自动选优未完成，按官方源走） */
     mirror: string
+    /** true = 自动测速选优 + 故障自动切换；用户手动选定镜像后置 false */
+    auto: boolean
+    /** 测速结果快照（services/mirrors.ts 的 MirrorSpeedTest） */
+    speedtest: {
+      results: Record<string, number>
+      failed: string[]
+      tested_at: string
+    }
+    /**
+     * @deprecated 旧版镜像名映射表（github/ghproxy/ghllkk 三站硬编码）。镜像站名单
+     * 已收敛到 services/mirrors.ts 的注册表，本字段仅为旧配置兼容保留，请勿消费。
+     */
     mirrors: {
       github: string
       ghproxy: string
@@ -85,7 +100,12 @@ const DEFAULT_CONFIG: LauncherConfig = {
   downloads: [],
   has_started_st: false,
   github: {
-    mirror: 'gh-proxy.org',
+    // 新装默认走加速镜像 + 自动测速选优（首启/首次网络操作前由
+    // mirrors.ensureMirrorSelection 选出实测最快的站；全不可达则回落官方源）
+    enabled: true,
+    mirror: '',
+    auto: true,
+    speedtest: { results: {}, failed: [], tested_at: '' },
     mirrors: {
       github: 'github.com',
       ghproxy: 'gh-proxy.org',
@@ -122,6 +142,7 @@ export class ConfigStore {
     this.probes = probes ?? { probeGit: probeSystemGit, probeNode: probeSystemNode }
     this.config = this.loadConfig()
     this.migrateUseSysEnv()
+    this.migrateGithubMirror()
     // 首次运行时检查环境类型（与 Python __init__ 一致）
     if (this.get<boolean>('first_run', true)) {
       this.checkAndSetEnvType()
@@ -227,6 +248,28 @@ export class ConfigStore {
   /** ← _check_and_set_env_type：仅首启时按探测结果写 env_mode */
   private checkAndSetEnvType(): void {
     this.set('env_mode', this.detectEnvType())
+  }
+
+  /**
+   * 镜像源模型迁移（2026-09-21）：旧配置只有 `github.mirror`，且用哨兵值
+   * 'github' 表示官方源（真镜像名直接写 host）。新模型拆为
+   * enabled（是否加速）+ mirror（host，官方源时为空串）+ auto/speedtest。
+   * 迁移语义：旧值 'github'/缺失 → enabled=false；真镜像名 → enabled=true 并保留
+   * host（用户既有加速行为不因升级而丢失，后续自动选优可再优化）。幂等：写回
+   * enabled 后本函数不再改动（'enabled' in gh 即返回）。
+   */
+  private migrateGithubMirror(): void {
+    const raw = this.config as unknown as Record<string, unknown>
+    const github = raw.github
+    if (github === null || typeof github !== 'object') return
+    const gh = github as Record<string, unknown>
+    if (!('auto' in gh)) gh.auto = true
+    if (!('speedtest' in gh)) gh.speedtest = { results: {}, failed: [], tested_at: '' }
+    if ('enabled' in gh) return
+    const mirror = typeof gh.mirror === 'string' ? gh.mirror : ''
+    const isOfficial = mirror === '' || mirror === 'github'
+    gh.enabled = !isOfficial
+    if (isOfficial) gh.mirror = ''
   }
 
   /**

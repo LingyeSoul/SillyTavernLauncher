@@ -18,8 +18,8 @@
  *   自行抓 raw.githubusercontent / GitHub Releases API 版本号并本地 semver
  *   比对，不经原生 checkUpdate。原生链路留待后续接入，封装与测试保留备接线。
  */
-import { getConfigStore } from './configStore'
 import { errMsg, logError } from './errorLog'
+import { activeMirrorHost, applyMirrorPrefix } from './mirrors'
 import {
   fetchWithTlsFallback,
   type CaProvider,
@@ -176,15 +176,18 @@ export function compareLauncherVersions(localVersion: string, remoteVersion: str
 // 镜像 URL（← get_github_mirror + raw/api URL 构造）
 // ---------------------------------------------------------------------------
 
-/** ← get_github_mirror */
+/** ← get_github_mirror：当前生效镜像（官方源 = 'github'；读取口径统一在 mirrors.ts） */
 export function getGithubMirror(getMirror?: () => string): string {
-  return (getMirror ?? (() => getConfigStore().get<string>('github.mirror', 'github')))()
+  return (getMirror ?? activeMirrorHost)()
 }
 
-/** 镜像前缀 URL 构造：github → 原始；镜像站 → https://{mirror}/{原始} */
+/**
+ * 镜像前缀 URL 构造。
+ * DEVIATION（2026-09-21 镜像增强）：前缀规则已收敛到 mirrors.applyMirrorPrefix
+ * （注册表门禁 + GitHub 域名判定），本函数保留为薄委托以兼容既有导入与测试。
+ */
 export function withMirrorPrefix(mirror: string, url: string): string {
-  if (mirror === 'github') return url
-  return `https://${mirror}/${url}`
+  return applyMirrorPrefix(url, mirror)
 }
 
 // ---------------------------------------------------------------------------

@@ -59,6 +59,14 @@ import {
   type EmbeddedRuntimeOptions,
 } from './embeddedRuntime'
 import { createIsoGitOps, createSpawnGitOps, type StRepoOps } from './isoGit'
+import {
+  createMirrorPingProbe,
+  createMirrorProbe,
+  failoverMirror,
+  isValidMirrorHost,
+  OFFICIAL_MIRROR,
+  type MirrorFailoverOutcome,
+} from './mirrors'
 import { errMsg, logError } from './errorLog'
 import type { BoolMessage, ProcessInfo, SyncSpawnResult } from './types'
 
@@ -489,6 +497,12 @@ export interface StLifecycleDeps {
    * （包装原 executeCommand 命令串，D3 逐字节一致）；测试注入 mock 断言路由。
    */
   createRepoOps?: (tools: Toolchain) => StRepoOps
+  /**
+   * 网络类 git 失败后的镜像兜底（2026-09-21 镜像增强；默认 mirrors.failoverMirror
+   * + 真实探针）。取证式：探活当前镜像，仍可达则判定失败与镜像无关、配置不动；
+   * 确不可达才切换到最快可用站。测试注入以隔离真实网络探测。
+   */
+  mirrorFailover?: (reason: string) => Promise<MirrorFailoverOutcome>
 }
 
 export interface StLifecycleOptions {
@@ -669,6 +683,47 @@ export class StLifecycle {
     }
   }
 
+  /** 清理失败/残缺的安装目录（重试前与最终失败时都调用，避免残留目录挡住下一次 clone） */
+  private cleanFailedCloneDir(): void {
+    if (!this.isFailedCloneFolder(this.stDir)) return
+    try {
+      rmSync(this.stDir, { recursive: true, force: true })
+      this.log('已自动清理失败的安装目录')
+    } catch (cleanupErr) {
+      logError(`[stLifecycle] 清理失败目录时出错: ${errMsg(cleanupErr)}`)
+    }
+  }
+
+  /**
+   * 网络类 git 失败后的镜像兜底（2026-09-21 镜像增强）。
+   * 取证在 mirrors.failoverMirror 内完成（探活当前镜像，仍可达即不动配置）；
+   * 发生切换时把新镜像落到 gitconfig insteadOf 与 ST remote（spawn 路径生效口径），
+   * embedded 路径本就是"操作时内存前缀"，改配置即已生效。
+   * 返回是否发生了切换——调用方据此决定要不要用新镜像重试一次。
+   */
+  private async tryMirrorFailover(reason: string): Promise<boolean> {
+    try {
+      const failover =
+        this.deps.mirrorFailover ??
+        ((r: string) =>
+          failoverMirror(r, {
+            // 候选探测用 ping（零服务端应用层负载）；当前镜像取证用一次真实请求
+            // （ping 通只证明主机活着，反代链路是否通须打真实端点才知道）
+            probe: createMirrorPingProbe(),
+            verify: createMirrorProbe(),
+          }))
+      const outcome = await failover(reason)
+      this.log(outcome.message)
+      if (!outcome.switched || outcome.to.length === 0) return false
+      const applied = await this.updateMirrorSetting(outcome.to)
+      if (!applied.ok) this.log(`镜像切换落盘失败: ${applied.message}`)
+      return true
+    } catch (err) {
+      logError(`[stLifecycle] 镜像自动切换异常: ${errMsg(err)}`)
+      return false
+    }
+  }
+
   async installSt(): Promise<BoolMessage> {
     try {
       const validation = validatePathForNpm(this.baseDir)
@@ -708,7 +763,15 @@ export class StLifecycle {
       }
 
       this.log(`正在从 ${ST_REPO_URL} 安装SillyTavern...`)
-      const cloneResult = await this.repoOps(tools).cloneRelease(ST_REPO_URL, this.stDir)
+      let cloneResult = await this.repoOps(tools).cloneRelease(ST_REPO_URL, this.stDir)
+      // 网络类失败 → 镜像兜底（取证探活决定是否真的换源），切换后重试一次
+      if (!cloneResult.ok && cloneResult.exitCode !== null) {
+        const switched = await this.tryMirrorFailover(`git clone 失败: ${cloneResult.message}`)
+        if (switched) {
+          this.cleanFailedCloneDir()
+          cloneResult = await this.repoOps(tools).cloneRelease(ST_REPO_URL, this.stDir)
+        }
+      }
       if (cloneResult.exitCode === null) {
         this.log('安装失败: 创建git clone进程失败')
         return { ok: false, message: '安装失败: 创建git clone进程失败' }
@@ -716,15 +779,7 @@ export class StLifecycle {
       if (!cloneResult.ok) {
         const errorMsg = `安装失败: git clone进程返回错误码: ${cloneResult.exitCode}`
         this.log(errorMsg)
-        // 自动清理失败的clone文件夹
-        if (this.isFailedCloneFolder(this.stDir)) {
-          try {
-            rmSync(this.stDir, { recursive: true, force: true })
-            this.log('已自动清理失败的安装目录')
-          } catch (cleanupErr) {
-            logError(`[stLifecycle] 清理失败目录时出错: ${errMsg(cleanupErr)}`)
-          }
-        }
+        this.cleanFailedCloneDir()
         return { ok: false, message: errorMsg }
       }
       this.log('SillyTavern安装完成')
@@ -1175,6 +1230,11 @@ export class StLifecycle {
         }
         if (retryCount < 2) {
           retryCount += 1
+          // 首次失败先做镜像兜底（取证探活；镜像仍可达则配置不动，继续按
+          // package-lock 冲突路径恢复）——避免把"镜像站挂了"误诊成本地冲突
+          if (retryCount === 1) {
+            await this.tryMirrorFailover('git pull 失败')
+          }
           if (tools.embedded) {
             // embedded：非快进兜底已在 Ops 内完成，重试仅覆盖网络抖动
             this.log(`Git更新失败，正在重试... (尝试次数: ${retryCount}/2)`)
@@ -1252,6 +1312,7 @@ export class StLifecycle {
         const ops = this.repoOps(tools)
         const fetchResult = await ops.fetchOrigin(this.stDir)
         if (!fetchResult.ok) {
+          await this.tryMirrorFailover(`git fetch 失败: ${fetchResult.message}`)
           return { status: 'check-failed', message: '检查更新失败，直接启动SillyTavern...' }
         }
         this.log('正在检查release分支状态...')
@@ -1283,6 +1344,7 @@ export class StLifecycle {
         return { status: 'check-failed', message: '执行更新检查命令失败，直接启动SillyTavern...' }
       }
       if ((await this.waitProcess(fetchProcess)) !== 0) {
+        await this.tryMirrorFailover('git fetch 失败（spawn 路径）')
         return { status: 'check-failed', message: '检查更新失败，直接启动SillyTavern...' }
       }
 
@@ -1466,10 +1528,25 @@ export class StLifecycle {
     return gitconfigPath
   }
 
-  async updateMirrorSetting(mirrorType: string): Promise<BoolMessage> {
+  /**
+   * 镜像切换入口（← update_mirror_setting）：config 落盘 + gitconfig insteadOf 手术
+   * + ST remote 同步。
+   * 2026-09-21 镜像增强：mirrorType 采用官方源哨兵 'github'（UI 二选一的"官方源"侧）
+   * ——此时只关掉加速（github.enabled=false）并保留已选 host，便于切回加速时复用；
+   * options.auto=false 表示用户手动指定（关掉自动选优与故障切换）。
+   */
+  async updateMirrorSetting(
+    mirrorType: string,
+    options: { auto?: boolean } = {},
+  ): Promise<BoolMessage> {
     try {
-      // 保存设置到配置文件
-      this.config.set('github.mirror', mirrorType)
+      const official = mirrorType === OFFICIAL_MIRROR || mirrorType.length === 0
+      const currentHost = this.config.get<string>('github.mirror', '')
+      // 保存设置到配置文件（官方源：保留已选 host，只翻转 enabled）
+      this.config.set('github.enabled', !official)
+      if (!official) this.config.set('github.mirror', mirrorType)
+      else if (!isValidMirrorHost(currentHost)) this.config.set('github.mirror', '')
+      if (options.auto !== undefined) this.config.set('github.auto', options.auto)
       this.config.save()
 
       // 判断是否应修改内部Git配置（仅限内置Git或启用了patchgit的系统Git；
