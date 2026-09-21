@@ -221,6 +221,38 @@ describe('设置页分 tab（smoke）', () => {
     expect(renderer.findByTestId('setting-port')).toBeUndefined()
     await resetUiStack()
   })
+
+  it('embedded 模式：常驻警告 hint + 体检按钮专属文案 + 体检恒通过 toast', async () => {
+    await resetUiStack()
+    await clickTestId('nav-settings')
+    // 上一用例可能把 tab 留在酒馆/启动器（activeTab 是组件态，导航不重置）——先回环境页
+    await clickTestId('settings-tab-env')
+    await settle()
+    // 直改 store 落 embedded（不经 Select——那会触发兼容性风险确认对话框）
+    app.useSettings.getState().update({ envMode: 'embedded' })
+    await settle()
+    // update 的"设置已保存"toast 副产物先清空（单例槽位），保证后续体检 toast 直接上屏
+    await resetUiStack()
+
+    // D4：embedded 激活期间常驻警告 hint
+    expect(renderer.findByTestId('setting-env-mode-warning')).toBeDefined()
+    // §5.4：体检按钮 embedded 专属文案（区别于 portable 的"检查内置环境"）
+    expect(renderer.findByText('检查内置运行时')).toBeDefined()
+
+    // 体检 embedded 分支：exe 自身即运行时恒通过——Node 测试宿主下能产出该 toast
+    // 即同时证明 Bun 版本取值经 typeof 守卫兜底（无 ReferenceError）
+    await clickTestId('setting-check-env')
+    await settle()
+    const toast = app.useUiState.getState().toast
+    expect(toast?.kind).toBe('success')
+    expect(toast?.message).toContain('启动器内置运行时就绪（Bun ')
+    expect(toast?.message).toContain(' · isomorphic-git）')
+
+    // 还原 portable，避免污染后续用例
+    app.useSettings.getState().update({ envMode: 'portable' })
+    await settle()
+    await resetUiStack()
+  })
 })
 
 describe('智能滚动（smoke）', () => {

@@ -1106,6 +1106,51 @@ describe('Phase 4 · StRepoOps 路由（设计计划 §8.3，D3 零回归）', (
     expect(existsSync(stDir)).toBe(false)
   })
 
+  it('镜像增强（2026-09-21）：clone 失败 → 取证切换镜像并重试一次', async () => {
+    const stDir = join(root, 'SillyTavern')
+    mkdirSync(join(stDir, '.git'), { recursive: true }) // 失败 clone 残留形态
+    // 第 1 次进程（clone）失败；切换镜像后的第 2 次（重试）成功
+    const harness = makeExecHarness((_command, index) => (index === 1 ? 1 : 0))
+    const failover = vi.fn(async (_reason: string) => ({
+      switched: true,
+      from: 'gh-proxy.org',
+      to: 'github.dpik.top',
+      latencyMs: 42,
+      exhausted: false,
+      message: '镜像 gh-proxy.org 不可用，已自动切换至 github.dpik.top（42 ms）',
+    }))
+    const lifecycle = makeLifecycle({ deps: { ...harness.deps, mirrorFailover: failover } })
+
+    const result = await lifecycle.installSt()
+    // 失败原因透传 + 兜底被调用 + 用新镜像重试一次成功
+    expect(failover).toHaveBeenCalledTimes(1)
+    expect(failover.mock.calls[0]?.[0]).toContain('git clone 失败')
+    const clones = harness.calls.filter((call) => call.command.includes(' clone '))
+    expect(clones).toHaveLength(2)
+    expect(result.ok).toBe(true)
+  })
+
+  it('镜像增强：兜底未切换（当前镜像探活正常）时不重试，按原样回报失败', async () => {
+    const stDir = join(root, 'SillyTavern')
+    mkdirSync(join(stDir, '.git'), { recursive: true })
+    const harness = makeExecHarness(() => 1)
+    const failover = vi.fn(async (_reason: string) => ({
+      switched: false,
+      from: 'github.dpik.top',
+      to: 'github.dpik.top',
+      latencyMs: 90,
+      exhausted: false,
+      message: '镜像 github.dpik.top 探活正常（90 ms），本次失败与镜像无关',
+    }))
+    const lifecycle = makeLifecycle({ deps: { ...harness.deps, mirrorFailover: failover } })
+
+    const result = await lifecycle.installSt()
+    expect(failover).toHaveBeenCalledTimes(1)
+    expect(harness.calls.filter((call) => call.command.includes(' clone '))).toHaveLength(1)
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('安装失败: git clone进程返回错误码: 1')
+  })
+
   it('updateSt portable/system（D3 焊死）：pull 命令串与前置步骤与现状逐字节一致', async () => {
     setupSt()
     const exec = makeExecHarness(() => 0)
@@ -1725,6 +1770,73 @@ describe('updateMirrorSetting（← event.py:1673-1833）', () => {
     await lifecycle.updateMirrorSetting('github')
     expect(readFileSync(gitconfigPath, 'utf8')).toBe(before)
     expect(logs.some((message) => message.includes('镜像配置无变更，跳过写入'))).toBe(true)
+  })
+
+  // 2026-09-21 镜像增强：自动选优只写 config.json，portable/system 的 git 加速靠
+  // gitconfig insteadOf 生效——选优落盘后必须再走一次 updateMirrorSetting（生效口径）
+  it('镜像新模型：updateMirrorSetting(host, { auto: true }) 同时落 enabled/mirror/auto 与 insteadOf', async () => {
+    setupSt()
+    portableEnvFixture()
+    const gitconfigPath = join(root, 'env', 'etc', 'gitconfig')
+    const git = makeGitHarness(() => ({ ok: true }))
+    const switchRemote = vi.fn(async () => ({ ok: true, message: 'ok' }))
+    const config = makeConfig()
+    const lifecycle = makeLifecycle({
+      config,
+      portable: true,
+      deps: { ...git.deps, switchGitRemote: switchRemote },
+    })
+
+    const result = await lifecycle.updateMirrorSetting('github.dpik.top', { auto: true })
+    expect(result.ok).toBe(true)
+    expect(config.get<boolean>('github.enabled')).toBe(true)
+    expect(config.get<string>('github.mirror')).toBe('github.dpik.top')
+    expect(config.get<boolean>('github.auto')).toBe(true)
+    const content = readFileSync(gitconfigPath, 'utf8')
+    expect(content).toContain('[url "https://github.dpik.top/https://github.com/"]')
+    expect(content).toContain('insteadof = https://github.com/')
+    expect(switchRemote).toHaveBeenCalledWith('github.dpik.top', join(root, 'SillyTavern'))
+  })
+
+  it('镜像新模型：切回官方源只翻 enabled，已选 host 保留（切回加速可直接复用）', async () => {
+    setupSt()
+    portableEnvFixture()
+    const gitconfigPath = join(root, 'env', 'etc', 'gitconfig')
+    writeFileSync(
+      gitconfigPath,
+      '[url "https://github.dpik.top/https://github.com/"]\ninsteadof = https://github.com/\n',
+      'utf8',
+    )
+    const git = makeGitHarness(() => ({ ok: true }))
+    const config = makeConfig({
+      github: {
+        enabled: true,
+        mirror: 'github.dpik.top',
+        auto: true,
+        speedtest: { results: {}, failed: [], tested_at: '' },
+      },
+    })
+    const lifecycle = makeLifecycle({ config, portable: true, deps: git.deps })
+
+    const result = await lifecycle.updateMirrorSetting('github')
+    expect(result.ok).toBe(true)
+    expect(config.get<boolean>('github.enabled')).toBe(false)
+    expect(config.get<string>('github.mirror')).toBe('github.dpik.top')
+    // 官方源 = 不加速：旧镜像映射必须撤掉，否则仍走镜像（用户以为切回官方了）
+    expect(readFileSync(gitconfigPath, 'utf8')).not.toContain('github.dpik.top')
+  })
+
+  it('镜像新模型：官方源且 host 非法 → 清空 host（不留脏值给 activeMirrorHost 兜底）', async () => {
+    setupSt()
+    portableEnvFixture()
+    const git = makeGitHarness(() => ({ ok: true }))
+    const config = makeConfig({
+      github: { enabled: true, mirror: 'not-a-mirror', auto: true, speedtest: { results: {}, failed: [], tested_at: '' } },
+    })
+    const lifecycle = makeLifecycle({ config, portable: true, deps: git.deps })
+    await lifecycle.updateMirrorSetting('github')
+    expect(config.get<boolean>('github.enabled')).toBe(false)
+    expect(config.get<string>('github.mirror')).toBe('')
   })
 
   it('重复设置同一镜像 → 先移除后重加触发重写并规范化（1:1：insteadof 命中收集条件）', async () => {

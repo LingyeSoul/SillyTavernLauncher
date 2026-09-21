@@ -174,29 +174,29 @@ describe('动效深度审计', () => {
     await app.getByTestId('nav-settings').click()
     await app.getByTestId('setting-mirror').waitFor({ timeoutMs: 10_000 })
 
-    // 打开下拉：Content（anchored 浮层）经 motion.div 淡入包装后仍须挂载可交互
+    // 打开下拉：Content（anchored 浮层）经 motion.div 淡入包装后仍须挂载可交互。
+    // 镜像为「官方源 / 加速镜像」二选一（种子默认官方源），非选中项即「加速镜像」
     await app.getByTestId('setting-mirror').click()
-    await app.getByText('镜像站点 (gh-proxy.org)').waitFor({ timeoutMs: 5_000 })
-    // 非选中项标签只在下拉 Content 里出现（触发器显示当前选中 github 标签）
+    await app.getByText('加速镜像').waitFor({ timeoutMs: 5_000 })
     expect(
-      await app.getByText('镜像站点 (gh.llkk.cc)').count(),
-      '下拉展开态：Content 内两个镜像项都应在树中',
+      await app.getByText('加速镜像').count(),
+      '下拉展开态：Content 内的「加速镜像」项应在树中（触发器此时显示官方源）',
     ).toBe(1)
 
     await app.screenshot({ path: join(SHOTS_DIR, 'motion-select-open.png') })
     expectShotExists('motion-select-open.png')
 
     // 点击选择：Item 命中 → onValueChange → toast + config.json 落盘（硬回归断言）
-    await app.getByText('镜像站点 (gh-proxy.org)').click()
-    await expectToast(session, '镜像配置已更新')
+    await app.getByText('加速镜像').click()
+    await expectToast(session, '尚未选定镜像站')
 
     expect(
-      await app.getByText('镜像站点 (gh.llkk.cc)').count(),
-      '选择后：下拉 Content 应卸载（gh.llkk.cc 项消失）',
-    ).toBe(0)
+      await app.getByText('加速镜像').count(),
+      '选择后：下拉 Content 应卸载（「加速镜像」只剩触发器上一处）',
+    ).toBe(1)
     const cfg = session.readConfig()
     const github = cfg?.github as Record<string, unknown> | undefined
-    expect(github?.mirror, 'motion 包装不得破坏 SelectPrimitive 的 onValueChange').toBe('gh-proxy.org')
+    expect(github?.enabled, 'motion 包装不得破坏 SelectPrimitive 的 onValueChange').toBe(true)
 
     await app.screenshot({ path: join(SHOTS_DIR, 'motion-select-after.png') })
     expectShotExists('motion-select-after.png')

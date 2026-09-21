@@ -57,6 +57,8 @@ export type DialogDescriptor =
   | { kind: 'gitInstall' }
   | { kind: 'zipInstall' }
   | { kind: 'deleteExtension'; ext: ExtensionInfo }
+  /** 镜像源设置（2026-09-21 镜像增强：测速 + 手动选定 + 自动选优开关） */
+  | { kind: 'mirrorSettings' }
 
 interface UiState {
   view: ViewId

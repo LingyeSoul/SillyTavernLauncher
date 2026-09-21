@@ -54,6 +54,12 @@ export interface LaunchOptions {
   env?: Record<string, string>
   /** 主题模式种子（默认 'dark'）；'light' 用于浅色主题视觉抽检（O6 elevated 等） */
   theme?: 'dark' | 'light'
+  /**
+   * 预置镜像测速结果（github.speedtest）→ 镜像源对话框呈现"已测速"态：
+   * 行按延迟升序、显示 ms 数值与「推荐」芯片。真实测速要 ping 55 个公网站点，
+   * E2E 不可控，故用种子固定该状态（纯本地零网络）。
+   */
+  githubSpeedtest?: { results: Record<string, number>; failed?: string[] }
 }
 
 export interface E2ESession {
@@ -100,7 +106,12 @@ function seedConfig(theme: 'dark' | 'light' = 'dark'): Record<string, unknown> {
     downloads: [],
     has_started_st: false,
     github: {
-      mirror: 'github',
+      // 镜像源新模型（2026-09-21）：E2E 种子固定官方源（enabled=false），
+      // 需要加速镜像的用例在界面里显式切换，避免种子态依赖网络
+      enabled: false,
+      mirror: '',
+      auto: true,
+      speedtest: { results: {}, failed: [], tested_at: '' },
       mirrors: { github: 'github.com', ghproxy: 'gh-proxy.org', ghllkk: 'gh.llkk.cc' },
     },
     log: false,
@@ -155,6 +166,16 @@ export async function launchE2E(options: LaunchOptions = {}): Promise<E2ESession
     const seed = seedConfig(options.theme)
     if (options.welcomeOnly) seed.first_run = true
     if (options.seedSt) seed.env_mode = 'system'
+    if (options.githubSpeedtest) {
+      const github = seed.github as Record<string, unknown>
+      github.speedtest = {
+        results: options.githubSpeedtest.results,
+        failed: options.githubSpeedtest.failed ?? [],
+        tested_at: new Date().toISOString(),
+      }
+      github.mirror = Object.keys(options.githubSpeedtest.results)[0] ?? ''
+      github.enabled = true
+    }
     writeFileSync(configPath, JSON.stringify(seed, null, 4))
   }
   if (options.seedSt) seedStRepo(tempDir)
@@ -169,6 +190,10 @@ export async function launchE2E(options: LaunchOptions = {}): Promise<E2ESession
         // 禁用已同意用户的远端协议核对：种子日期 2099-01-01 与真实远端不符，
         // 否则核对命中差异会在测试中途弹出 EULA 遮挡交互（与首启 EULA 流程无关）
         STL_SKIP_AGREEMENT_RECHECK: '1',
+        // 禁用启动期镜像自动测速选优：批量 ping 55 个镜像站会引入不可控等待与
+        // 配置漂移（后台选优结果落盘 → 断言不稳定）。种子默认官方源，本开关只是
+        // 双保险（E2E 里需要加速镜像的场景走对话框手动选定，纯本地零网络）。
+        STL_SKIP_MIRROR_AUTOSELECT: '1',
         ...options.env,
       },
     }),

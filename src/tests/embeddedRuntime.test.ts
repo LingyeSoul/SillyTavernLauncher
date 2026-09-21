@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildProcessEnvEmbedded,
   embeddedCaPemPath,
+  embeddedRuntimeVersion,
   ensureBunLockExcluded,
   ensureCaCache,
   ensureStEmbeddedRuntime,
@@ -245,5 +246,15 @@ describe('ensureBunLockExcluded（§7/D6 bun.lock 消解）', () => {
     } finally {
       errSpy.mockRestore()
     }
+  })
+})
+
+describe('embeddedRuntimeVersion（§5.4 体检文案的 Bun 版本兜底）', () => {
+  it('任意宿主下均为非空字符串：Node 测试宿主走 typeof 守卫兜底，不 ReferenceError', () => {
+    // 本测试跑在 vitest/Node 下（无 Bun 全局）——能走到断言本身即证明守卫生效；
+    // Bun 宿主（生产/`bun test`）下应命中真值分支
+    const version = embeddedRuntimeVersion()
+    expect(typeof version).toBe('string')
+    expect(version.length).toBeGreaterThan(0)
   })
 })

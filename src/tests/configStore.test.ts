@@ -52,7 +52,15 @@ describe('ConfigStore（← config_manager.py）', () => {
     expect(store.get('agreement_version')).toBe('')
     expect(store.get('downloads')).toEqual([])
     expect(store.get('has_started_st')).toBe(false)
-    expect(store.get('github.mirror')).toBe('gh-proxy.org')
+    // 镜像源模型（2026-09-21）：enabled + host + auto + speedtest 四段；
+    // 新装默认"启用加速镜像 + 自动选优"（host 由启动期测速选定，故初始为空）
+    expect(store.get('github.enabled')).toBe(true)
+    expect(store.get('github.mirror')).toBe('')
+    expect(store.get('github.auto')).toBe(true)
+    expect(store.get('github.speedtest.results')).toEqual({})
+    expect(store.get('github.speedtest.failed')).toEqual([])
+    expect(store.get('github.speedtest.tested_at')).toBe('')
+    // 旧镜像映射表保留可读但已 @deprecated（镜像名单收敛到 services/mirrors.ts）
     expect(store.get('github.mirrors.github')).toBe('github.com')
     expect(store.get('github.mirrors.ghproxy')).toBe('gh-proxy.org')
     expect(store.get('github.mirrors.ghllkk')).toBe('gh.llkk.cc')
@@ -123,11 +131,53 @@ describe('ConfigStore（← config_manager.py）', () => {
     expect(raw.startsWith('{\n    "patchgit": false,')).toBe(true)
     const parsed = JSON.parse(raw) as { theme: string; github: { mirror: string } }
     expect(parsed.theme).toBe('light')
-    expect(parsed.github.mirror).toBe('gh-proxy.org')
+    expect(parsed.github.mirror).toBe('')
     // 重新加载读到修改后的值（← reload）
     store.set('theme', 'dark')
     store.reload()
     expect(store.get('theme')).toBe('light')
+  })
+
+  // 2026-09-21 镜像源增强：旧配置（只有 github.mirror，哨兵 'github' 表官方源）
+  // → 新模型（enabled + host + auto + speedtest）的一次性迁移
+  it('旧镜像配置迁移：真镜像名 → enabled=true 且保留 host（升级不丢加速）', async () => {
+    const configPath = join(tempDir, 'config.json')
+    writeFileSync(
+      configPath,
+      JSON.stringify({ theme: 'dark', github: { mirror: 'gh.llkk.cc', mirrors: {} } }),
+      'utf8',
+    )
+    const { ConfigStore } = await freshModule()
+    const store = new ConfigStore(configPath)
+    expect(store.get('github.enabled')).toBe(true)
+    expect(store.get('github.mirror')).toBe('gh.llkk.cc')
+    expect(store.get('github.auto')).toBe(true)
+    expect(store.get('github.speedtest.tested_at')).toBe('')
+  })
+
+  it('旧镜像配置迁移：哨兵 github → 官方源（enabled=false，host 清空）', async () => {
+    const configPath = join(tempDir, 'config.json')
+    writeFileSync(configPath, JSON.stringify({ github: { mirror: 'github' } }), 'utf8')
+    const { ConfigStore } = await freshModule()
+    const store = new ConfigStore(configPath)
+    expect(store.get('github.enabled')).toBe(false)
+    expect(store.get('github.mirror')).toBe('')
+  })
+
+  it('新模型配置不被迁移覆盖（幂等：已有 enabled 即原样保留）', async () => {
+    const configPath = join(tempDir, 'config.json')
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        github: { enabled: false, mirror: 'gh.dpik.top', auto: false, speedtest: { results: {}, failed: [], tested_at: '' } },
+      }),
+      'utf8',
+    )
+    const { ConfigStore } = await freshModule()
+    const store = new ConfigStore(configPath)
+    expect(store.get('github.enabled')).toBe(false)
+    expect(store.get('github.mirror')).toBe('gh.dpik.top')
+    expect(store.get('github.auto')).toBe(false)
   })
 
   it('首次运行时按 env/ 目录探测环境类型（← _check_and_set_env_type，D5 三级）', async () => {
