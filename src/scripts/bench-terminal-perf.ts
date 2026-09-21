@@ -21,7 +21,7 @@ const tempDir = mkdtempSync(join(tmpdir(), 'stlbench'))
 const originalCwd = process.cwd()
 process.chdir(tempDir)
 
-const { __resetTerminalLogsForTests, useTerminalLogs, MAX_LINES } = await import('../stores/terminalLogs')
+const { __resetTerminalLogsForTests, useTerminalLogs } = await import('../stores/terminalLogs')
 const { getConfigStore } = await import('../services/configStore')
 getConfigStore().set('motionEnabled', false)
 
@@ -71,16 +71,27 @@ async function benchStore(): Promise<void> {
       `[A] N=${n}: 填充 ${((t1 - t0) / 1000).toFixed(2)}s | 堆 ${h0.toFixed(0)}→${h1.toFixed(0)}MB (Δ${(h1 - h0).toFixed(1)}) | RSS ${r0.toFixed(0)}→${r1.toFixed(0)}MB`,
     )
   }
-  // 稳态单发成本：N=100k 时一次 emitRows 的数组拷贝（spread + LRU slice）
-  const lines = useTerminalLogs.getState().lines
-  const one = [{ id: 1, text: 'x', segs: [], stream: 'stdout' as const, animate: false }]
-  const t2 = performance.now()
-  for (let k = 0; k < 1000; k++) {
-    const all = [...lines, ...one]
-    if (all.length > MAX_LINES) all.slice(all.length - MAX_LINES)
+  // 稳态单发成本：N=100k 时逐行追加 200 行的端到端 store 通路成本
+  // （引擎合批后每行一次 write 回调；修复前此处为全量数组拷贝 1.402ms/次）
+  {
+    const samples: number[] = []
+    for (let i = 0; i < 200; i++) {
+      const v0 = useTerminalLogs.getState().version
+      const t0 = performance.now()
+      useTerminalLogs.getState().appendLine(`steady-${i}`)
+      // 缓冲在 10 万上限时 length 不再增长，按 version 递增判定发射完成
+      const deadline = performance.now() + 5000
+      while (useTerminalLogs.getState().version === v0) {
+        if (performance.now() > deadline) throw new Error('稳态发射超时')
+        await sleep(1)
+      }
+      samples.push(performance.now() - t0)
+    }
+    samples.sort((a, b) => a - b)
+    console.log(
+      `[A] 稳态(N=100k)逐行 store 通路: avg ${(samples.reduce((s, v) => s + v, 0) / samples.length).toFixed(2)}ms | p50 ${samples[100]!.toFixed(2)}ms | max ${samples[199]!.toFixed(2)}ms`,
+    )
   }
-  const t3 = performance.now()
-  console.log(`[A] 稳态(N=100k)单次 emitRows 数组拷贝: ${((t3 - t2) / 1000).toFixed(3)} ms/次（每来一行日志付一次）`)
   __resetTerminalLogsForTests()
 }
 

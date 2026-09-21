@@ -6,11 +6,18 @@
  *   DEVIATION: 设计 §4.1 与 gpuix-migration-design 指定 alignment=bottom（不足
  *   一屏日志贴底）；2026-09-20 改为 top：不足一屏时从顶部向下填充，满屏后
  *   followTail 跟尾语义不变。
+ * - 窗口化渲染（2026-09-21 性能修复）：virtual-list 的 itemCount/windowStart
+ *   协议下只挂载 [windowStart, windowStart+WINDOW_ROWS) 的行切片——全量挂载
+ *   实测每行 3 个原生元素常驻（RSS ~34KB/行，20k 行 842MB），且每行追加成本
+ *   随 N 线性增长（涓流 52ms/行@20k）。窗口随滚动（onVisibleRange）与尾部
+ *   跟随（新行入库前滑）由本视图推动——gpuix 文档明确 itemCount 增长不会
+ *   自动扩窗，不推窗新行永远不挂载。
  * - 底部 5 按钮接 stLifecycle（安装/启动/停止/更新/清空，各带 tooltip 350ms）。
  * - 中文文案集中于顶部常量对象（i18n 缝）。
  */
-import { memo, useEffect, useMemo } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { motion, useWindowSize } from '@gpuix/react'
+import type { EventPayload } from '@gpuix/native'
 import { EASE_OUT_QUAD, dur, layout } from '../../theme'
 import { useMotion, useTheme } from '../theme'
 import { Button } from '../components/Button'
@@ -29,6 +36,11 @@ import { terminalRowHeight, useSettings } from '../../stores/settings'
 import { useUiState } from '../../stores/uiState'
 import { getConfigStore } from '../../services/configStore'
 import { errMsg, logError } from '../../services/errorLog'
+
+/** 渲染窗口行数：可视区约 25 行（550px/22px），120 行 ≈ 5 屏余量 */
+const WINDOW_ROWS = 120
+/** 窗口前缘 overscan：滚动时可见区间先落在窗口内再触发推窗，避免白屏 */
+const WINDOW_OVERSCAN = 40
 
 const TEXTS = {
   emptyNoLog: '等待日志输出',
@@ -63,8 +75,9 @@ function terminalTextWidthPx(windowWidth: number): number {
   return windowWidth - layout.sidebarW - DIVIDER_PX - 2 * layout.padTerminal - CARD_BORDER_PX - LIST_PADDING_X_PX
 }
 
-/** 单行渲染：引擎预解析段 = 相邻 <text>；无色行按日志级别兜底着色 */
-const LogRow = memo(function LogRow({ line }: { line: TerminalLine }) {
+/** 单行渲染：引擎预解析段 = 相邻 <text>；无色行按日志级别兜底着色。
+ *  animate 由视图按"动画截止线"推导（窗口滑出再滑回的行不重复播入场动画） */
+const LogRow = memo(function LogRow({ line, animate }: { line: TerminalLine; animate: boolean }) {
   const t = useTheme()
   const { enabled: motionEnabled } = useMotion()
   // 终端字体设置（字号/字体族，设置页即时生效）；空字体族回退主题 mono
@@ -112,7 +125,7 @@ const LogRow = memo(function LogRow({ line }: { line: TerminalLine }) {
     overflow: 'hidden',
   } as const
 
-  if (!line.animate || !motionEnabled) {
+  if (!animate || !motionEnabled) {
     return <div style={rowStyle}>{body}</div>
   }
   // M2 新日志行入场：200ms easeOut，top 4→0（translateY 等效）
@@ -129,8 +142,46 @@ const LogRow = memo(function LogRow({ line }: { line: TerminalLine }) {
 
 export function TerminalView() {
   const t = useTheme()
-  const lines = useTerminalLogs((s) => s.lines)
+  // 窗口化数据契约（store 文件头 DEVIATION）：lines 为原地演进的稳定引用，
+  // 响应式只订阅 version；行数/窗口切片均经 getState() 在渲染期直读
+  const version = useTerminalLogs((s) => s.version)
   const clear = useTerminalLogs((s) => s.clear)
+  const lineCount = useTerminalLogs.getState().lines.length
+  /** 渲染窗口起始逻辑行（itemCount/windowStart 协议的应用侧推窗状态） */
+  const [windowStart, setWindowStart] = useState(() => Math.max(0, lineCount - WINDOW_ROWS))
+  /** 用户是否处于尾部（可见区间覆盖末行）；尾部时新行入库窗口前滑 */
+  const atTailRef = useRef(true)
+  /** 入场动画截止线：id 大于它的行才播动画（历史行/滑回行不播）。
+   *  useRef 初值即挂载时存量最大 id：打开视图时历史行不播入场动画 */
+  const lastSeenIdRef = useRef<number>(useTerminalLogs.getState().getLastId())
+  const animateCutoff = lastSeenIdRef.current
+  useEffect(() => {
+    lastSeenIdRef.current = useTerminalLogs.getState().getLastId()
+  })
+  // 尾部跟随：新行入库且处于尾部时窗口前滑（gpuix 文档明确 itemCount
+  // 增长不会自动扩窗，不推窗新行永远不挂载）
+  useEffect(() => {
+    if (!atTailRef.current) return
+    setWindowStart(Math.max(0, useTerminalLogs.getState().lines.length - WINDOW_ROWS))
+  }, [version])
+
+  const handleVisibleRange = (e: EventPayload): void => {
+    const len = useTerminalLogs.getState().lines.length
+    if ((e.endIndex ?? len) >= len) {
+      atTailRef.current = true
+      setWindowStart(Math.max(0, len - WINDOW_ROWS))
+    } else {
+      atTailRef.current = false
+      setWindowStart(Math.max(0, Math.min((e.startIndex ?? 0) - WINDOW_OVERSCAN, len - WINDOW_ROWS)))
+    }
+  }
+
+  /** 清空同时复位窗口与尾部状态：防止缓冲清空后窗口停留在越界位置 */
+  const handleClear = (): void => {
+    atTailRef.current = true
+    setWindowStart(0)
+    clear()
+  }
   // 字号联动 virtual-list 估算高度（与 LogRow 行高同源：terminalRowHeight）
   const fontSize = useSettings((s) => s.terminalFontSize)
   const fontFamilySetting = useSettings((s) => s.terminalFontFamily)
@@ -151,7 +202,8 @@ export function TerminalView() {
   const updateSt = useStState((s) => s.updateSt)
   const openDialog = useUiState((s) => s.openDialog)
 
-  const hasLogs = lines.length > 0
+  const hasLogs = lineCount > 0
+  const windowLines = useTerminalLogs.getState().getRange(windowStart, windowStart + WINDOW_ROWS)
 
   /** ← Flet install_sillytavern：ST 未安装时先过年龄确认对话框 */
   const handleInstall = (): void => {
@@ -226,7 +278,7 @@ export function TerminalView() {
     },
     {
       key: 'clear', label: TEXTS.clear, tip: TEXTS.clearTip, icon: 'trash',
-      disabled: !hasLogs, onClick: clear, variant: 'quiet',
+      disabled: !hasLogs, onClick: handleClear, variant: 'quiet',
     },
   ]
 
@@ -258,10 +310,13 @@ export function TerminalView() {
           <virtual-list
             alignment="top"
             followTail
+            itemCount={lineCount}
+            windowStart={windowStart}
             estimatedItemHeight={estimatedRowHeight}
+            onVisibleRange={handleVisibleRange}
             style={{ flexGrow: 1, minHeight: 0, paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4 }}>
-            {lines.map((line) => (
-              <LogRow key={line.id} line={line} />
+            {windowLines.map((line) => (
+              <LogRow key={line.id} line={line} animate={line.animate && line.id > animateCutoff} />
             ))}
           </virtual-list>
         ) : (

@@ -1,11 +1,12 @@
 /**
  * Skeleton（设计 §5.9）：bg-elevated · radius 4 · shimmer 1.5s（共享时钟由
- * ThemeProvider 下发，全应用一个 interval，C3 单实例纪律）。
+ * ThemeProvider 的 ShimmerPhaseSource 下发，全应用一个 interval，C3 单实例纪律；
+ * 相位经独立 context 读取，避免每 375ms 波及全部 useTheme 消费者）。
  * 数值宽块 = 扫光：白色亮带（线性渐变）经 motion 平移横穿块面，相位由共享时钟
  * 0–3 数值相位驱动；'100%' 等弹性宽无像素基准，回退 opacity 呼吸（原配方）。
  */
 import { motion } from '@gpuix/react'
-import { useTheme, useThemeContext } from '../theme'
+import { useMotion, useShimmerPhase, useTheme } from '../theme'
 
 export interface SkeletonBlockProps {
   width?: number | string
@@ -14,7 +15,8 @@ export interface SkeletonBlockProps {
 
 export function SkeletonBlock({ width = '100%', height = 16 }: SkeletonBlockProps) {
   const t = useTheme()
-  const { shimmerPhase, motionEnabled } = useThemeContext()
+  const shimmerPhase = useShimmerPhase()
+  const { enabled: motionEnabled } = useMotion()
   const px = typeof width === 'number' ? width : 0
   // 扫光路径：仅数值宽可实现（StyleDesc.left 仅 number，GPUIX 降级：百分比无锚）
   if (px > 0 && motionEnabled) {
