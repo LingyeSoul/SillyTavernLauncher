@@ -11,6 +11,8 @@
 import { create } from 'zustand'
 import { compareVersions } from '../services/env'
 import { getStTags } from '../services/git'
+import { getConfigStore, type EnvMode } from '../services/configStore'
+import { getStTagsEmbedded } from '../services/isoGit'
 import type { GitTag } from '../services/types'
 import { errMsg, logError } from '../services/errorLog'
 import { useTerminalLogs } from './terminalLogs'
@@ -37,7 +39,11 @@ async function fetchAndStore(set: (partial: Partial<VersionStateState>) => void)
   set({ loading: true, error: null })
   useTerminalLogs.getState().appendLine(REFRESHING_LOG)
   try {
-    const result = await getStTags()
+    // Phase 4（设计 §8.2 listTags "版本页数据源"）：embedded 经进程内 Git 取数，
+    // 其余模式与现状一致直用 git.ts（spawn 命令路径零变化，D3）
+    const envMode = getConfigStore().get<EnvMode>('env_mode', 'portable')
+    const result =
+      envMode === 'embedded' ? await getStTagsEmbedded() : await getStTags()
     if (!result.ok || !result.data) {
       set({ error: result.message, versions: [] })
       return

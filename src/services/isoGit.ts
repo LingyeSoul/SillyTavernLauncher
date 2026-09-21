@@ -28,6 +28,10 @@ import {
   getConfig as isoGetConfig,
   listFiles as isoListFiles,
   listTags as isoListTags,
+  log as isoLog,
+  readCommit as isoReadCommit,
+  readObject as isoReadObject,
+  readTag as isoReadTag,
   resolveRef as isoResolveRef,
   setConfig as isoSetConfig,
   statusMatrix as isoStatusMatrix,
@@ -42,14 +46,16 @@ import type {
 } from 'isomorphic-git'
 import {
   fetchWithTlsFallback,
+  getWindowsCaPem,
   type CaProvider,
   type FetchInitX,
   type FetchLikeX,
 } from './httpClient'
-import { getConfigStore } from './configStore'
-import { TAG_NAME_RE } from './git'
+import { TAG_NAME_RE, VERSION_TAG_RE, normalizeVersion, versionGte1130 } from './git'
+import { compareVersions } from './env'
 import { errMsg, logError } from './errorLog'
-import type { BoolMessage } from './types'
+import { activeMirrorHost, applyMirrorPrefix } from './mirrors'
+import type { BoolMessage, TagsResult } from './types'
 
 // ---------------------------------------------------------------------------
 // fetch 桥接 http 插件（F5/F6：进程内 Git 的唯一 TLS 通道）
@@ -128,7 +134,9 @@ function streamToAsyncIterator(stream: ReadableStream<Uint8Array>): AsyncIterabl
  */
 export function createIsoFetchPlugin(options: IsoFetchPluginOptions = {}): HttpClient {
   const fetchImpl: FetchLikeX = options.fetchImpl ?? (fetch as unknown as FetchLikeX)
-  const caProvider = options.caProvider ?? (async () => null)
+  // 默认真接 getWindowsCaPem（F6 契约：劫持网络下 TLS 回退是 embedded Git 的唯一
+  // 生存通道）；非 Windows / 导出失败时 provider 返回 null，回退自然放弃，无害
+  const caProvider = options.caProvider ?? getWindowsCaPem
   return {
     request: async (request: GitHttpRequest): Promise<GitHttpResponse> => {
       const method = request.method ?? 'GET'
@@ -158,25 +166,17 @@ export function createIsoFetchPlugin(options: IsoFetchPluginOptions = {}): HttpC
 }
 
 // ---------------------------------------------------------------------------
-// 镜像 URL 前缀（D6：内存前缀，与 extensions.ts applyGithubMirror 同构，勿动 gitconfig）
+// 镜像 URL 前缀（D6：内存前缀，与 extensions.applyGithubMirror 同构，勿动 gitconfig）
 // ---------------------------------------------------------------------------
 
-/** 支持的镜像站（对齐 extensions.ts 的镜像名单与镜像配置取值） */
-const MIRROR_PREFIXES: Record<string, string> = {
-  'gh-proxy.org': 'https://gh-proxy.org/',
-  'gh.llkk.cc': 'https://gh.llkk.cc/',
-}
-
 /**
- * GitHub 官方 URL → 镜像前缀 URL（D6）。非 github.com 域、镜像为 'github' 或
- * 未知镜像名时原样返回（与 extensions.applyGithubMirror 的失败语义一致：不加速）。
+ * GitHub 官方 URL → 镜像前缀 URL（D6）。
+ * DEVIATION（2026-09-21 镜像增强）：名单与前缀规则收敛到 mirrors.applyMirrorPrefix
+ * （原先此处硬编码两站白名单）；'github' / 空 / 注册表外主机名 → 原样返回，与
+ * extensions.applyGithubMirror 的失败语义（不加速）保持一致。
  */
 export function applyStMirrorPrefix(url: string, mirror: string): string {
-  if (mirror === 'github') return url
-  const prefix = MIRROR_PREFIXES[mirror]
-  if (prefix === undefined) return url
-  if (!/^https?:\/\/github\.com\//.test(url)) return url
-  return `${prefix}${url}`
+  return applyMirrorPrefix(url, mirror)
 }
 
 // ---------------------------------------------------------------------------
@@ -414,9 +414,10 @@ export class IsoGitOps implements StRepoOps {
   private readonly onLog: (message: string) => void
 
   constructor(options: IsoGitOpsOptions = {}) {
-    this.caProvider = options.caProvider ?? (async () => null)
-    this.getMirror =
-      options.getMirror ?? (() => getConfigStore().get<string>('github.mirror', 'github'))
+    // CA 默认同 createIsoFetchPlugin：生产链路必须真接 getWindowsCaPem（F6），
+    // 此前误默认 () => null 会让劫持网络下的 TLS 回退整链失效（Phase 4 收尾修复）
+    this.caProvider = options.caProvider ?? getWindowsCaPem
+    this.getMirror = options.getMirror ?? activeMirrorHost
     this.onLog = options.onLog ?? (() => undefined)
     this.http = createIsoFetchPlugin({ fetchImpl: options.fetchImpl, caProvider: this.caProvider })
   }
@@ -778,4 +779,118 @@ export class IsoGitOps implements StRepoOps {
 /** IsoGitOps 工厂（与 createSpawnGitOps 命名对称；stLifecycle 路由默认实现） */
 export function createIsoGitOps(options: IsoGitOpsOptions = {}): IsoGitOps {
   return new IsoGitOps(options)
+}
+
+// ---------------------------------------------------------------------------
+// 版本页数据源（embedded）：getStTags / 当前版本芯片 的进程内等价实现
+// （设计 §8.2 listTags "版本页数据源" 的消费侧落地：versionState/stState 在
+//   embedded 下改调本组函数；过滤/排序语义与 git.ts getStTags 共用助手，防漂移）
+// ---------------------------------------------------------------------------
+
+/** tag ref → commit oid（轻量 tag 直指 commit；附注 tag 经 readObject/readTag 剥壳） */
+async function resolveTagCommitOid(dir: string, tagName: string): Promise<string | null> {
+  try {
+    const refOid = await isoResolveRef({ fs: nodeFs, dir, ref: `refs/tags/${tagName}` })
+    const { type } = await isoReadObject({ fs: nodeFs, dir, oid: refOid })
+    if (type === 'tag') {
+      // 附注 tag：ref 指向 tag 对象，剥壳取其目标 commit
+      const tag = await isoReadTag({ fs: nodeFs, dir, oid: refOid })
+      return tag.tag.object
+    }
+    return refOid
+  } catch (err) {
+    logError(`[isoGit] 解析 tag ${tagName} 的 commit 失败: ${errMsg(err)}`)
+    return null
+  }
+}
+
+/** Unix 秒 + 时区偏移分 → git `--format=%aI` 形态（作者日期严格 ISO 8601 带偏移）。
+ *  注意 isomorphic-git 的 timezoneOffset 沿用 JS Date.getTimezoneOffset 反号约定
+ *  （UTC+8 → -480）：本地墙钟 = timestamp - offset，展示符号 = offset 反号 */
+function authorDateIso(timestamp: number, timezoneOffsetMinutes: number): string {
+  const shifted = new Date((timestamp - timezoneOffsetMinutes * 60) * 1000)
+  const base = shifted.toISOString().replace(/\.\d{3}Z$/, '')
+  const sign = timezoneOffsetMinutes <= 0 ? '+' : '-'
+  const abs = Math.abs(timezoneOffsetMinutes)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${base}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
+}
+
+/**
+ * getStTags 的 embedded 等价实现（版本页版本列表数据源）：
+ * listTags → 语义化版本过滤（≥1.13.0，与 git.ts 共用助手）→ 逐 tag 解析
+ * commit 与作者日期 ISO（对齐 `git show <tag> --format=%H|%aI -s`）。
+ * 纯本地读，不打网络。
+ */
+export async function getStTagsEmbedded(stDir?: string): Promise<TagsResult> {
+  const dir = stDir ?? join(process.cwd(), 'SillyTavern')
+  if (!existsSync(dir)) {
+    return { ok: false, data: null, message: 'SillyTavern目录不存在' }
+  }
+  if (!existsSync(join(dir, '.git'))) {
+    return { ok: false, data: null, message: 'SillyTavern目录不是Git仓库' }
+  }
+  try {
+    const allTags = await isoListTags({ fs: nodeFs, dir })
+    const versions: Record<string, { commit: string; date: string; tag_name: string }> = {}
+    for (const tag of allTags) {
+      const versionStr = normalizeVersion(tag)
+      if (!VERSION_TAG_RE.test(versionStr) || !versionGte1130(versionStr)) continue
+      const commitOid = await resolveTagCommitOid(dir, tag)
+      if (commitOid === null) continue
+      const { commit } = await isoReadCommit({ fs: nodeFs, dir, oid: commitOid })
+      versions[versionStr] = {
+        commit: commitOid,
+        date: authorDateIso(commit.author.timestamp, commit.author.timezoneOffset),
+        tag_name: tag,
+      }
+    }
+    const latest = Object.keys(versions).sort((a, b) => compareVersions(b, a))[0] ?? ''
+    return {
+      ok: true,
+      data: { versions, latest },
+      message: `成功获取 ${Object.keys(versions).length} 个版本`,
+    }
+  } catch (err) {
+    const message = `获取tag列表时出错: ${errMsg(err)}`
+    logError(`[isoGit] ${message}`)
+    return { ok: false, data: null, message }
+  }
+}
+
+/**
+ * stState.refreshVersion 的 embedded 等价实现（当前版本芯片）：
+ * `git describe --tags --abbrev=0` + `git rev-parse HEAD` 的进程内等价——
+ * HEAD 精确命中 tag 直接用；否则沿 HEAD 祖先回溯取最近 tag（describe 语义）。
+ * 失败/无 tag → version null（对齐 spawn 侧 describe 失败置 null 的行为）。
+ */
+export async function currentVersionEmbedded(
+  stDir?: string,
+): Promise<{ version: string | null; commit: string | null }> {
+  const dir = stDir ?? join(process.cwd(), 'SillyTavern')
+  try {
+    const head = await isoResolveRef({ fs: nodeFs, dir, ref: 'HEAD' })
+    const allTags = await isoListTags({ fs: nodeFs, dir })
+    // commit → tag（后写覆盖：同 commit 多 tag 时取其一，仅影响展示用哪个名字）
+    const tagByCommit = new Map<string, string>()
+    for (const tag of allTags) {
+      const commitOid = await resolveTagCommitOid(dir, tag)
+      if (commitOid !== null) tagByCommit.set(commitOid, tag)
+    }
+    let version = tagByCommit.get(head) ?? null
+    if (version === null && tagByCommit.size > 0) {
+      const ancestry = await isoLog({ fs: nodeFs, dir, ref: 'HEAD' })
+      for (const entry of ancestry) {
+        const hit = tagByCommit.get(entry.oid)
+        if (hit !== undefined) {
+          version = hit
+          break
+        }
+      }
+    }
+    return { version, commit: head }
+  } catch (err) {
+    logError(`[isoGit] 读取当前版本失败: ${errMsg(err)}`)
+    return { version: null, commit: null }
+  }
 }
