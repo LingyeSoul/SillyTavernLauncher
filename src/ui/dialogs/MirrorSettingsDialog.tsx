@@ -32,6 +32,15 @@
  *    合流后提交数降到个位数，进度条仍"在动"。
  * 4. **行 memo + 稳定回调**：延迟落在一行时只重渲染该行（其余行 props 全等，
  *    React bailout → 原生侧零 setStyle）。
+ *
+ * ── 高速滚动"选项重复高亮"修复（2026-09-21）──
+ * 行内本地 hover 态只由**自己**的 mouseLeave 清除；高速滚动一帧内 GPUI 对滑过指针的
+ * 多行连发 mouseEnter，而 leave 有丢失/乱序（行已卸载或事件被合批吃掉），各行的态
+ * 各自为政——实测一帧 4–5 行同时带 hover 底色（慢滚 enter/leave 配对正常，1 行）。
+ * 修复 = 悬停态提到父级**单一槽位**（`hoverHost`），行只读 `hovered` prop：同一时刻
+ * 至多一行高亮由数据结构保证，与事件到达顺序无关；leave 带 host 守卫，迟到的 leave
+ * 不会清掉后来者。取证见 scripts/repro-mirror-dup-highlight.ts，回归见
+ * tests/mirrorDialogPerf.test.tsx 门禁④。
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { errMsg, logError } from '../../services/errorLog'
@@ -272,6 +281,22 @@ export function MirrorSettingsDialog() {
     else void store.selectMirror(host, false)
   }, [])
 
+  /**
+   * 单一悬停槽（2026-09-21 高速滚动"选项重复高亮"修复）。
+   *
+   * 逐行本地 hover 态在高速滚动下会累积：一帧内 GPUI 对滑过指针的多行连发
+   * mouseEnter，而对应的 mouseLeave 有丢失/乱序（行已卸载或事件被合批吃掉），
+   * 各行的本地状态又只由**自己**的 leave 清除——实测一帧亮 4–5 行（慢速 1 行，
+   * 故既有慢滚 E2E 覆盖不到）。状态提到父级后，"同一时刻至多一行高亮"由数据结构
+   * 保证，与事件到达顺序无关。见 scripts/repro-mirror-dup-highlight.ts 取证。
+   */
+  const [hoverHost, setHoverHost] = useState<string | null>(null)
+  const handleRowEnter = useCallback((host: string): void => setHoverHost(host), [])
+  const handleRowLeave = useCallback((host: string): void => {
+    // 迟到的 leave 不得清掉后来者（乱序事件下唯一槽位仍稳定）
+    setHoverHost((prev) => (prev === host ? null : prev))
+  }, [])
+
   return (
     <Modal
       open
@@ -333,6 +358,9 @@ export function MirrorSettingsDialog() {
                     desc={TEXTS.officialDesc}
                     selected={!settings.mirrorEnabled}
                     latencyText="—"
+                    hovered={hoverHost === spec.host}
+                    onHoverIn={handleRowEnter}
+                    onHoverOut={handleRowLeave}
                     onSelect={handleSelect}
                     testId="mirror-row-official"
                   />
@@ -371,6 +399,9 @@ export function MirrorSettingsDialog() {
                         : undefined
                   }
                   onSelect={handleSelect}
+                  hovered={hoverHost === host}
+                  onHoverIn={handleRowEnter}
+                  onHoverOut={handleRowLeave}
                   testId={`mirror-row-${host}`}
                 />
               )
@@ -401,22 +432,29 @@ function MirrorDialogActions() {
 }
 
 interface MirrorRowProps {
-  /** 行标识（点击回调回传；官方源行传 OFFICIAL_MIRROR 哨兵） */
+  /** 行标识（点击/悬停回调回传；官方源行传 OFFICIAL_MIRROR 哨兵） */
   host: string
   label: string
   desc?: string
   tier?: string
   badge?: string
   selected: boolean
+  /** 悬停底色：由父级单一悬停槽派生（本组件不再持有本地 hover 态，见父级注释） */
+  hovered: boolean
   latencyText: string
   latencyColor?: string
   /** 稳定回调（useCallback）：memo 行不因回调换引用而重渲染 */
+  onHoverIn: (host: string) => void
+  onHoverOut: (host: string) => void
   onSelect: (host: string) => void
   testId: string
 }
 
 /**
  * 列表行：整行可点（GPUIX 无 hover 伪类 → onMouseEnter 状态驱动底色）。
+ *
+ * 悬停底色由父级单一悬停槽驱动（`hovered` prop）而非本地 useState：高速滚动下
+ * GPUI 对滑过指针的多行连发 enter、leave 有丢失，各行本地态会累积成"多行同亮"。
  *
  * `width:'100%'` 是 virtual-list 下的必需项（实测）：列表把子项按内容宽（shrink-to-fit）
  * 排布，不像 flex 列容器那样拉伸子项——漏掉它行盒只有内容那么宽，行底色/分隔线
@@ -425,7 +463,8 @@ interface MirrorRowProps {
  * 而 `alignSelf:'stretch'` 对列表子项无效。
  *
  * memo：窗口内 24 行在测速期间只有被测站那一行的文案变化 → 只有它重渲染，
- * 原生侧只重发该行元素的样式（全量重渲染时是整列表 390 次 setStyle/提交）。
+ * 原生侧只重发该行元素的样式（全量重渲染时是整列表 390 次 setStyle/提交）；
+ * 悬停切换时同理只重渲染"失去悬停"与"获得悬停"两行。
  */
 const MirrorRow = memo(function MirrorRow({
   host,
@@ -434,13 +473,15 @@ const MirrorRow = memo(function MirrorRow({
   tier,
   badge,
   selected,
+  hovered,
   latencyText,
   latencyColor,
+  onHoverIn,
+  onHoverOut,
   onSelect,
   testId,
 }: MirrorRowProps) {
   const t = useTheme()
-  const [hover, setHover] = useState(false)
   return (
     <div
       testId={testId}
@@ -448,8 +489,8 @@ const MirrorRow = memo(function MirrorRow({
       aria-checked={selected}
       aria-label={label}
       onClick={() => onSelect(host)}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      onMouseEnter={() => onHoverIn(host)}
+      onMouseLeave={() => onHoverOut(host)}
       style={{
         display: 'flex',
         flexDirection: 'row',
@@ -461,7 +502,7 @@ const MirrorRow = memo(function MirrorRow({
         paddingRight: 10,
         borderBottomWidth: 1,
         borderColor: t.border.subtle,
-        backgroundColor: hover && !selected ? t.bg.hover : 'transparent',
+        backgroundColor: hovered && !selected ? t.bg.hover : 'transparent',
         cursor: 'pointer',
         userSelect: 'none',
       }}>
