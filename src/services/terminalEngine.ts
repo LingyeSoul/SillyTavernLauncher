@@ -18,6 +18,9 @@
  *   光标尚未推进，两个 marker 指向同一行，后到的回调会重复发射前行。
  *   因此写入必须串行化（泵模式）：上一行解析回调触发后才写入下一行，
  *   marker 恒注册在真实起始行，提取区间 [marker.line, baseY+cursorY)。
+ * - 泵合批（2026-09-21 性能修复）：microtask 内到达的同 tag 连续行合并为
+ *   一个写块（上限 500 行/块），写/解析/发射从每行一次降为每块一次——
+ *   涓流场景单行端到端成本实测 52ms@20k 行的主因之一就是逐行发射。
  */
 import { Terminal } from '@xterm/headless'
 
@@ -203,6 +206,14 @@ export function createTerminalEngine(emit: (rows: EngineRow[]) => void): Termina
   /** 待写队列 + 泵状态：写入串行化，保证 marker 恒注册在真实起始行 */
   let queue: Array<{ text: string; tag?: unknown }> = []
   let pumping = false
+  let pumpScheduled = false
+
+  /**
+   * 单块行数上限：合批与响应性的折中——无上限时一次 1 万行的 write 会在
+   * xterm 解析与行提取上一次性占用过长，500 行/块在洪峰下仍把写次数
+   * 降低两个数量级，单块解析保持亚毫秒~毫秒级。
+   */
+  const MAX_CHUNK_LINES = 500
 
   function createTerm(): Terminal {
     return new Terminal({
@@ -216,15 +227,21 @@ export function createTerminalEngine(emit: (rows: EngineRow[]) => void): Termina
 
   function pump(): void {
     if (pumping) return
-    const next = queue.shift()
-    if (next === undefined) return
+    const first = queue.shift()
+    if (first === undefined) return
     pumping = true
     const myGen = gen
+    // 同 tag 连续行合并为一个写块（stdout/stderr 各自成块，行标签不串）；
+    // 写/解析/发射次数从"每行一次"降为"每块一次"
+    const chunk = [first]
+    while (queue.length > 0 && chunk.length < MAX_CHUNK_LINES && queue[0]!.tag === first.tag) {
+      chunk.push(queue.shift()!)
+    }
     const marker = term.registerMarker(0)
-    // 行首 \r 校正：xterm 收窄 reflow 会把光标列挪到非 0（实测 50→20 列时空尾行
-    // 光标落在 col 19），下一次写入会从行中偏移位置开始；\r 归位行首，
-    // 常态（光标本就在行首）下是无害空操作
-    term.write(`\r${next.text}\n`, () => {
+    // 行首 \r 校正（逐行语义见 writeLine 历史注释）：每行 \r 前缀、\n 分隔、
+    // 尾部 \n——与逐行单独 write（'\r' + text + '\n'）的光标轨迹完全一致
+    const payload = chunk.map((item) => `\r${item.text}`).join('\n') + '\n'
+    term.write(payload, () => {
       try {
         if (myGen === gen) {
           const buf = term.buffer.active
@@ -235,7 +252,7 @@ export function createTerminalEngine(emit: (rows: EngineRow[]) => void): Termina
               : Math.max(0, cursorAbs - 1) // 兜底：marker 失效时只取最后一行（极端 flood 下的降级）
           const rows: EngineRow[] = []
           for (let y = from; y < cursorAbs; y++) {
-            rows.push({ ...extractRow(term, y), tag: next.tag })
+            rows.push({ ...extractRow(term, y), tag: first.tag })
           }
           if (rows.length > 0) emit(rows)
         }
@@ -247,18 +264,30 @@ export function createTerminalEngine(emit: (rows: EngineRow[]) => void): Termina
     })
   }
 
+  function schedulePump(): void {
+    if (pumpScheduled) return
+    pumpScheduled = true
+    // microtask 合批：同步突发（appendBatch 循环推入的多行）在泵启动前全部
+    // 入队，作为一整块写出；涓流到达的行仍逐行即时处理，不增加可感知延迟
+    queueMicrotask(() => {
+      pumpScheduled = false
+      pump()
+    })
+  }
+
   function writeLine(text: string, tag?: unknown): void {
     if (text === '') return
     const sanitized = text.replace(ANSI_OTHER_CSI_RE, '')
     if (sanitized === '') return
     queue.push({ text: sanitized, tag })
-    pump()
+    schedulePump()
   }
 
   function reset(): void {
     gen++
     queue = []
     pumping = false
+    pumpScheduled = false
     term.dispose()
     term = createTerm()
   }
