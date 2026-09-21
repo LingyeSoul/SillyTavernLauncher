@@ -13,7 +13,7 @@ import { StLifecycle } from '../services/stLifecycle'
 import { checkStInstalled } from '../services/env'
 import { errMsg, logError } from '../services/errorLog'
 import { hasActiveProcess } from '../services/processManager'
-import { getConfigStore } from '../services/configStore'
+import { getConfigStore, type EnvMode } from '../services/configStore'
 import { useTerminalLogs } from './terminalLogs'
 import { uiStateActions } from './uiState'
 
@@ -74,8 +74,16 @@ export const useStState = create<StStateState>((set, get) => ({
   refreshVersion: async () => {
     set({ versionLoading: true })
     try {
-      const { getCurrentCommit, runGit } = await import('../services/git')
       const dir = stDirPath()
+      // Phase 4（设计 §8.2）：embedded 经进程内 Git 读当前版本（describe + HEAD 的
+      // 等价实现）；其余模式与现状一致走 git.ts spawn（命令零变化，D3）
+      const envMode = getConfigStore().get<EnvMode>('env_mode', 'portable')
+      if (envMode === 'embedded') {
+        const { currentVersionEmbedded } = await import('../services/isoGit')
+        set({ currentVersion: await currentVersionEmbedded(dir) })
+        return
+      }
+      const { getCurrentCommit, runGit } = await import('../services/git')
       const describe = await runGit(['describe', '--tags', '--abbrev=0'], dir)
       const commitResult = await getCurrentCommit(dir)
       set({

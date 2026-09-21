@@ -18,10 +18,13 @@ import {
   applyStMirrorPrefix,
   createIsoFetchPlugin,
   createSpawnGitOps,
+  currentVersionEmbedded,
+  getStTagsEmbedded,
   synthesizePorcelain,
   type SpawnCommandExecutor,
 } from '../services/isoGit'
-import { runGit } from '../services/git'
+import { runGit, getStTags } from '../services/git'
+import * as httpClient from '../services/httpClient'
 
 const GIT = { gitExecutable: 'git' } as const
 
@@ -469,5 +472,157 @@ describe('IsoGitOps 镜像前缀接线（构造参数 getMirror）', () => {
     expect(urls[0]).toBe(
       'https://gh-proxy.org/https://github.com/SillyTavern/SillyTavern.git/info/refs?service=git-upload-pack',
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 版本页数据源（embedded）：getStTagsEmbedded / currentVersionEmbedded
+// 与 spawn 侧 getStTags / describe+rev-parse 的等价性（真实本地仓库，无网络）
+// ---------------------------------------------------------------------------
+
+describe('getStTagsEmbedded ↔ getStTags（spawn）等价性', () => {
+  /** 追加提交（返回前确保跨秒，避免同秒作者日期吞掉断言差异——两侧均取真实值，此处仅为稳定） */
+  async function commitFile(repoDir: string, name: string, content: string): Promise<void> {
+    writeFileSync(join(repoDir, name), content, 'utf8')
+    await runGit(['add', '.'], repoDir, GIT)
+    await runGit(['commit', '-m', `commit-${name}`], repoDir, GIT)
+  }
+
+  it('版本键集 / 每版本 commit 与日期 / latest 全等（轻量 tag；<1.13.0 与非语义化双侧同滤）', async () => {
+    const repoDir = await initLocalRepo() // c1 → c2（HEAD）
+    await runGit(['tag', '1.13.0'], repoDir, GIT)
+    await commitFile(repoDir, 'a.txt', 'v3\n')
+    await runGit(['tag', '1.14.0'], repoDir, GIT)
+    await runGit(['tag', '1.12.9'], repoDir, GIT) // 低于 1.13.0 → 过滤
+    await runGit(['tag', 'not-semver'], repoDir, GIT) // 非语义化 → 过滤
+
+    const embedded = await getStTagsEmbedded(repoDir)
+    const spawn = await getStTags(repoDir, GIT)
+    expect(embedded.ok).toBe(true)
+    expect(spawn.ok).toBe(true)
+
+    const embeddedKeys = Object.keys(embedded.data?.versions ?? {}).sort()
+    const spawnKeys = Object.keys(spawn.data?.versions ?? {}).sort()
+    expect(embeddedKeys).toEqual(['1.13.0', '1.14.0'])
+    expect(spawnKeys).toEqual(embeddedKeys)
+    expect(embedded.data?.latest).toBe('1.14.0')
+    expect(spawn.data?.latest).toBe('1.14.0')
+
+    for (const tagName of ['1.13.0', '1.14.0']) {
+      // 键 = normalizeVersion(tag)——本组 tag 无 v 前缀，键与 tag 名相同
+      const embeddedTag = embedded.data?.versions[tagName]
+      const spawnTag = spawn.data?.versions[tagName]
+      expect(embeddedTag).toBeDefined()
+      expect(spawnTag).toBeDefined()
+      // commit 与 git rev-parse <tag> 全等（轻量 tag：ref 直指 commit）
+      const revParse = await runGit(['rev-parse', tagName], repoDir, GIT)
+      expect(embeddedTag?.commit).toBe(revParse.stdout.trim())
+      expect(spawnTag?.commit).toBe(revParse.stdout.trim())
+      // 日期与 git show --format=%aI 全等（严格 ISO 8601 带偏移）
+      const authorDate = await runGit(['show', tagName, '-s', '--format=%aI'], repoDir, GIT)
+      expect(embeddedTag?.date).toBe(authorDate.stdout.trim())
+      expect(spawnTag?.date).toBe(authorDate.stdout.trim())
+      expect(embeddedTag?.tag_name).toBe(tagName)
+    }
+  })
+
+  it('附注 tag：embedded 剥壳取目标 commit + 作者日期；spawn 侧 commit 被 tag header 污染（既有怪癖，ST 官方 tag 为轻量不触发）', async () => {
+    const repoDir = await initLocalRepo()
+    await runGit(['tag', '-a', '1.15.0', '-m', 'annotated'], repoDir, GIT)
+
+    const embedded = await getStTagsEmbedded(repoDir)
+    expect(Object.keys(embedded.data?.versions ?? {})).toEqual(['1.15.0'])
+    // 剥壳：commit = <tag>^{commit}（而非 tag 对象 oid）
+    const peeled = await runGit(['rev-parse', '1.15.0^{commit}'], repoDir, GIT)
+    const peeledOid = peeled.stdout.trim()
+    expect(embedded.data?.versions['1.15.0']?.commit).toBe(peeledOid)
+    // embedded 日期 = 剥壳后 commit 的作者日期（语义正确的口径）
+    const authorDate = await runGit(['show', peeledOid, '-s', '--format=%aI'], repoDir, GIT)
+    expect(embedded.data?.versions['1.15.0']?.date).toBe(authorDate.stdout.trim())
+
+    // spawn 侧既有行为（实证）：`git show <附注tag>` stdout = tag header 若干行 + "oid|date"
+    // 格式行 → split('|') 恰两段，commit 残留多行 header（污染值）。附注 tag 上两实现
+    // 的差异属 spawn 侧既有怪癖（ST 官方 release tag 全为轻量，不触发），非本次引入
+    const spawn = await getStTags(repoDir, GIT)
+    expect(spawn.ok).toBe(true)
+    const spawnTag = spawn.data?.versions['1.15.0']
+    expect(spawnTag).toBeDefined()
+    expect(spawnTag?.commit).toContain(peeledOid)
+    expect(spawnTag?.commit).not.toBe(peeledOid)
+  })
+
+  it('非仓库目录：与 spawn 侧同语义失败文案', async () => {
+    const missing = await getStTagsEmbedded(join(workDir, 'nope'))
+    expect(missing.ok).toBe(false)
+    expect(missing.message).toBe('SillyTavern目录不存在')
+
+    mkdirSync(join(workDir, 'plain'), { recursive: true })
+    const notRepo = await getStTagsEmbedded(join(workDir, 'plain'))
+    expect(notRepo.ok).toBe(false)
+    expect(notRepo.message).toBe('SillyTavern目录不是Git仓库')
+  })
+})
+
+describe('currentVersionEmbedded（describe --tags --abbrev=0 + rev-parse HEAD 等价）', () => {
+  it('HEAD 精确命中 tag → 直接返回该 tag；commit 与 rev-parse HEAD 一致', async () => {
+    const repoDir = await initLocalRepo()
+    await runGit(['tag', '1.14.0'], repoDir, GIT)
+    await runGit(['checkout', '-q', '1.14.0'], repoDir, GIT)
+
+    const result = await currentVersionEmbedded(repoDir)
+    const head = await runGit(['rev-parse', 'HEAD'], repoDir, GIT)
+    expect(result.version).toBe('1.14.0')
+    expect(result.commit).toBe(head.stdout.trim())
+  })
+
+  it('HEAD 领先 tag → 沿祖先回溯取最近 tag（与 git describe --tags --abbrev=0 全等）', async () => {
+    const repoDir = await initLocalRepo()
+    await runGit(['tag', '1.13.0'], repoDir, GIT)
+    writeFileSync(join(repoDir, 'a.txt'), 'v3\n', 'utf8')
+    await runGit(['add', '.'], repoDir, GIT)
+    await runGit(['commit', '-m', 'c3'], repoDir, GIT)
+    await runGit(['tag', '1.14.0'], repoDir, GIT)
+    writeFileSync(join(repoDir, 'a.txt'), 'v4\n', 'utf8')
+    await runGit(['add', '.'], repoDir, GIT)
+    await runGit(['commit', '-m', 'c4'], repoDir, GIT) // HEAD 在 1.14.0 之后
+
+    const result = await currentVersionEmbedded(repoDir)
+    const describe = await runGit(['describe', '--tags', '--abbrev=0'], repoDir, GIT)
+    expect(result.version).toBe('1.14.0')
+    expect(describe.stdout.trim()).toBe('1.14.0')
+  })
+
+  it('无 tag / 非仓库 → version null（对齐 spawn 侧 describe 失败置 null）', async () => {
+    const repoDir = await initLocalRepo() // 无 tag
+    const noTag = await currentVersionEmbedded(repoDir)
+    expect(noTag.version).toBeNull()
+    expect(noTag.commit).not.toBeNull()
+
+    const notRepo = await currentVersionEmbedded(join(workDir, 'nope'))
+    expect(notRepo).toEqual({ version: null, commit: null })
+  })
+})
+
+describe('caProvider 默认接线（F6 生产契约：劫持网络下 TLS 回退的唯一通道）', () => {
+  it('IsoGitOps 未注入 caProvider 时默认使用 httpClient.getWindowsCaPem，TLS 失败重试恰好一次', async () => {
+    const caSpy = vi.spyOn(httpClient, 'getWindowsCaPem').mockResolvedValue('FAKE-CA-PEM')
+    try {
+      const fetchImpl = vi.fn(async () => {
+        throw tlsVerifyError()
+      })
+      const repoDir = await initLocalRepo()
+      await runGit(['remote', 'add', 'origin', 'https://github.com/SillyTavern/SillyTavern.git'], repoDir, GIT)
+      const ops = new IsoGitOps({
+        fetchImpl: fetchImpl as never,
+        // 关键：不注入 caProvider —— 验证生产默认接线（Phase 4 收尾修复点）
+        onLog: () => undefined,
+      })
+      const result = await ops.fetchOrigin(repoDir)
+      expect(result.ok).toBe(false)
+      expect(fetchImpl).toHaveBeenCalledTimes(2) // 首次失败 + CA 注入重试一次
+      expect(caSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      caSpy.mockRestore()
+    }
   })
 })

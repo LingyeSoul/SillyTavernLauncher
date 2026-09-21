@@ -15,6 +15,7 @@ import { resolvePortableEnv } from './env'
 import { getConfigStore } from './configStore'
 import type { EnvMode } from './configStore'
 import { logError } from './errorLog'
+import { mirrorDisplayName } from './mirrors'
 import { IS_WINDOWS, spawnAsync } from './runtime'
 import type { BoolMessage, CommitResult, SyncSpawnResult, TagsResult } from './types'
 import { compareVersions } from './env'
@@ -64,7 +65,9 @@ export function resolveGitExecutable(options: { envMode?: EnvMode } = {}): strin
   if (envMode === 'system') {
     return 'git'
   }
-  // TODO(phase2/phase5): embedded 专属分支（embedded 的 Git 走 isoGit 服务，不经本函数）
+  // Phase 4 已了结：embedded 的 Git 全部经 isoGit 服务（StRepoOps 路由 / 扩展浅克隆
+  // / 版本页 getStTagsEmbedded / currentVersionEmbedded），不落本函数——embedded 下
+  // 唯一到达此处的前提是误用 spawn git，返回值不可达亦不可信，属调用方缺陷
   return resolvePortableEnv().gitExe
 }
 
@@ -299,14 +302,9 @@ export async function switchGitRemote(
     const remoteUrl = 'https://github.com/SillyTavern/SillyTavern.git'
     const result = await runGit(['remote', 'set-url', 'origin', remoteUrl], dir, options)
     if (result.ok) {
-      const mirrorName =
-        mirrorType === 'github'
-          ? 'GitHub官方源'
-          : mirrorType === 'gh-proxy.org'
-            ? 'gh-proxy.org镜像'
-            : mirrorType === 'gh.llkk.cc'
-              ? 'gh.llkk.cc镜像'
-              : mirrorType
+      // 镜像名标注（2026-09-21 镜像增强）：镜像站名单已收敛到 mirrors 注册表，
+      // 此处不再硬编码站名——官方源哨兵 'github' 之外一律按镜像站回报
+      const mirrorName = mirrorDisplayName(mirrorType)
       return { ok: true, message: `已将远程地址设置为GitHub仓库（通过${mirrorName}加速）` }
     }
     return { ok: false, message: `切换失败: ${result.stderr.trim()}` }
@@ -397,17 +395,19 @@ export async function cleanupGitState(
   }
 }
 
-/** ← get_st_tags 内部的版本 tag 正则（x.y.z 可带预发布/构建后缀） */
-const VERSION_TAG_RE = /^(\d+)\.(\d+)\.(\d+)(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$/
+/** ← get_st_tags 内部的版本 tag 正则（x.y.z 可带预发布/构建后缀）。
+ *  Phase 4 收尾导出：isoGit.getStTagsEmbedded 复用同一过滤语义，避免两处漂移 */
+export const VERSION_TAG_RE = /^(\d+)\.(\d+)\.(\d+)(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$/
 
-function normalizeVersion(tagName: string): string {
+export function normalizeVersion(tagName: string): string {
   if (tagName.startsWith('v') || tagName.startsWith('V')) {
     return tagName.slice(1)
   }
   return tagName
 }
 
-function versionGte1130(versionStr: string): boolean {
+/** 语义化版本 ≥1.13.0 判定（Phase 4 收尾导出：与 VERSION_TAG_RE 同理由 isoGit 复用） */
+export function versionGte1130(versionStr: string): boolean {
   const parts = versionStr.split('.')
   if (parts.length < 3) return false
   const nums = parts.slice(0, 3).map(Number)
