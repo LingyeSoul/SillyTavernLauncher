@@ -13,7 +13,7 @@ import { errMsg, logError } from '../../services/errorLog'
 import { useUiState } from '../../stores/uiState'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
-import { Modal } from '../components/Modal'
+import { Modal, useModalClose } from '../components/Modal'
 import { Radio } from '../components/Radio'
 
 const TEXTS = {
@@ -101,6 +101,23 @@ export const WELCOME_QUESTIONS: readonly WelcomeQuestion[] = [
 ]
 
 export function WelcomeDialog() {
+  // 问答体在 Provider 子树内取 useModalClose（PR4）：完成按钮播退场后卸载；
+  // 按钮本就渲染在 children（非 actions 插槽），整 body 下移即取到 context
+  return (
+    <Modal
+      open
+      strong
+      width={480}
+      title={TEXTS.title}
+      // 结算回调：退场播完后由 Modal 调用，直呼 closeTopDialog 真卸载（见 Modal.tsx 头注释）
+      onClose={() => useUiState.getState().closeTopDialog()}>
+      <WelcomeDialogBody />
+    </Modal>
+  )
+}
+
+function WelcomeDialogBody() {
+  const requestClose = useModalClose()
   const t = useTheme()
   const [step, setStep] = useState(0)
   const [answers, setAnswers] = useState<Array<boolean | null>>(
@@ -128,14 +145,14 @@ export function WelcomeDialog() {
       } catch (err) {
         logError(`[welcome] 保存首次启动状态失败: ${errMsg(err)}`)
       }
-      useUiState.getState().closeTopDialog()
+      requestClose()
       return
     }
     setStep(step + 1)
   }
 
   return (
-    <Modal open strong width={480} title={TEXTS.title}>
+    <>
       {/* 步进器头部 + 进度点 */}
       <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <text style={{ fontSize: 13, fontWeight: 500, color: t.text.secondary, fontFamily: t.font.sans }}>
@@ -215,6 +232,6 @@ export function WelcomeDialog() {
           {isLast ? TEXTS.finish : TEXTS.next}
         </Button>
       </div>
-    </Modal>
+    </>
   )
 }

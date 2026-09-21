@@ -63,6 +63,15 @@ describe('终端按钮异常路径（无 SillyTavern 环境）', () => {
     expect(hasStarted).toBe(true)
 
     // --- 3. 点「安装」→ 年龄确认（安装模式）→ 取消 → 日志留痕 ---
+    // 先等上一年龄确认对话框真正卸载：确认按钮经 requestClose 播 240ms 退场后才
+    // 结算关闭（PR4 起按钮与 Escape 同路径），退场窗口内遮罩仍拦截主界面命中——
+    // 不等就点安装会被吞，且 waitFor(age-confirm) 会命中退场中的旧按钮
+    let prevAgeGone = false
+    for (let i = 0; i < 20 && !prevAgeGone; i++) {
+      prevAgeGone = (await app.getByTestId('age-confirm').all()).length === 0
+      if (!prevAgeGone) await sleep(250)
+    }
+    expect(prevAgeGone, '确认启动后年龄确认对话框应完成退场并关闭').toBe(true)
     await app.getByTestId('terminal-install').click()
     await app.getByTestId('age-confirm').waitFor({ timeoutMs: 5_000 })
     await app.getByTestId('age-cancel').click()

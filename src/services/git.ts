@@ -13,6 +13,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { resolvePortableEnv } from './env'
 import { getConfigStore } from './configStore'
+import type { EnvMode } from './configStore'
 import { logError } from './errorLog'
 import { IS_WINDOWS, spawnAsync } from './runtime'
 import type { BoolMessage, CommitResult, SyncSpawnResult, TagsResult } from './types'
@@ -50,7 +51,7 @@ export type GitExecutor = (cmd: string[], cwd: string) => Promise<SyncSpawnResul
 export interface GitCallOptions {
   /**
    * 显式指定 git 可执行文件（测试注入用）。
-   * 默认按 config 的 use_sys_env 解析：系统模式 "git"，便携模式 env/cmd/git.exe。
+   * 默认按 config 的 env_mode 解析：system 模式 "git"，其余模式 env/cmd/git.exe。
    */
   gitExecutable?: string
   /** 执行器注入（测试断言 schannel 回退参数；默认真实 spawn） */
@@ -58,11 +59,12 @@ export interface GitCallOptions {
 }
 
 /** ← _get_git_command */
-export function resolveGitExecutable(options: { useSysEnv?: boolean } = {}): string {
-  const useSysEnv = options.useSysEnv ?? getConfigStore().get<boolean>('use_sys_env', false)
-  if (useSysEnv) {
+export function resolveGitExecutable(options: { envMode?: EnvMode } = {}): string {
+  const envMode = options.envMode ?? getConfigStore().get<EnvMode>('env_mode', 'portable')
+  if (envMode === 'system') {
     return 'git'
   }
+  // TODO(phase2/phase5): embedded 专属分支（embedded 的 Git 走 isoGit 服务，不经本函数）
   return resolvePortableEnv().gitExe
 }
 

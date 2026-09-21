@@ -210,6 +210,35 @@ describe('全量 UI 渲染几何审计', () => {
     await audit('settings-select-open', 'audit-settings-select-open.png')
     await app.call('keystrokes', { keys: 'escape' })
     await sleep(SETTLE_MS)
+    // 环境模式下拉三选一 + embedded 警告对话框（Embedded-All Phase 1 / D4）：
+    // 种子 seedSt → env_mode='system'；点击目标项标签在"当前值 ≠ 目标值"时唯一
+    // （触发器显示当前值标签，下拉项三选一，二者不重复命中）
+    await app.getByTestId('setting-env-mode').click()
+    await sleep(SETTLE_MS)
+    await audit('settings-envmode-open', 'audit-settings-envmode-open.png')
+    // 选 embedded → 兼容性风险确认对话框（四条风险逐字）
+    await app.getByText('启动器内置运行时（实验性）').click()
+    await app.getByTestId('env-embedded-confirm-cancel').waitFor({ timeoutMs: 10_000 })
+    await sleep(SETTLE_MS)
+    await audit('env-embedded-confirm', 'audit-env-embedded-confirm.png')
+    // 取消 → 不落盘，Select 由 settings 状态驱动回显种子值（system）
+    await app.getByTestId('env-embedded-confirm-cancel').click()
+    await sleep(SETTLE_MS)
+    await audit('settings-env-after-cancel', 'audit-settings-env-after-cancel.png')
+    // 再选 embedded → 确认 → env_mode=embedded，常驻 warning hint 出现
+    await app.getByTestId('setting-env-mode').click()
+    await sleep(SETTLE_MS)
+    await app.getByText('启动器内置运行时（实验性）').click()
+    await app.getByTestId('env-embedded-confirm-ok').waitFor({ timeoutMs: 10_000 })
+    await app.getByTestId('env-embedded-confirm-ok').click()
+    await app.getByTestId('setting-env-mode-warning').waitFor({ timeoutMs: 10_000 })
+    await sleep(SETTLE_MS)
+    await audit('settings-env-embedded', 'audit-settings-env-embedded.png')
+    // 恢复种子状态：切回系统环境（非 embedded 目标不弹确认框）
+    await app.getByTestId('setting-env-mode').click()
+    await sleep(SETTLE_MS)
+    await app.getByText('系统环境（Git + Node.js）').click()
+    await sleep(SETTLE_MS)
     await app.getByTestId('settings-tab-st').click()
     await sleep(SETTLE_MS)
     await audit('settings-st', 'audit-settings-st.png')

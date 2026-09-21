@@ -12,7 +12,7 @@ import { uiStateActions, useUiState } from '../../stores/uiState'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
 import { Input } from '../components/Input'
-import { Modal } from '../components/Modal'
+import { Modal, useModalClose } from '../components/Modal'
 import { Select } from '../components/Select'
 
 const TEXTS = {
@@ -38,15 +38,25 @@ const TARGET_ITEMS = [
   { value: 'user', label: '用户插件' },
 ]
 
+/** Escape 结算专用（PR4：动作按钮一律走 useModalClose 的 requestClose 播退场；
+ *  此 helper 只剩 Modal onClose 结算回调一处用途——直呼真卸载，见 Modal.tsx 头注释） */
 function closeTop(): void {
   useUiState.getState().closeTopDialog()
 }
 
-export function GitInstallDialog() {
-  const t = useTheme()
-  const [url, setUrl] = useState('')
-  const [target, setTarget] = useState('global')
-  const [installing, setInstalling] = useState(false)
+/** Git 安装动作区（Provider 子树内取 useModalClose）：取消/异步收尾统一播退场 */
+function GitInstallActions({
+  url,
+  target,
+  installing,
+  setInstalling,
+}: {
+  url: string
+  target: string
+  installing: boolean
+  setInstalling: (v: boolean) => void
+}) {
+  const requestClose = useModalClose()
 
   const handleInstall = (): void => {
     const trimmed = url.trim()
@@ -70,9 +80,27 @@ export function GitInstallDialog() {
       uiStateActions.pushToast(result.ok ? 'success' : 'error', result.message)
       // 安装完成后 bump 计数驱动 ExtensionsView 重扫，再收起对话框
       uiStateActions.bumpExtensions()
-      closeTop()
+      requestClose()
     })()
   }
+
+  return (
+    <>
+      <Button variant="quiet" disabled={installing} onClick={requestClose} testId="git-install-cancel">
+        {TEXTS.cancel}
+      </Button>
+      <Button variant="primary" icon="download" disabled={installing} onClick={handleInstall} testId="git-install-confirm">
+        {installing ? TEXTS.installing : TEXTS.install}
+      </Button>
+    </>
+  )
+}
+
+export function GitInstallDialog() {
+  const t = useTheme()
+  const [url, setUrl] = useState('')
+  const [target, setTarget] = useState('global')
+  const [installing, setInstalling] = useState(false)
 
   return (
     <Modal
@@ -81,14 +109,7 @@ export function GitInstallDialog() {
       title={TEXTS.gitTitle}
       onClose={installing ? undefined : closeTop}
       actions={
-        <>
-          <Button variant="quiet" disabled={installing} onClick={closeTop} testId="git-install-cancel">
-            {TEXTS.cancel}
-          </Button>
-          <Button variant="primary" icon="download" disabled={installing} onClick={handleInstall} testId="git-install-confirm">
-            {installing ? TEXTS.installing : TEXTS.install}
-          </Button>
-        </>
+        <GitInstallActions url={url} target={target} installing={installing} setInstalling={setInstalling} />
       }>
       <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 8 }}>
         {TEXTS.gitHint}
@@ -103,6 +124,52 @@ export function GitInstallDialog() {
       </text>
       <Select items={TARGET_ITEMS} value={target} onValueChange={setTarget} width={160} testId="git-install-target" />
     </Modal>
+  )
+}
+
+/** ZIP 安装动作区（Provider 子树内取 useModalClose）：取消/异步收尾统一播退场 */
+function ZipInstallActions({
+  path,
+  target,
+  installing,
+  setInstalling,
+}: {
+  path: string
+  target: string
+  installing: boolean
+  setInstalling: (v: boolean) => void
+}) {
+  const requestClose = useModalClose()
+
+  const handleInstall = (): void => {
+    const trimmed = path.trim()
+    if (!trimmed) {
+      uiStateActions.pushToast('error', TEXTS.zipEmpty)
+      return
+    }
+    const extType: ExtensionType = target === 'global' ? 'global' : 'user'
+    // busy 态期间保持对话框可见（同 Git 安装）
+    setInstalling(true)
+    void (async () => {
+      const manager = getExtensionManager({
+        log: (message) => useTerminalLogs.getState().appendLine(message),
+      })
+      const result = await manager.installFromZip(trimmed, extType)
+      uiStateActions.pushToast(result.ok ? 'success' : 'error', result.message)
+      uiStateActions.bumpExtensions()
+      requestClose()
+    })()
+  }
+
+  return (
+    <>
+      <Button variant="quiet" disabled={installing} onClick={requestClose} testId="zip-install-cancel">
+        {TEXTS.cancel}
+      </Button>
+      <Button variant="primary" icon="archive" disabled={installing} onClick={handleInstall} testId="zip-install-confirm">
+        {installing ? TEXTS.installing : TEXTS.install}
+      </Button>
+    </>
   )
 }
 
@@ -121,26 +188,6 @@ export function ZipInstallDialog() {
     })
   }
 
-  const handleInstall = (): void => {
-    const trimmed = path.trim()
-    if (!trimmed) {
-      uiStateActions.pushToast('error', TEXTS.zipEmpty)
-      return
-    }
-    const extType: ExtensionType = target === 'global' ? 'global' : 'user'
-    // busy 态期间保持对话框可见（同 Git 安装）
-    setInstalling(true)
-    void (async () => {
-      const manager = getExtensionManager({
-        log: (message) => useTerminalLogs.getState().appendLine(message),
-      })
-      const result = await manager.installFromZip(trimmed, extType)
-      uiStateActions.pushToast(result.ok ? 'success' : 'error', result.message)
-      uiStateActions.bumpExtensions()
-      closeTop()
-    })()
-  }
-
   return (
     <Modal
       open
@@ -148,14 +195,7 @@ export function ZipInstallDialog() {
       title={TEXTS.zipTitle}
       onClose={installing ? undefined : closeTop}
       actions={
-        <>
-          <Button variant="quiet" disabled={installing} onClick={closeTop} testId="zip-install-cancel">
-            {TEXTS.cancel}
-          </Button>
-          <Button variant="primary" icon="archive" disabled={installing} onClick={handleInstall} testId="zip-install-confirm">
-            {installing ? TEXTS.installing : TEXTS.install}
-          </Button>
-        </>
+        <ZipInstallActions path={path} target={target} installing={installing} setInstalling={setInstalling} />
       }>
       <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans, marginBottom: 8 }}>
         {TEXTS.zipHint}

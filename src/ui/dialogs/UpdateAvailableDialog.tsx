@@ -7,7 +7,7 @@
 import { editorTheme, useTheme, useThemeContext } from '../theme'
 import { Button } from '../components/Button'
 import { Chip } from '../components/Chip'
-import { Modal } from '../components/Modal'
+import { Modal, useModalClose } from '../components/Modal'
 import { SmartScrollArea } from '../components/SmartScroll'
 import { useUiState } from '../../stores/uiState'
 import { openUrl } from '../../services/platform'
@@ -28,6 +28,28 @@ export interface UpdateAvailableDialogProps {
   downloadUrl: string
 }
 
+/** 动作区（Provider 子树内取 useModalClose，PR4）：稍后提醒/前往下载统一走 requestClose 播退场 */
+function UpdateAvailableActions({ downloadUrl }: { downloadUrl: string }) {
+  const requestClose = useModalClose()
+  return (
+    <>
+      <Button variant="quiet" onClick={requestClose} testId="update-later">
+        {TEXTS.later}
+      </Button>
+      <Button
+        variant="primary"
+        icon="externalLink"
+        onClick={() => {
+          void openUrl(downloadUrl)
+          requestClose()
+        }}
+        testId="update-download">
+        {TEXTS.download}
+      </Button>
+    </>
+  )
+}
+
 export function UpdateAvailableDialog({
   currentVersion,
   latestVersion,
@@ -43,24 +65,9 @@ export function UpdateAvailableDialog({
       open
       width={520}
       title={TEXTS.title}
+      // 结算回调：退场播完后由 Modal 调用，直呼 closeTopDialog 真卸载（见 Modal.tsx 头注释）
       onClose={() => useUiState.getState().closeTopDialog()}
-      actions={
-        <>
-          <Button variant="quiet" onClick={() => useUiState.getState().closeTopDialog()} testId="update-later">
-            {TEXTS.later}
-          </Button>
-          <Button
-            variant="primary"
-            icon="externalLink"
-            onClick={() => {
-              void openUrl(downloadUrl)
-              useUiState.getState().closeTopDialog()
-            }}
-            testId="update-download">
-            {TEXTS.download}
-          </Button>
-        </>
-      }>
+      actions={<UpdateAvailableActions downloadUrl={downloadUrl} />}>
       {/* 版本对 */}
       <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         <Chip>{`v${currentVersion}`}</Chip>

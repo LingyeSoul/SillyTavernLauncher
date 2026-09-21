@@ -9,7 +9,7 @@ import { extensionDisplayFields, getExtensionManager, type ExtensionInfo } from 
 import { useTerminalLogs } from '../../stores/terminalLogs'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
-import { Modal } from '../components/Modal'
+import { Modal, useModalClose } from '../components/Modal'
 
 const TEXTS = {
   title: '确认删除',
@@ -24,12 +24,12 @@ export interface DeleteExtensionDialogProps {
   ext: ExtensionInfo
 }
 
-export function DeleteExtensionDialog({ ext }: DeleteExtensionDialogProps) {
-  const t = useTheme()
-  const fields = extensionDisplayFields(ext)
+/** 动作区（Provider 子树内取 useModalClose，PR4）：删除/取消统一走 requestClose 播退场 */
+function DeleteExtensionActions({ ext }: DeleteExtensionDialogProps) {
+  const requestClose = useModalClose()
 
   const handleDelete = (): void => {
-    useUiState.getState().closeTopDialog()
+    requestClose()
     const manager = getExtensionManager({
       log: (message) => useTerminalLogs.getState().appendLine(message),
     })
@@ -40,21 +40,29 @@ export function DeleteExtensionDialog({ ext }: DeleteExtensionDialogProps) {
   }
 
   return (
+    <>
+      <Button variant="quietDanger" icon="trash" onClick={handleDelete} testId="delete-ext-confirm">
+        {TEXTS.remove}
+      </Button>
+      <Button variant="primary" onClick={requestClose} testId="delete-ext-cancel">
+        {TEXTS.cancel}
+      </Button>
+    </>
+  )
+}
+
+export function DeleteExtensionDialog({ ext }: DeleteExtensionDialogProps) {
+  const t = useTheme()
+  const fields = extensionDisplayFields(ext)
+
+  return (
     <Modal
       open
       width={400}
       title={TEXTS.title}
+      // 结算回调：退场播完后由 Modal 调用，直呼 closeTopDialog 真卸载（见 Modal.tsx 头注释）
       onClose={() => useUiState.getState().closeTopDialog()}
-      actions={
-        <>
-          <Button variant="quietDanger" icon="trash" onClick={handleDelete} testId="delete-ext-confirm">
-            {TEXTS.remove}
-          </Button>
-          <Button variant="primary" onClick={() => useUiState.getState().closeTopDialog()} testId="delete-ext-cancel">
-            {TEXTS.cancel}
-          </Button>
-        </>
-      }>
+      actions={<DeleteExtensionActions ext={ext} />}>
       <text style={{ fontSize: 13, fontWeight: 500, color: t.text.primary, fontFamily: t.font.sans }}>
         {TEXTS.body(fields.displayName)}
       </text>

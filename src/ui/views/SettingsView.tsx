@@ -5,7 +5,7 @@
  * 布局为"固定头 + 内容滚动"自管形态（PageScaffold + scrollKey 重挂，O11 回写）：
  * 标题 + tab 栏固定不动，仅 tab 内容区 SmartScrollArea 智能滚动（切 tab 重挂
  * 回到顶部）。tab 分组按"配置写到哪"切分：
- * - 环境：Git/Node 运行环境切换 + GitHub 镜像 + 环境工具（use_sys_env 与体检按钮联动，
+ * - 环境：Git/Node 运行环境切换 + GitHub 镜像 + 环境工具（env_mode 三态下拉与体检按钮联动，
  *   必须同页；镜像与 patchgit 同属 gitconfig 镜像链路，2026-09-20 自启动器页移入）
  * - 酒馆设置：写 SillyTavern config.yaml 与启动命令的项（启动参数/网络/酒馆更新）
  * - 启动器设置：启动器自身行为与外观（更新检查/自启/动效/终端字体）
@@ -16,7 +16,7 @@
 import { useState } from 'react'
 import type { ReactElement } from 'react'
 import { dirname, join } from 'node:path'
-import { getConfigStore } from '../../services/configStore'
+import type { EnvMode } from '../../services/configStore'
 import { checkEnv, resolvePortableEnv, probeSystemGit, probeSystemNode } from '../../services/env'
 import { validateCustomArgs } from '../../services/processManager'
 import { launchCommandLine } from '../../services/platform'
@@ -47,8 +47,8 @@ const TEXTS = {
   tabLauncher: '启动器设置',
   // 环境页
   sectionEnvSwitch: '运行环境',
-  useSysEnv: '使用系统环境',
-  useSysEnvDesc: '懒人包请勿修改，修改后重启生效 | 使用系统已安装的 Git 与 Node.js',
+  envModeLabel: '环境模式',
+  envModeEmbeddedHint: '当前为实验性内置运行时，兼容性问题请切换环境模式',
   patchgit: '启用修改Git配置文件',
   patchgitDesc: '开启后修改系统环境的Git配置文件（镜像源改写）',
   mirrorLabel: 'GitHub 镜像',
@@ -60,6 +60,7 @@ const TEXTS = {
   sectionLaunchArgs: '启动参数',
   useOptimizeArgs: '使用优化参数',
   useOptimizeArgsDesc: '开启后将在启动命令中添加 --max-old-space-size=4096 参数（在自定义启动参数前）',
+  useOptimizeArgsEmbeddedHint: '内置运行时（Bun）不支持该参数，将忽略',
   customArgsLabel: '自定义启动参数',
   customArgsHint: '在此输入自定义启动参数，将添加到启动命令中，如果你不清楚，请留空！',
   customArgsDesc: '自定义启动参数将添加到启动命令末尾',
@@ -139,6 +140,14 @@ const MIRROR_ITEMS = [
   { value: 'github', label: '官方源 (github.com)' },
   { value: 'gh-proxy.org', label: '镜像站点 (gh-proxy.org)' },
   { value: 'gh.llkk.cc', label: '镜像站点 (gh.llkk.cc)' },
+]
+
+/** 环境模式下拉三选一（设计 §5.1 / D1：use_sys_env 开关的三态化后继；
+ *  value 即 config 的 env_mode 键值） */
+const ENV_MODE_ITEMS = [
+  { value: 'portable', label: '内置懒人包环境（env/）' },
+  { value: 'system', label: '系统环境（Git + Node.js）' },
+  { value: 'embedded', label: '启动器内置运行时（实验性）' },
 ]
 
 /** 终端字体下拉精选（value 即写入 config 的字体族名；'' = 跟随主题默认 Consolas）。
@@ -256,10 +265,22 @@ export function SettingsView() {
     setFontDraft(validation.value)
   }
 
-  /** ← in_env_check / sys_env_check：内置环境体检；use_sys_env 开启时改走系统探测 */
+  /** 环境模式切换（设计 §5.2 / D4）：切至 embedded 先弹兼容性风险确认——
+   *  确认才落盘；取消不动 settings，Select 由 settings 状态驱动自动回显原值 */
+  const handleEnvModeChange = (v: string): void => {
+    if (v === 'embedded' && settings.envMode !== 'embedded') {
+      uiStateActions.openDialog({
+        kind: 'envModeEmbeddedConfirm',
+        onConfirm: () => settings.update({ envMode: 'embedded' }),
+      })
+      return
+    }
+    settings.update({ envMode: v as EnvMode })
+  }
+
+  /** ← in_env_check / sys_env_check：内置环境体检；system 模式改走系统探测 */
   const handleCheckEnv = (): void => {
-    const useSysEnv = getConfigStore().get<boolean>('use_sys_env', false)
-    if (useSysEnv) {
+    if (settings.envMode === 'system') {
       const git = probeSystemGit()
       const node = probeSystemNode()
       if (git.ok && node.ok) {
@@ -272,6 +293,7 @@ export function SettingsView() {
       }
       return
     }
+    // TODO(phase5): embedded 专属分支（exe 自身即运行时，恒通过提示就绪）
     const paths = resolvePortableEnv(join(process.cwd(), 'env'))
     const result = checkEnv(paths)
     if (result === true) {
@@ -283,9 +305,9 @@ export function SettingsView() {
 
   /** ← start_cmd：启动带便携 env PATH 的命令行 */
   const handleStartCmd = (): void => {
-    const config = getConfigStore()
     const prependDirs: string[] = []
-    if (!config.get<boolean>('use_sys_env', false)) {
+    if (settings.envMode !== 'system') {
+      // TODO(phase5): embedded 专属分支（无 PATH 前置目录，直接 launchCommandLine([])）
       const paths = resolvePortableEnv(join(process.cwd(), 'env'))
       prependDirs.push(dirname(paths.nodeExe), paths.gitDir)
     } else {
@@ -333,8 +355,28 @@ export function SettingsView() {
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           <Card>
             <SectionTitle title={TEXTS.sectionEnvSwitch} />
-            {switchRow('use_sys_env', TEXTS.useSysEnv, TEXTS.useSysEnvDesc, settings.useSysEnv, (v) => settings.update({ useSysEnv: v }))}
-            {switchRow('patchgit', TEXTS.patchgit, TEXTS.patchgitDesc, settings.patchgit, (v) => settings.update({ patchgit: v }))}
+            {/* 环境模式下拉三选一（D1/D4）：切 embedded 经 handleEnvModeChange 弹风险确认 */}
+            <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans, flexShrink: 0 }}>
+                {TEXTS.envModeLabel}
+              </text>
+              <Select
+                items={ENV_MODE_ITEMS}
+                value={settings.envMode}
+                onValueChange={handleEnvModeChange}
+                width={260}
+                testId="setting-env-mode"
+              />
+            </div>
+            {/* embedded 激活期间常驻警示（D4：warning 色 FieldHint 覆盖默认 muted） */}
+            {settings.envMode === 'embedded' && (
+              <FieldHint style={{ color: t.status.warning, marginTop: 4 }} testId="setting-env-mode-warning">
+                {TEXTS.envModeEmbeddedHint}
+              </FieldHint>
+            )}
+            {/* patchgit 只影响系统 git 的 gitconfig 改写（D4：仅 system 模式渲染） */}
+            {settings.envMode === 'system' &&
+              switchRow('patchgit', TEXTS.patchgit, TEXTS.patchgitDesc, settings.patchgit, (v) => settings.update({ patchgit: v }))}
             {/* 镜像行紧随 patchgit：两者同属 gitconfig 镜像链路（2026-09-20 自启动器页移入） */}
             <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 12 }}>
               <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans, flexShrink: 0 }}>
@@ -354,7 +396,7 @@ export function SettingsView() {
             <SectionTitle title={TEXTS.sectionTools} />
             <div style={{ display: 'flex', flexDirection: 'row', gap: 8 }}>
               <Button variant="default" icon="settings" onClick={handleCheckEnv} testId="setting-check-env">
-                {envCheckLabel(getConfigStore().get<boolean>('use_sys_env', false))}
+                {envCheckLabel(settings.envMode)}
               </Button>
               <Button variant="default" icon="terminal" onClick={handleStartCmd} testId="setting-start-cmd">
                 {TEXTS.startCmd}
@@ -371,6 +413,13 @@ export function SettingsView() {
           <Card>
             <SectionTitle title={TEXTS.sectionLaunchArgs} />
             {switchRow('use_optimize_args', TEXTS.useOptimizeArgs, TEXTS.useOptimizeArgsDesc, settings.useOptimizeArgs, (v) => settings.update({ useOptimizeArgs: v }))}
+            {/* D7：--max-old-space-size 是 V8 旗标，Bun（JavaScriptCore）下无意义；
+                embedded 时追加 hint 标注将忽略（保存仍允许，Phase 2 启动侧落地忽略） */}
+            {settings.envMode === 'embedded' && (
+              <FieldHint style={{ marginTop: 4 }} testId="setting-optimize-args-embedded-hint">
+                {TEXTS.useOptimizeArgsEmbeddedHint}
+              </FieldHint>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
               <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans }}>
                 {TEXTS.customArgsLabel}
@@ -606,6 +655,7 @@ export function SettingsView() {
   )
 }
 
-function envCheckLabel(useSysEnv: boolean): string {
-  return useSysEnv ? '检查系统环境' : TEXTS.checkEnv
+function envCheckLabel(envMode: EnvMode): string {
+  // TODO(phase5): embedded 专属文案（"启动器内置运行时就绪"）
+  return envMode === 'system' ? '检查系统环境' : TEXTS.checkEnv
 }

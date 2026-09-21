@@ -46,7 +46,7 @@ export interface LaunchOptions {
   /**
    * true → 在临时目录种一个带语义化 tag 的最小 SillyTavern git 仓库
    * （v1.18.0/v1.17.0/v1.16.0 空提交 tag），版本视图据此渲染真实版本卡片；
-   * 同时把种子 config 的 use_sys_env 置 true（临时目录无便携 env/cmd/git.exe，
+   * 同时把种子 config 的 env_mode 置 'system'（临时目录无便携 env/cmd/git.exe，
    * 便携解析下所有 git 调用会失败走 EmptyState）。
    */
   seedSt?: boolean
@@ -92,7 +92,7 @@ export function pidAlive(pid: number): boolean {
 function seedConfig(theme: 'dark' | 'light' = 'dark'): Record<string, unknown> {
   return {
     patchgit: false,
-    use_sys_env: false,
+    env_mode: 'portable',
     theme,
     first_run: false,
     agreement_accepted: true,
@@ -154,7 +154,7 @@ export async function launchE2E(options: LaunchOptions = {}): Promise<E2ESession
   if (options.setupCompleted) {
     const seed = seedConfig(options.theme)
     if (options.welcomeOnly) seed.first_run = true
-    if (options.seedSt) seed.use_sys_env = true
+    if (options.seedSt) seed.env_mode = 'system'
     writeFileSync(configPath, JSON.stringify(seed, null, 4))
   }
   if (options.seedSt) seedStRepo(tempDir)

@@ -2,10 +2,14 @@
  * TabItem：固定头分页的页签项（设置页/扩展页共用，2026-09-21 提取——原两处
  * ~50 行逐行重复）。激活 = ember 下划线（绝对定位压在 tab 栏 1px 分隔线上）
  * + 600 字重，未激活 hover 即时切 bg.hover；可选计数 fs.caption muted 随标签
- * 常显（flex row 内相邻 text 才同行）。
+ * 常显（flex row 内相邻 text 才同行）。下划线动画（2026-09-21 动效 PR1）：
+ * 常挂 + opacity 0↔1 淡入淡出（dur.state + easeOut）；GPUIX 无 calc，left/right
+ * 拉伸结构不动，只动 opacity 不触发 re-layout。
  */
 import type { ReactElement } from 'react'
-import { useTheme } from '../theme'
+import { motion } from '@gpuix/react'
+import { dur } from '../../theme'
+import { useMotion, useTheme } from '../theme'
 
 export interface TabItemProps {
   label: string
@@ -18,6 +22,7 @@ export interface TabItemProps {
 
 export function TabItem({ label, active, onClick, testId, count }: TabItemProps): ReactElement {
   const t = useTheme()
+  const { enabled: motionEnabled } = useMotion()
   return (
     <div
       onClick={onClick}
@@ -37,20 +42,23 @@ export function TabItem({ label, active, onClick, testId, count }: TabItemProps)
         userSelect: 'none',
         hover: active ? undefined : { backgroundColor: t.bg.hover },
       }}>
-      {active && (
-        <div
-          style={{
-            position: 'absolute',
-            left: 10,
-            right: 10,
-            bottom: -1,
-            height: 2,
-            borderRadius: 1,
-            backgroundColor: t.ember,
-            pointerEvents: 'none',
-          }}
-        />
-      )}
+      {/* 激活下划线：常挂 + opacity 0↔1 淡入淡出；motion 关时 duration 归零 =
+          即时切换；initial={false} 挂载不播入场 */}
+      <motion.div
+        initial={false}
+        animate={{ opacity: active ? 1 : 0 }}
+        transition={{ duration: motionEnabled ? dur.state : 0, ease: 'easeOut' }}
+        style={{
+          position: 'absolute',
+          left: 10,
+          right: 10,
+          bottom: -1,
+          height: 2,
+          borderRadius: 1,
+          backgroundColor: t.ember,
+          pointerEvents: 'none',
+        }}
+      />
       <text
         style={{
           fontSize: t.fs.field,

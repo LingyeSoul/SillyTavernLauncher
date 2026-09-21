@@ -117,7 +117,9 @@ export function useThemeContext(): ThemeContextValue {
   return ctx
 }
 
-/** motion 统一门控：disabled 时调用方应传 initial={false} 且 duration 0（§6.B 全局门控） */
+/** motion 统一门控：disabled 时调用方应传 initial={false} 且 duration 0（§6.B 全局门控）。
+ *  三件套纪律：duration 归零的同时 **delay 必须一并归零**——delay 残留会让内容
+ *  延迟出现，比没有动画更糟（stagger/抖动序列等带 delay 的 motion 都适用）。 */
 export function useMotion(): { enabled: boolean } {
   const ctx = useContext(ThemeContext)
   if (!ctx) throw new Error('useMotion 必须在 ThemeProvider 内使用')

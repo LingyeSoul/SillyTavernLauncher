@@ -186,6 +186,119 @@ describe('git 安装（← install_from_git）', () => {
   })
 })
 
+describe('embedded 扩展安装（Phase 4 设计 §8.3：IsoGitOps 浅克隆分支）', () => {
+  it('embedded → isoGitCloneDepth(url, target, 1)，URL 校验与目录遏制不变，不触 gitRunner', async () => {
+    setupInstalledSt()
+    const isoCalls: Array<{ url: string; dir: string; depth: number }> = []
+    const manager = makeManager({
+      getEnvMode: () => 'embedded',
+      isoGitCloneDepth: async (url, dir, depth = 1) => {
+        isoCalls.push({ url, dir, depth })
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, 'manifest.json'), '{"display_name":"Repo"}', 'utf8')
+        return { ok: true, message: '克隆完成' }
+      },
+    })
+    const result = await manager.installFromGit(
+      'https://github.com/example/repository.git',
+      'global',
+      'safe-name',
+    )
+    expect(result.ok).toBe(true)
+    expect(result.message).toBe('成功安装扩展: safe-name')
+    expect(isoCalls).toHaveLength(1)
+    expect(isoCalls[0]?.url).toBe('https://github.com/example/repository.git')
+    expect(isoCalls[0]?.depth).toBe(1)
+    expect(isoCalls[0]?.dir).toBe(join(manager.getGlobalExtPath(), 'safe-name'))
+    // spawn git runner 全程不触（embedded 无 git.exe）
+    expect(gitRunnerCalls.length).toBe(0)
+  })
+
+  it('embedded：克隆产物无效时同样清理并报错（与 spawn 路径语义一致）', async () => {
+    setupInstalledSt()
+    const manager = makeManager({
+      getEnvMode: () => 'embedded',
+      isoGitCloneDepth: async (_url, dir) => {
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, 'readme.md'), 'x', 'utf8')
+        return { ok: true, message: '克隆完成' }
+      },
+    })
+    const result = await manager.installFromGit(
+      'https://github.com/example/invalid.git',
+      'global',
+      'invalid-ext',
+    )
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('不是有效的 SillyTavern 扩展')
+    expect(existsSync(join(manager.getGlobalExtPath(), 'invalid-ext'))).toBe(false)
+  })
+
+  it('embedded：克隆失败消息透传（Git 克隆失败前缀）', async () => {
+    setupInstalledSt()
+    const manager = makeManager({
+      getEnvMode: () => 'embedded',
+      isoGitCloneDepth: async () => ({ ok: false, message: '目标目录已存在: x' }),
+    })
+    const result = await manager.installFromGit(
+      'https://github.com/example/fail.git',
+      'global',
+      'fail-ext',
+    )
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('Git 克隆失败: 目标目录已存在: x')
+  })
+
+  it('镜像前缀对 embedded 同样生效（URL 进入浅克隆前已被 applyGithubMirror 改写）', async () => {
+    setupInstalledSt()
+    const urls: string[] = []
+    const manager = makeManager({
+      getEnvMode: () => 'embedded',
+      getMirror: () => 'gh-proxy.org',
+      isoGitCloneDepth: async (url, dir) => {
+        urls.push(url)
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, 'manifest.json'), '{}', 'utf8')
+        return { ok: true, message: '克隆完成' }
+      },
+    })
+    const result = await manager.installFromGit(
+      'https://github.com/example/mirrored.git',
+      'global',
+      'mirrored-ext',
+    )
+    expect(result.ok).toBe(true)
+    expect(urls[0]).toBe('https://gh-proxy.org/https://github.com/example/mirrored.git')
+  })
+
+  it('D3 焊死：portable/system 全程不触 isoGitCloneDepth（浅克隆分支仅 embedded）', async () => {
+    setupInstalledSt()
+    const isoCalls: number[] = []
+    const manager = makeManager({
+      getEnvMode: () => 'system',
+      isoGitCloneDepth: async () => {
+        isoCalls.push(1)
+        return { ok: false, message: '不应触达' }
+      },
+      gitRunner: async (args, cwd) => {
+        gitRunnerCalls.push({ args, cwd })
+        const target = args[args.length - 1] as string
+        mkdirSync(target, { recursive: true })
+        writeFileSync(join(target, 'manifest.json'), '{}', 'utf8')
+        return { ok: true, exitCode: 0, stdout: '', stderr: '' }
+      },
+    })
+    const result = await manager.installFromGit(
+      'https://github.com/example/sys.git',
+      'global',
+      'sys-ext',
+    )
+    expect(result.ok).toBe(true)
+    expect(isoCalls.length).toBe(0)
+    expect(gitRunnerCalls.length).toBe(1)
+  })
+})
+
 describe('镜像改写（← _apply_github_mirror）', () => {
   it('gh-proxy.org 前置 GitHub/raw URL', () => {
     const manager = makeManager({ getMirror: () => 'gh-proxy.org' })

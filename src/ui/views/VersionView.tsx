@@ -11,12 +11,17 @@
  *   先 refreshVersion 再 reloadVersions 强制重拉（对齐原内联 loadVersions 语义，
  *   刷新后「当前」芯片同步校正）。挂载时静默 refreshVersion（本地 git describe）
  *   保证「当前」芯片在终端页更新/切版本后仍准确。
+ * - 真实版本卡 stagger 入场（theme.ts stagger token）：每项 opacity 0→1 +
+ *   top 4→0（≤6px 位移纪律），延迟按序递增、超过 maxItems 封顶；motion 的
+ *   initial 仅挂载时生效——同 key 数据刷新天然不重播，无需额外状态。
  */
 import { useEffect } from 'react'
+import { motion } from '@gpuix/react'
 import { getStLifecycle, useStState } from '../../stores/stState'
 import { useVersionState, type VersionEntry } from '../../stores/versionState'
 import { uiStateActions } from '../../stores/uiState'
-import { useTheme } from '../theme'
+import { EASE_OUT_QUAD, dur, stagger } from '../../theme'
+import { useMotion, useTheme } from '../theme'
 import { Button } from '../components/Button'
 import { Chip } from '../components/Chip'
 import { IconButton } from '../components/IconButton'
@@ -44,6 +49,7 @@ const TEXTS = {
 
 export function VersionView() {
   const t = useTheme()
+  const { enabled: motionEnabled } = useMotion()
   const currentVersion = useStState((s) => s.currentVersion)
   const refreshVersion = useStState((s) => s.refreshVersion)
   const versions = useVersionState((s) => s.versions)
@@ -125,12 +131,25 @@ export function VersionView() {
       )}
 
       {!loading &&
-        versions?.map((entry) => (
-          <VersionCard
+        versions?.map((entry, i) => (
+          // stagger 入场包装（骨架 SkeletonCards 不参与）：delay 门控归零纪律
+          // ——motion 关时 initial={false} + duration 0 + delay 0 三件套齐发，
+          // delay 残留会让内容延迟出现（theme.tsx useMotion 注释同款纪律）
+          <motion.div
             key={entry.version}
-            entry={entry}
-            current={(currentVersion?.version ?? '').replace(/^v/, '') === entry.version}
-          />
+            initial={motionEnabled ? { opacity: 0, top: 4 } : false}
+            animate={{ opacity: 1, top: 0 }}
+            transition={{
+              duration: motionEnabled ? dur.enter : 0,
+              ease: EASE_OUT_QUAD,
+              delay: motionEnabled ? Math.min(i, stagger.maxItems - 1) * stagger.itemDelay : 0,
+            }}
+            style={{ position: 'relative' }}>
+            <VersionCard
+              entry={entry}
+              current={(currentVersion?.version ?? '').replace(/^v/, '') === entry.version}
+            />
+          </motion.div>
         ))}
     </PageScaffold>
   )
