@@ -22,8 +22,12 @@ beforeEach(() => {
   writeFileSync(join(dataDir, 'settings.json'), '{"v":1}', 'utf8')
   mkdirSync(join(dataDir, 'chats'), { recursive: true })
   writeFileSync(join(dataDir, 'chats', 'room.json'), '{"m":[]}', 'utf8')
-  configStore = new ConfigStore(configPath, root)
-  configStore.set('use_sys_env', true) // 避免探测 env 目录
+  // 探测注入假束：避免每个用例真实 spawn git/node 探测；env_mode 由下一行显式落定
+  configStore = new ConfigStore(configPath, root, {
+    probeGit: () => ({ ok: false }),
+    probeNode: () => ({ ok: false }),
+  })
+  configStore.set('env_mode', 'system') // 避免便携 env 探测路径
 })
 
 afterEach(() => {

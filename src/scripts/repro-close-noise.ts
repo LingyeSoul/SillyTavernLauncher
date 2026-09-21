@@ -119,7 +119,7 @@ async function runOnce(run: number): Promise<RunResult> {
     JSON.stringify(
       {
         patchgit: false,
-        use_sys_env: true,
+        env_mode: 'system',
         theme: 'dark',
         first_run: false,
         agreement_accepted: true,
@@ -231,7 +231,9 @@ for (const [line, info] of [...aggregate.entries()].sort((a, b) => b[1].count - 
 const abnormal = results.filter((r) => r.outcome !== 'closed' || (r.exitCode !== null && r.exitCode !== 0))
 console.log(`\n异常结局（非 closed 或非零退出码）：${abnormal.length}/${RUNS}`)
 
-// crashGuard 落盘验证：stderr 出现报错的 run，其 Error_*.txt 应有对应记录
+// crashGuard 落盘验证：stderr 有报错 ≠ Error_*.txt 有记录——已知退出期噪音
+//（GPUI UI thread，见 services/crashGuard.ts isShutdownNoise）被过滤不落盘；
+// 非噪音报错的 run 才应有对应记录
 const withStderrNoise = results.filter((r) => r.stderr.includes('error') || r.stderr.includes('Error'))
 const withLogFile = results.filter((r) => r.errorLogFiles.length > 0)
 console.log(`stderr 含报错的 run：${withStderrNoise.map((r) => r.run).join(',') || '无'}`)

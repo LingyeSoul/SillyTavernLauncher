@@ -6,12 +6,22 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ConfigStore } from '../services/configStore'
+import type { ConfigStore, SystemEnvProbes } from '../services/configStore'
 
 interface ConfigStoreModule {
-  ConfigStore: new (configPath: string, baseDir?: string) => ConfigStore
+  ConfigStore: new (configPath: string, baseDir?: string, probes?: SystemEnvProbes) => ConfigStore
   getConfigStore: (configPath?: string) => ConfigStore
   __resetConfigStoreForTests: () => void
+}
+
+/** 首启三级探测注入用假束（D5）：探测结果与宿主机是否安装 git/node 解耦 */
+const OK_PROBES: SystemEnvProbes = {
+  probeGit: () => ({ ok: true }),
+  probeNode: () => ({ ok: true }),
+}
+const FAIL_PROBES: SystemEnvProbes = {
+  probeGit: () => ({ ok: false }),
+  probeNode: () => ({ ok: false }),
 }
 
 async function freshModule(): Promise<ConfigStoreModule> {
@@ -32,10 +42,10 @@ afterEach(() => {
 describe('ConfigStore（← config_manager.py）', () => {
   it('默认配置与 Python default_config 逐字段一致', async () => {
     const { ConfigStore } = await freshModule()
-    // baseDir 指向临时目录（无 env/），首次运行探测会把 use_sys_env 置 true
-    const store = new ConfigStore(join(tempDir, 'config.json'), tempDir)
+    // baseDir 指向临时目录（无 env/），首启三级探测（注入达标探测）会把 env_mode 置 system
+    const store = new ConfigStore(join(tempDir, 'config.json'), tempDir, OK_PROBES)
     expect(store.get('patchgit')).toBe(false)
-    expect(store.get('use_sys_env')).toBe(true)
+    expect(store.get('env_mode')).toBe('system')
     expect(store.get('theme')).toBe('dark')
     expect(store.get('first_run')).toBe(true)
     expect(store.get('agreement_accepted')).toBe(false)
@@ -120,15 +130,18 @@ describe('ConfigStore（← config_manager.py）', () => {
     expect(store.get('theme')).toBe('light')
   })
 
-  it('首次运行时按 env/ 目录探测环境类型（← _check_and_set_env_type）', async () => {
+  it('首次运行时按 env/ 目录探测环境类型（← _check_and_set_env_type，D5 三级）', async () => {
     const { ConfigStore } = await freshModule()
-    // 无 env/ 目录 → 系统环境
-    const withoutEnv = new ConfigStore(join(tempDir, 'a', 'config.json'), tempDir)
-    expect(withoutEnv.get('use_sys_env')).toBe(true)
-    // 有 env/ 目录 → 便携环境
+    // 无 env/ 目录 + 系统 git/node 探测达标 → 系统环境
+    const withoutEnv = new ConfigStore(join(tempDir, 'a', 'config.json'), tempDir, OK_PROBES)
+    expect(withoutEnv.get('env_mode')).toBe('system')
+    // 有 env/ 目录 → 便携环境（① 级短路，探测不再被消费）
     mkdirSync(join(tempDir, 'b', 'env'), { recursive: true })
-    const withEnv = new ConfigStore(join(tempDir, 'b', 'config.json'), join(tempDir, 'b'))
-    expect(withEnv.get('use_sys_env')).toBe(false)
+    const withEnv = new ConfigStore(join(tempDir, 'b', 'config.json'), join(tempDir, 'b'), OK_PROBES)
+    expect(withEnv.get('env_mode')).toBe('portable')
+    // 全无（无 env/ 且系统 git/node 探测不达标）→ embedded
+    const bare = new ConfigStore(join(tempDir, 'c', 'config.json'), tempDir, FAIL_PROBES)
+    expect(bare.get('env_mode')).toBe('embedded')
   })
 
   it('getConfigStore 单例：首次路径生效，后续忽略（← ConfigManager 单例）', async () => {

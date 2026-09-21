@@ -3,9 +3,10 @@
  * 30s 倒计时强制阅读 + 红字安全要点 + 「不再显示此提醒」切换。
  *
  * - 触发：开启同步服务器且 sync.first_shown=false（门控纯函数见下方导出）
- * - 模态不可关闭：strong + 不传 onClose（da09d6c「Modal close guards」模式，
- *   同 EulaDialog）——Escape 无效、无遮罩点击关闭，唯一出口是倒计时归零后
- *   的「关闭」按钮；卸载即放弃，onConfirmed 只在该按钮点击路径触发
+ * - 模态不可关闭：strong 挡 Escape（da09d6c「Modal close guards」模式，同
+ *   EulaDialog）；onClose 仅作 requestClose 的结算通道（动作按钮播退场后才由
+ *   Modal 调用，无遮罩点击关闭），唯一出口仍是倒计时归零后的「关闭」按钮；
+ *   卸载即放弃，onConfirmed 只在该按钮点击路径触发
  * - 关闭时若勾选「不再显示」→ sync.first_shown=true 落盘；对话框关闭后才经
  *   onConfirmed 真正启动服务器（← 旧版 on_close 的顺序：先持久化/关窗、后启动）
  *
@@ -19,7 +20,7 @@ import { errMsg, logError } from '../../services/errorLog'
 import { useUiState } from '../../stores/uiState'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
-import { Modal } from '../components/Modal'
+import { Modal, useModalClose } from '../components/Modal'
 
 const TEXTS = {
   title: '启动同步服务器提醒',
@@ -80,10 +81,45 @@ export interface SyncFirstRunDialogProps {
   onConfirm: () => void
 }
 
+/**
+ * 动作区（Provider 子树内取 useModalClose，PR4）：「关闭」经 requestClose 播退场，
+ * 服务器启动挪到 Modal onClose 结算回调（关窗后才触发，保持 ← 旧版 on_close 顺序：
+ * 先持久化/关窗、后启动）。
+ */
+function SyncFirstRunActions({ countdown }: { countdown: number }) {
+  const requestClose = useModalClose()
+  const [dontShow, setDontShow] = useState(false)
+
+  // ← 旧版 on_close 前半：先按勾选持久化，再关窗（启动在 onClose 结算回调里）
+  const handleClose = (): void => {
+    if (dontShow) persistFirstRunShown(getConfigStore())
+    requestClose()
+  }
+
+  return (
+    <>
+      <Button
+        variant={dontShow ? 'primary' : 'default'}
+        icon={dontShow ? 'check' : undefined}
+        onClick={() => setDontShow((v) => !v)}
+        testId="sync-first-dont-show">
+        {dontShow ? TEXTS.dontShowSet : TEXTS.dontShow}
+      </Button>
+      <Button
+        variant="quietDanger"
+        icon="x"
+        disabled={countdown > 0}
+        onClick={handleClose}
+        testId="sync-first-close">
+        {TEXTS.close}
+      </Button>
+    </>
+  )
+}
+
 export function SyncFirstRunDialog({ onConfirm }: SyncFirstRunDialogProps) {
   const t = useTheme()
   const [countdown, setCountdown] = useState(COUNTDOWN_SECONDS)
-  const [dontShow, setDontShow] = useState(false)
 
   // 30s 倒计时（EulaDialog 同款：归零后不再建定时器；卸载清理防泄漏）
   useEffect(() => {
@@ -91,13 +127,6 @@ export function SyncFirstRunDialog({ onConfirm }: SyncFirstRunDialogProps) {
     const id = setInterval(() => setCountdown((n) => Math.max(0, n - 1)), 1000)
     return () => clearInterval(id)
   }, [countdown])
-
-  // ← 旧版 on_close：先按勾选持久化，再关窗，最后才启动服务器
-  const handleClose = (): void => {
-    if (dontShow) persistFirstRunShown(getConfigStore())
-    useUiState.getState().closeTopDialog()
-    onConfirm()
-  }
 
   const divider = (
     <div style={{ height: 1, backgroundColor: t.border.subtle, marginTop: 10, marginBottom: 10 }} />
@@ -117,25 +146,13 @@ export function SyncFirstRunDialog({ onConfirm }: SyncFirstRunDialogProps) {
       strong
       width={500}
       title={TEXTS.title}
-      actions={
-        <>
-          <Button
-            variant={dontShow ? 'primary' : 'default'}
-            icon={dontShow ? 'check' : undefined}
-            onClick={() => setDontShow((v) => !v)}
-            testId="sync-first-dont-show">
-            {dontShow ? TEXTS.dontShowSet : TEXTS.dontShow}
-          </Button>
-          <Button
-            variant="quietDanger"
-            icon="x"
-            disabled={countdown > 0}
-            onClick={handleClose}
-            testId="sync-first-close">
-            {TEXTS.close}
-          </Button>
-        </>
-      }>
+      // strong 挡 Escape，无新增出口；onClose 在此仅作 requestClose 的结算通道：
+      // 关窗 + 启动服务器（← 旧版 on_close 顺序：先持久化/关窗、后启动）
+      onClose={() => {
+        useUiState.getState().closeTopDialog()
+        onConfirm()
+      }}
+      actions={<SyncFirstRunActions countdown={countdown} />}>
       {/* 倒计时状态行：旧版 16px 粗体红，归零变绿（error→success 语义） */}
       <text
         style={{

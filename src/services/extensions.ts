@@ -29,10 +29,11 @@ import {
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { unzipSync } from 'fflate'
-import { getConfigStore } from './configStore'
+import { getConfigStore, type EnvMode } from './configStore'
 import { checkStInstalled } from './env'
 import { logError } from './errorLog'
 import { resolveGitExecutable } from './git'
+import { createIsoGitOps } from './isoGit'
 import { isDirSync, realpathBestEffort } from './atomicFs'
 import { spawnAsync } from './runtime'
 import type { BoolMessage } from './types'
@@ -152,7 +153,8 @@ export type GitRunner = (
   signal?: AbortSignal,
 ) => Promise<GitRunnerResult>
 
-/** 默认实现：复用 git.ts 的可执行解析（use_sys_env 决定系统/便携 git） */
+/** 默认实现：复用 git.ts 的可执行解析（env_mode 决定系统/便携 git；
+ *  embedded 扩展安装不走本 runner——installFromGit 按 env_mode 路由 IsoGitOps 浅克隆） */
 const defaultGitRunner: GitRunner = async (args, cwd, signal) => {
   const gitExe = resolveGitExecutable()
   const proc = spawnAsync({ cmd: [gitExe, ...args], cwd, windowsHide: true })
@@ -261,6 +263,10 @@ export interface ExtensionManagerOptions {
   log?: (message: string) => void
   /** git 执行器（测试注入；默认参数数组 + windowsHide） */
   gitRunner?: GitRunner
+  /** 环境模式读取（默认 configStore 的 env_mode；测试注入隔离全局单例） */
+  getEnvMode?: () => EnvMode
+  /** embedded 浅克隆（Phase 4 设计 §8.3；默认 IsoGitOps.cloneDepth；测试注入 mock） */
+  isoGitCloneDepth?: (url: string, dir: string, depth?: number) => Promise<BoolMessage>
 }
 
 export class ExtensionManager {
@@ -268,6 +274,8 @@ export class ExtensionManager {
   private readonly getMirror: () => string
   private logFn: (message: string) => void
   private readonly gitRunner: GitRunner
+  private readonly getEnvMode: () => EnvMode
+  private readonly isoGitCloneDepth: (url: string, dir: string, depth?: number) => Promise<BoolMessage>
 
   constructor(options: ExtensionManagerOptions = {}) {
     this.baseDir = options.baseDir ?? process.cwd()
@@ -275,6 +283,11 @@ export class ExtensionManager {
       options.getMirror ?? (() => getConfigStore().get<string>('github.mirror', 'github'))
     this.logFn = options.log ?? (() => undefined)
     this.gitRunner = options.gitRunner ?? defaultGitRunner
+    this.getEnvMode =
+      options.getEnvMode ?? (() => getConfigStore().get<EnvMode>('env_mode', 'portable'))
+    this.isoGitCloneDepth =
+      options.isoGitCloneDepth ??
+      ((url, dir, depth) => createIsoGitOps({ onLog: (message) => this.log(message) }).cloneDepth(url, dir, depth))
   }
 
   /** 单例晚到的 log 选项也能生效（原 first-wins 会把后续回调静默丢弃） */
@@ -541,6 +554,26 @@ export class ExtensionManager {
 
     try {
       this.log(`正在从 Git 安装扩展: ${extName}`)
+      // Phase 4（设计 §8.3）：embedded 模式无外部 git.exe——经 IsoGitOps 浅克隆
+      // （depth 1 + singleBranch）；URL 校验与镜像前缀逻辑在上游不变。
+      // isomorphic-git clone 不支持 AbortSignal，embedded 分支的取消语义为
+      // "整次安装作废"（失败/残留目录照常清理），DEVIATION 自 spawn 路径的即时中止。
+      if (this.getEnvMode() === 'embedded') {
+        const isoResult = await this.isoGitCloneDepth(repoUrl, targetPath, 1)
+        if (isoResult.ok) {
+          if (this.isValidExtension(targetPath)) {
+            this.log(`成功安装扩展: ${extName}`)
+            return { ok: true, message: `成功安装扩展: ${extName}` }
+          }
+          removeTree(targetPath, true)
+          return {
+            ok: false,
+            message: '安装的仓库不是有效的 SillyTavern 扩展（缺少 manifest.json 或 index.js）',
+          }
+        }
+        const isoError = isoResult.message.trim() || '未知错误'
+        return { ok: false, message: `Git 克隆失败: ${isoError}` }
+      }
       // DEVIATION: 任务规格要求 --depth 1 浅克隆（Python 无）
       const result = await this.gitRunner(
         ['clone', '--depth', '1', '--', repoUrl, targetPath],

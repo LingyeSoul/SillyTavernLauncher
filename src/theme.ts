@@ -69,8 +69,12 @@ export const layout = {
 export const EASE_OUT_QUAD: [number, number, number, number] = [0.25, 0.46, 0.45, 0.94]
 export const dur = {
   enter: 0.24, logEnter: 0.2, state: 0.14, toastHandoff: 0.3,
+  menu: 0.12, shakeStep: 0.1,
   breathPeriodMs: 2000, shimmerPeriodMs: 1500,
 } as const
+/** 列表入场 stagger（§6 M15）：仅挂载时播（motion initial 语义天然不重播）；
+ *  motion 关时调用方必须把 delay 一并归零（delay 残留 = 内容延迟出现）。 */
+export const stagger = { itemDelay: 0.03, maxItems: 6 } as const
 
 // —— 组件消费形态：useTheme() 返回 tokens + 常量的合并对象 ——
 export type UITheme = ThemeTokens & {

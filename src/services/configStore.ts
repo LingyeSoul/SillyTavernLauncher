@@ -10,11 +10,31 @@
 import { copyFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { atomicWriteFileSync } from './atomicFs'
+import { probeSystemGit, probeSystemNode } from './env'
 import { logError } from './errorLog'
+
+/**
+ * 运行环境模式（设计计划 D1/D5）：
+ * - portable：内置懒人包环境（<root>/env 的 git/node/npm）
+ * - system：系统环境（PATH 上的 Git + Node.js）
+ * - embedded：启动器内置运行时（Bun + isomorphic-git，实验性）
+ */
+export type EnvMode = 'portable' | 'system' | 'embedded'
+
+/** detectEnvType 第②级的系统 git/node 探测束（测试可注入假探测；默认 env.ts 真实探测） */
+export interface SystemEnvProbes {
+  probeGit: () => { ok: boolean }
+  probeNode: () => { ok: boolean }
+}
 
 export interface LauncherConfig {
   patchgit: boolean
+  /**
+   * @deprecated 设计计划 D1：已被 env_mode 取代。字段仅为旧配置兼容保留
+   * （构造时一次性迁移消费，随后即从写回中删除），请勿在新代码中消费它。
+   */
   use_sys_env: boolean
+  env_mode: EnvMode
   theme: string
   first_run: boolean
   /** 用户是否已同意使用协议 */
@@ -53,10 +73,11 @@ export interface LauncherConfig {
   }
 }
 
-/** 与 Python default_config 逐字段一致 */
+/** 与 Python default_config 逐字段一致（env_mode 为 D1 新增三态键） */
 const DEFAULT_CONFIG: LauncherConfig = {
   patchgit: false,
   use_sys_env: false,
+  env_mode: 'portable',
   theme: 'dark',
   first_run: true,
   agreement_accepted: false,
@@ -92,11 +113,15 @@ export class ConfigStore {
   private readonly configPath: string
   /** env 目录探测基准目录（Python 用 os.getcwd()；测试可注入） */
   private readonly baseDir: string
+  /** 系统 git/node 探测束（detectEnvType 第②级；测试可注入，默认真实探测） */
+  private readonly probes: SystemEnvProbes
 
-  constructor(configPath: string, baseDir?: string) {
+  constructor(configPath: string, baseDir?: string, probes?: SystemEnvProbes) {
     this.configPath = configPath
     this.baseDir = baseDir ?? process.cwd()
+    this.probes = probes ?? { probeGit: probeSystemGit, probeNode: probeSystemNode }
     this.config = this.loadConfig()
+    this.migrateUseSysEnv()
     // 首次运行时检查环境类型（与 Python __init__ 一致）
     if (this.get<boolean>('first_run', true)) {
       this.checkAndSetEnvType()
@@ -191,14 +216,32 @@ export class ConfigStore {
     this.config = this.loadConfig()
   }
 
-  /** ← _detect_env_type：没有 env/ 目录则使用系统环境 */
-  private detectEnvType(): boolean {
-    return !existsSync(join(this.baseDir, 'env'))
+  /** ← _detect_env_type（设计计划 D5 三级化）：
+   *  ① <root>/env 存在 → portable；② 系统 git+node 探测达标 → system；③ 否则 → embedded */
+  private detectEnvType(): EnvMode {
+    if (existsSync(join(this.baseDir, 'env'))) return 'portable'
+    if (this.probes.probeGit().ok && this.probes.probeNode().ok) return 'system'
+    return 'embedded'
   }
 
-  /** ← _check_and_set_env_type */
+  /** ← _check_and_set_env_type：仅首启时按探测结果写 env_mode */
   private checkAndSetEnvType(): void {
-    this.set('use_sys_env', this.detectEnvType())
+    this.set('env_mode', this.detectEnvType())
+  }
+
+  /**
+   * 设计计划 D1 一次性幂等迁移：use_sys_env → env_mode。
+   * - 存在 use_sys_env 且不存在 env_mode：true → 'system'，其余值 → 'portable'；
+   * - 已有 env_mode：不迁移（保留现值）；
+   * - 两种情况下均从内存/写回中删除 use_sys_env 旧键（删键本身幂等）。
+   */
+  private migrateUseSysEnv(): void {
+    const raw = this.config as unknown as Record<string, unknown>
+    if (!('use_sys_env' in raw)) return
+    if (!('env_mode' in raw)) {
+      raw.env_mode = raw['use_sys_env'] === true ? 'system' : 'portable'
+    }
+    delete raw['use_sys_env']
   }
 }
 

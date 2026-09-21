@@ -43,6 +43,8 @@ export type DialogDescriptor =
     }
   | { kind: 'error'; title: string; message: string; detail?: string }
   | { kind: 'exitConfirm'; onConfirm: () => void }
+  /** 切换到 embedded 环境模式的兼容性风险确认（设计 D4；取消则不落盘回显原值） */
+  | { kind: 'envModeEmbeddedConfirm'; onConfirm: () => void }
   /** 首启同步服务器警告（30s 倒计时，确认关闭后才启动服务器） */
   | { kind: 'syncFirstRun'; onConfirm: () => void }
   | {

@@ -198,8 +198,8 @@ describe('设置页分 tab（smoke）', () => {
     await resetUiStack()
     await clickTestId('nav-settings')
     await settle()
-    // 默认「环境」页：环境开关/镜像与工具在页，酒馆/启动器项不在
-    expect(renderer.findByTestId('setting-use_sys_env')).toBeDefined()
+    // 默认「环境」页：环境模式下拉/镜像与工具在页，酒馆/启动器项不在
+    expect(renderer.findByTestId('setting-env-mode')).toBeDefined()
     expect(renderer.findByTestId('setting-mirror')).toBeDefined()
     expect(renderer.findByTestId('setting-check-env')).toBeDefined()
     expect(renderer.findByTestId('setting-port')).toBeUndefined()

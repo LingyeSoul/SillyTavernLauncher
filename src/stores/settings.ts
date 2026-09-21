@@ -7,6 +7,7 @@
  */
 import { create } from 'zustand'
 import { getConfigStore } from '../services/configStore'
+import type { EnvMode } from '../services/configStore'
 import { errMsg, logError } from '../services/errorLog'
 import { getStConfig } from '../services/stConfig'
 import { uiStateActions } from './uiState'
@@ -16,7 +17,8 @@ export { getStConfig } from '../services/stConfig'
 
 export interface SettingsSnapshot {
   // 启动器 config.json
-  useSysEnv: boolean
+  /** 运行环境模式（D1：use_sys_env 的三态化后继） */
+  envMode: EnvMode
   patchgit: boolean
   autoProxy: boolean
   customArgs: string
@@ -78,7 +80,7 @@ const S = getConfigStore()
 export function readSettings(): SettingsSnapshot {
   const st = getStConfig()
   return {
-    useSysEnv: S.get<boolean>('use_sys_env', false),
+    envMode: S.get<EnvMode>('env_mode', 'portable'),
     patchgit: S.get<boolean>('patchgit', false),
     autoProxy: S.get<boolean>('auto_proxy', false),
     customArgs: S.get<string>('custom_args', ''),
@@ -124,7 +126,7 @@ export const useSettings = create<SettingsState>((set) => ({
 
   update: (patch) => {
     const keyMap: Record<keyof SettingsSnapshot, string | null> = {
-      useSysEnv: 'use_sys_env',
+      envMode: 'env_mode',
       patchgit: 'patchgit',
       autoProxy: 'auto_proxy',
       customArgs: 'custom_args',

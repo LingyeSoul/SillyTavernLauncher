@@ -9,22 +9,28 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConfigStore } from '../services/configStore'
+import type { StRepoOps } from '../services/isoGit'
 import {
   EXPECTED_ST_REMOTE,
   StLifecycle,
+  buildBunInstallCommand,
+  buildBunInstallForceCommand,
   buildGitCloneCommand,
   buildGitPullCommand,
   buildNpmCacheCleanCommand,
   buildNpmInstallCommand,
   buildNpmInstallCommandNoOmit,
   buildStStartCommand,
+  checkStatusFromPorcelain,
   normalizeProxyServer,
   parseGitConfigIni,
   readGitConfigText,
   readWindowsRegistryProxy,
+  resolveToolchain,
   serializeGitConfigIni,
   validatePathForNpm,
   type StLifecycleDeps,
+  type Toolchain,
 } from '../services/stLifecycle'
 import type { ExecuteProcessOptions } from '../services/processManager'
 import type { ProcessInfo, SyncSpawnResult } from '../services/types'
@@ -74,9 +80,16 @@ afterEach(() => {
   rmSync(root, { force: true, recursive: true })
 })
 
+/** 系统 git/node 探测假束：env_mode 由测试显式设置，构造期首启探测注入假探测
+ *  （避免每个用例真实 spawn git/node --version，且结果与宿主机解耦） */
+const FAILING_PROBES = {
+  probeGit: () => ({ ok: false }),
+  probeNode: () => ({ ok: false }),
+}
+
 function makeConfig(initial: Record<string, unknown> = {}): ConfigStore {
-  const store = new ConfigStore(configPath, root)
-  store.set('use_sys_env', true)
+  const store = new ConfigStore(configPath, root, FAILING_PROBES)
+  store.set('env_mode', 'system')
   for (const [key, value] of Object.entries(initial)) store.set(key, value)
   return store
 }
@@ -158,7 +171,7 @@ function makeLifecycle(
     ...(parts.deps ?? {}),
   }
   if (parts.portable) {
-    config.set('use_sys_env', false)
+    config.set('env_mode', 'portable')
     const envRoot = join(root, 'env')
     mkdirSync(join(envRoot, 'cmd'), { recursive: true })
     for (const file of [
@@ -258,6 +271,31 @@ describe('命令构造（纯函数）', () => {
         customArgs: '--port 8000 --ssl false',
       }),
     ).toBe('"C:/fake/node.exe" server.js --max-old-space-size=4096 --port 8000 --ssl false')
+  })
+
+  it('start 命令 embedded：D7 跳过 --max-old-space-size（Bun/JSC 不识别 V8 旗标）', () => {
+    expect(
+      buildStStartCommand({ nodeExe: 'C:/fake/launcher.exe', useOptimizeArgs: true, embedded: true }),
+    ).toBe('"C:/fake/launcher.exe" server.js')
+    expect(
+      buildStStartCommand({
+        nodeExe: 'C:/fake/launcher.exe',
+        useOptimizeArgs: true,
+        embedded: true,
+        customArgs: '--port 8000',
+      }),
+    ).toBe('"C:/fake/launcher.exe" server.js --port 8000')
+  })
+
+  it('bun install / install --force（Phase 3 设计计划 §7，F8 旗标）', () => {
+    // 主安装：--production 对齐 --omit=dev 意图；registry 值与 npm 链路同源
+    expect(buildBunInstallCommand('C:/fake/launcher.exe')).toBe(
+      '"C:/fake/launcher.exe" install --production --registry=https://registry.npmmirror.com',
+    )
+    // 重试链首步：bun 无 cache clean 等价，忽略缓存强制重装
+    expect(buildBunInstallForceCommand('C:/fake/launcher.exe')).toBe(
+      '"C:/fake/launcher.exe" install --force',
+    )
   })
 })
 
@@ -526,6 +564,718 @@ describe('startSt（← start_sillytavern）', () => {
     const env = harness.calls[0]?.env as Record<string, string>
     expect(env.PATH.startsWith(join(root, 'env'))).toBe(true)
     expect(env.PATH).toContain(join(root, 'env', 'cmd'))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// embedded 模式（设计计划 §6/D2/D7，Phase 2）
+// ---------------------------------------------------------------------------
+
+/** embedded 可执行文件假路径（注入隔离 vitest 宿主的真实 node.exe） */
+const EMBEDDED_EXE = 'C:/fake/launcher.exe'
+
+/** embedded deps 束：execPath 注入 + 启动前校验恒通过（真实实现另有单测） */
+function embeddedDeps(base: StLifecycleDeps): StLifecycleDeps {
+  return {
+    ...base,
+    whichFn: () => null,
+    embeddedExecPath: () => EMBEDDED_EXE,
+    ensureEmbeddedRuntime: async () => ({ ok: true, message: '内置运行时就绪' }),
+  }
+}
+
+describe('embedded 模式（设计计划 §6/D2/D7）', () => {
+  beforeEach(() => {
+    // env 断言与宿主环境解耦（继承语义会把宿主的 NODE_EXTRA_CA_CERTS 带进子进程）
+    delete process.env.NODE_EXTRA_CA_CERTS
+  })
+
+  it('resolveToolchain 三态字段：embedded 派生 execPath 无 Git；portable/system 恒 embedded:false', () => {
+    // embedded：node/npm 均派生 execPath，gitExe/gitDir 为 null（Git 层 Phase 4 走 isoGit）
+    expect(
+      resolveToolchain(makeConfig({ env_mode: 'embedded' }), { embeddedExecPath: () => EMBEDDED_EXE }),
+    ).toEqual({
+      gitExe: null,
+      nodeExe: EMBEDDED_EXE,
+      npmExe: EMBEDDED_EXE,
+      gitDir: null,
+      portable: false,
+      embedded: true,
+    })
+
+    // system（D3 零回归）：字段语义不变，embedded 恒 false
+    const sys = resolveToolchain(makeConfig(), { whichFn: (b) => WHICH_MAP[b] ?? null })
+    expect(sys.embedded).toBe(false)
+    expect(sys.portable).toBe(false)
+    expect(sys.nodeExe).toBe('C:/fake/node.exe')
+
+    // portable（D3 零回归）
+    const envRoot = join(root, 'env')
+    mkdirSync(join(envRoot, 'cmd'), { recursive: true })
+    for (const file of [
+      join(envRoot, 'cmd', 'git.exe'),
+      join(envRoot, 'node.exe'),
+      join(envRoot, 'npm.cmd'),
+    ]) {
+      writeFileSync(file, '', 'utf8')
+    }
+    const portable = resolveToolchain(
+      makeConfig({ env_mode: 'portable' }),
+      {
+        whichFn: () => null,
+        portableEnv: (dir) => ({
+          baseDir: dir ?? envRoot,
+          gitDir: join(dir ?? envRoot, 'cmd'),
+          gitExe: join(dir ?? envRoot, 'cmd', 'git.exe'),
+          nodeExe: join(dir ?? envRoot, 'node.exe'),
+          npmCmd: join(dir ?? envRoot, 'npm.cmd'),
+          stDir: join(root, 'SillyTavern'),
+        }),
+      },
+    )
+    expect(portable.embedded).toBe(false)
+    expect(portable.portable).toBe(true)
+    expect(portable.nodeExe).toBe(join(envRoot, 'node.exe'))
+  })
+
+  it('startSt embedded：命令 = 引号 execPath + server.js，env 有 BUN_BE_BUN 且无 PATH 前置', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const lifecycle = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded' }),
+      deps: embeddedDeps(harness.deps),
+    })
+
+    const result = await lifecycle.startSt()
+    expect(result.ok).toBe(true)
+    expect(harness.calls[0]?.command).toBe(`"${EMBEDDED_EXE}" server.js`)
+    expect(harness.calls[0]?.cwd).toBe(join(root, 'SillyTavern'))
+    const env = harness.calls[0]?.env as Record<string, string>
+    expect(env.BUN_BE_BUN).toBe('1')
+    expect(env.NODE_ENV).toBe('production')
+    expect(env.FORCE_COLOR).toBe('1')
+    // embedded 不做 PATH 前置：保持宿主原值（临时目录无 cache 文件 → 不注入 CA）
+    expect(env.PATH).toBe(process.env.PATH)
+    expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined()
+  })
+
+  it('startSt embedded：校验通过的 customArgs 透传', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const lifecycle = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded', custom_args: '--port 8000 --ssl false' }),
+      deps: embeddedDeps(harness.deps),
+    })
+    await lifecycle.startSt()
+    expect(harness.calls[0]?.command).toBe(`"${EMBEDDED_EXE}" server.js --port 8000 --ssl false`)
+  })
+
+  it('D7：use_optimize_args 在 embedded 下被跳过且产出终端可见日志行', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const lifecycle = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded', use_optimize_args: true }),
+      deps: embeddedDeps(harness.deps),
+    })
+    await lifecycle.startSt()
+    expect(harness.calls[0]?.command).toBe(`"${EMBEDDED_EXE}" server.js`)
+    expect(logs).toContain('内置运行时（Bun）不支持 --max-old-space-size，已忽略')
+  })
+
+  it('D7：use_optimize_args 关闭时 embedded 不打忽略日志（无噪声）', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const lifecycle = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded', use_optimize_args: false }),
+      deps: embeddedDeps(harness.deps),
+    })
+    await lifecycle.startSt()
+    expect(harness.calls[0]?.command).toBe(`"${EMBEDDED_EXE}" server.js`)
+    expect(logs.some((message) => message.includes('--max-old-space-size'))).toBe(false)
+  })
+
+  it('启动前校验失败（execPath 不存在）→ 走现有创建失败反馈路径，不 spawn', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const lifecycle = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded' }),
+      deps: {
+        ...harness.deps,
+        whichFn: () => null,
+        embeddedExecPath: () => 'C:/missing/launcher.exe',
+        ensureEmbeddedRuntime: async () => ({
+          ok: false,
+          message: '启动器内置运行时可执行文件不存在: C:/missing/launcher.exe',
+        }),
+      },
+    })
+    const result = await lifecycle.startSt()
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('创建进程失败')
+    expect(harness.calls.length).toBe(0)
+    expect(logs.some((message) => message.includes('启动器内置运行时可执行文件不存在'))).toBe(true)
+  })
+
+  it('restartSt embedded：命令形态 + D7 跳过同样生效', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const lifecycle = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded', use_optimize_args: true }),
+      deps: embeddedDeps(harness.deps),
+    })
+    const result = await lifecycle.restartSt()
+    expect(result.ok).toBe(true)
+    expect(harness.calls[0]?.command).toBe(`"${EMBEDDED_EXE}" server.js`)
+    expect(logs).toContain('内置运行时（Bun）不支持 --max-old-space-size，已忽略')
+  })
+
+  it('D3 焊死：portable/system 命令串与 env 组装与现状逐字节一致（embedded 为唯一新形态）', async () => {
+    setupSt({ nodeModules: true })
+
+    // system（现状）
+    const sysHarness = makeExecHarness(() => 0)
+    await makeLifecycle({ deps: sysHarness.deps }).startSt()
+    expect(sysHarness.calls[0]?.command).toBe('"C:/fake/node.exe" server.js')
+    const sysEnv = sysHarness.calls[0]?.env as Record<string, string>
+    expect(sysEnv.BUN_BE_BUN).toBeUndefined()
+    expect(sysEnv.PATH).toBe(process.env.PATH) // system 不前置 PATH（现状）
+
+    // portable（现状）：PATH 前置 env 目录，无 BUN_BE_BUN
+    const portHarness = makeExecHarness(() => 0)
+    await makeLifecycle({ portable: true, deps: portHarness.deps }).startSt()
+    expect(portHarness.calls[0]?.command).toBe(`"${join(root, 'env', 'node.exe')}" server.js`)
+    const portEnv = portHarness.calls[0]?.env as Record<string, string>
+    expect(portEnv.BUN_BE_BUN).toBeUndefined()
+    expect(portEnv.PATH.startsWith(join(root, 'env'))).toBe(true)
+
+    // portable 优化参数命令串（现状，D7 仅对 embedded 生效）
+    const optHarness = makeExecHarness(() => 0)
+    await makeLifecycle({
+      portable: true,
+      config: makeConfig({ use_optimize_args: true }),
+      deps: optHarness.deps,
+    }).startSt()
+    expect(optHarness.calls[0]?.command).toBe(
+      `"${join(root, 'env', 'node.exe')}" server.js --max-old-space-size=4096`,
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 3 · embedded 依赖安装（设计计划 §7：三调用点路由 + 重试链 + bun.lock 消解）
+// ---------------------------------------------------------------------------
+
+/** embedded deps 束 + bun.lock 消解注入（默认成功；个别用例覆盖失败路径） */
+function embeddedInstallDeps(
+  base: StLifecycleDeps,
+  bunLock: (stDir: string) => Promise<boolean> = async () => true,
+): StLifecycleDeps {
+  return { ...embeddedDeps(base), ensureBunLockExcluded: vi.fn(bunLock) }
+}
+
+/** embedded Toolchain 全量对象（私有重试链直测用） */
+const EMBEDDED_TOOLS: Toolchain = {
+  gitExe: null,
+  nodeExe: EMBEDDED_EXE,
+  npmExe: EMBEDDED_EXE,
+  gitDir: null,
+  portable: false,
+  embedded: true,
+}
+
+describe('Phase 3 · embedded 依赖安装路由（设计计划 §7）', () => {
+  it('installSt（已安装缺依赖）：embedded → bun install 命令 + bun.lock 消解前置挂接', async () => {
+    setupSt() // 无 node_modules → 走依赖安装路径
+    const harness = makeExecHarness(() => 0)
+    const bunLock = vi.fn(async () => true)
+    const lifecycle = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded' }),
+      deps: embeddedInstallDeps(harness.deps, bunLock),
+    })
+
+    const result = await lifecycle.installSt()
+    expect(result.ok).toBe(true)
+    expect(harness.calls.length).toBe(1)
+    expect(harness.calls[0]?.command).toBe(buildBunInstallCommand(EMBEDDED_EXE))
+    expect(harness.calls[0]?.cwd).toBe(join(root, 'SillyTavern'))
+    expect(bunLock).toHaveBeenCalledWith(join(root, 'SillyTavern'))
+    // 非 embedded 专属命令串全程不出现
+    expect(harness.calls.some((call) => call.command.includes('--no-audit'))).toBe(false)
+  })
+
+  it('installNpmDependencies：embedded → bun install（§7 单命令设计）+ 消解前置', async () => {
+    setupSt()
+    const harness = makeExecHarness(() => 0)
+    const bunLock = vi.fn(async () => true)
+    const lifecycle = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded' }),
+      deps: embeddedInstallDeps(harness.deps, bunLock),
+    })
+
+    const result = await lifecycle.installNpmDependencies()
+    expect(result.ok).toBe(true)
+    expect(harness.calls[0]?.command).toBe(buildBunInstallCommand(EMBEDDED_EXE))
+    expect(bunLock).toHaveBeenCalledWith(join(root, 'SillyTavern'))
+  })
+
+  it('updateSt embedded（Phase 4）：git 门禁打通 → IsoGitOps 路由，无 spawn git 命令', async () => {
+    setupSt()
+    const harness = makeExecHarness(() => 0)
+    const bunLock = vi.fn(async () => true)
+    const pullFastForward = vi.fn(async () => ({ ok: true, message: 'Git更新成功', exitCode: 0 }))
+    const lifecycle = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded' }),
+      deps: {
+        ...embeddedInstallDeps(harness.deps, bunLock),
+        cleanupGitState: vi.fn(async () => ({ ok: true, message: '不应被调用' })),
+        createRepoOps: () =>
+          ({
+            cloneRelease: vi.fn(),
+            fetchOrigin: vi.fn(),
+            pullFastForward,
+            checkoutTag: vi.fn(),
+            statusPorcelain: vi.fn(),
+            listTags: vi.fn(),
+            currentCommit: vi.fn(),
+            setRemote: vi.fn(),
+          }) as unknown as StRepoOps,
+      },
+    })
+
+    const result = await lifecycle.updateSt()
+    expect(result.ok).toBe(true)
+    expect(pullFastForward).toHaveBeenCalledWith(join(root, 'SillyTavern'))
+    // embedded 旁路 cleanup / detached / remote 前置检查（pullFastForward 内部兜底）
+    expect(lifecycle['deps'].cleanupGitState).not.toHaveBeenCalled()
+    expect(
+      harness.calls.some((call) => call.command.includes('git') || call.command.includes('rev-parse')),
+    ).toBe(false)
+    // pull 成功 → 进入 bun install 链（Phase 3 语义保持）
+    expect(harness.calls.some((call) => call.command === buildBunInstallCommand(EMBEDDED_EXE))).toBe(true)
+    expect(logs.some((message) => message.includes('跳过Git状态清理与detached HEAD检查'))).toBe(true)
+  })
+
+  it('updateSt embedded：pullFastForward 网络失败 → 重试 ≤2 后失败（无 package-lock 恢复链）', async () => {
+    setupSt()
+    const harness = makeExecHarness(() => 0)
+    const pullFastForward = vi.fn(async () => ({
+      ok: false,
+      message: 'network down',
+      exitCode: 1,
+    }))
+    const lifecycle = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded' }),
+      deps: {
+        ...embeddedInstallDeps(harness.deps),
+        runGit: vi.fn(async () => ({ exitCode: 0, stdout: '', stderr: '', ok: true })),
+        createRepoOps: () =>
+          ({
+            pullFastForward,
+          }) as unknown as StRepoOps,
+      },
+    })
+
+    const result = await lifecycle.updateSt()
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('重试更新失败')
+    expect(pullFastForward).toHaveBeenCalledTimes(3) // 1 初始 + 2 重试
+    // embedded 重试不触发 package-lock 恢复链（runGit 不被调用）
+    expect(lifecycle['deps'].runGit).not.toHaveBeenCalled()
+    expect(logs.some((message) => message.includes('Git更新失败，正在重试... (尝试次数: 1/2)'))).toBe(true)
+  })
+
+  it('runNpmInstallWithRetry embedded：重试首步 = install --force（非 cache clean），node_modules 删除链保留', async () => {
+    const stDir = setupSt({ nodeModules: true })
+    let installCount = 0
+    const nodeModulesSeenAtForce: boolean[] = []
+    const harness = makeExecHarness((command) => {
+      if (command.includes('install --force')) {
+        // force 步骤先于 node_modules 删除执行：记录当时目录是否存在
+        nodeModulesSeenAtForce.push(existsSync(join(stDir, 'node_modules')))
+        return 0
+      }
+      if (command.includes('install --production')) {
+        installCount += 1
+        if (installCount <= 2) return 1
+        mkdirSync(join(stDir, 'node_modules'), { recursive: true }) // 第三次成功重建
+        return 0
+      }
+      return 0
+    })
+    const bunLock = vi.fn(async () => true)
+    const lifecycle = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded' }),
+      deps: embeddedInstallDeps(harness.deps, bunLock),
+    })
+
+    // updateSt 的 git 层经 StRepoOps 路由（Phase 4）——此处仍以注入的 Toolchain
+    // 直测私有重试链的 embedded 分支（安装链单测与 git 链单测解耦）
+    const carrier = lifecycle as unknown as {
+      runNpmInstallWithRetry: (tools: Toolchain, withAutoStart: boolean) => Promise<{ ok: boolean }>
+    }
+    const result = await carrier.runNpmInstallWithRetry(EMBEDDED_TOOLS, true)
+
+    expect(result.ok).toBe(true)
+    expect(installCount).toBe(3) // 1 次初始 + 2 次重试
+    const commands = harness.calls.map((call) => call.command)
+    expect(commands.filter((command) => command.includes('install --force')).length).toBe(2)
+    // 全程无任何 npm 命令串（cache clean / --no-audit 均不得出现）
+    expect(commands.some((command) => command.includes('cache clean'))).toBe(false)
+    expect(commands.some((command) => command.includes('--no-audit'))).toBe(false)
+    // node_modules 删除重试链保留：首次 force 时目录在，删除后第二次 force 时已不在
+    expect(nodeModulesSeenAtForce).toEqual([true, false])
+    expect(existsSync(join(stDir, 'node_modules'))).toBe(true)
+    // 每次主安装前都幂等消解 bun.lock（重试链内复挂，幂等开销可忽略）
+    expect(bunLock.mock.calls.length).toBe(3)
+  })
+
+  it('runNpmInstallWithRetry portable/system（D3 焊死）：命令串与重试链逐字节不变', async () => {
+    const stDir = setupSt({ nodeModules: true })
+    let npmInstallCount = 0
+    const harness = makeExecHarness((command) => {
+      if (command.includes('cache clean')) return 0
+      if (command.includes('install --no-audit')) {
+        npmInstallCount += 1
+        if (npmInstallCount <= 2) return 1
+        mkdirSync(join(stDir, 'node_modules'), { recursive: true })
+        return 0
+      }
+      return 0
+    })
+    const lifecycle = makeLifecycle({ deps: harness.deps }) // system 模式（默认）
+
+    const carrier = lifecycle as unknown as {
+      runNpmInstallWithRetry: (
+        tools: { npmExe: string | null; embedded: boolean },
+        withAutoStart: boolean,
+      ) => Promise<{ ok: boolean }>
+    }
+    const result = await carrier.runNpmInstallWithRetry(
+      { npmExe: 'C:/fake/npm.cmd', embedded: false },
+      true,
+    )
+
+    expect(result.ok).toBe(true)
+    const commands = harness.calls.map((call) => call.command)
+    // 主安装 = 原 npm 串逐字节；重试首步 = cache clean（非 bun force）
+    expect(commands[0]).toBe(buildNpmInstallCommand('C:/fake/npm.cmd'))
+    expect(commands.filter((command) => command.includes('cache clean --force')).length).toBe(2)
+    expect(commands.some((command) => command.includes('install --force'))).toBe(false)
+    expect(commands.some((command) => command.includes('--production'))).toBe(false)
+  })
+
+  it('bun.lock 消解失败 → 仅终端警告，安装不阻断（D6 失败自愈语义）', async () => {
+    setupSt()
+    const harness = makeExecHarness(() => 0)
+    const lifecycle = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded' }),
+      deps: embeddedInstallDeps(harness.deps, async () => false),
+    })
+
+    const result = await lifecycle.installSt()
+    expect(result.ok).toBe(true)
+    expect(harness.calls[0]?.command).toBe(buildBunInstallCommand(EMBEDDED_EXE))
+    expect(logs.some((message) => message.includes('bun.lock Git排除规则写入失败'))).toBe(true)
+  })
+
+  it('D3 焊死：portable/system 安装全程不触发 bun.lock 消解，命令串逐字节不变', async () => {
+    // system · installSt（已安装缺依赖）
+    setupSt()
+    const sysHarness = makeExecHarness(() => 0)
+    const sysLock = vi.fn(async () => true)
+    await makeLifecycle({ deps: { ...sysHarness.deps, ensureBunLockExcluded: sysLock } }).installSt()
+    expect(sysHarness.calls[0]?.command).toBe(buildNpmInstallCommand('C:/fake/npm.cmd'))
+    expect(sysLock).not.toHaveBeenCalled()
+
+    // portable · installNpmDependencies（no-omit 变体）
+    const portHarness = makeExecHarness(() => 0)
+    const portLock = vi.fn(async () => true)
+    await makeLifecycle({
+      portable: true,
+      deps: { ...portHarness.deps, ensureBunLockExcluded: portLock },
+    }).installNpmDependencies()
+    expect(portHarness.calls[0]?.command).toBe(
+      buildNpmInstallCommandNoOmit(join(root, 'env', 'npm.cmd')),
+    )
+    expect(portLock).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Phase 4 · IsoGit 路由（设计计划 §8.3：embedded → IsoGitOps；
+// portable/system → SpawnGitOps 包装原命令串，D3 逐字节一致）
+// ---------------------------------------------------------------------------
+
+/** StRepoOps mock 工厂（按需覆盖个别方法；其余为不应被调用的哨兵） */
+function makeRepoOpsMock(overrides: Partial<StRepoOps> = {}): StRepoOps & {
+  calls: Record<string, number>
+} {
+  const calls: Record<string, number> = {}
+  const sentinel = (name: string) => {
+    calls[name] = (calls[name] ?? 0) + 1
+    return { ok: false, message: `不应调用 ${name}`, exitCode: 1 }
+  }
+  const ops: StRepoOps = {
+    cloneRelease: async (...args) => {
+      void args
+      return sentinel('cloneRelease')
+    },
+    fetchOrigin: async (...args) => {
+      void args
+      return sentinel('fetchOrigin')
+    },
+    pullFastForward: async (...args) => {
+      void args
+      return sentinel('pullFastForward')
+    },
+    checkoutTag: async (...args) => {
+      void args
+      return sentinel('checkoutTag')
+    },
+    statusPorcelain: async () => {
+      sentinel('statusPorcelain')
+      return ''
+    },
+    listTags: async () => {
+      sentinel('listTags')
+      return []
+    },
+    currentCommit: async () => {
+      sentinel('currentCommit')
+      return null
+    },
+    setRemote: async (...args) => {
+      void args
+      return sentinel('setRemote')
+    },
+    ...overrides,
+  }
+  return Object.assign(ops, { calls })
+}
+
+describe('Phase 4 · StRepoOps 路由（设计计划 §8.3，D3 零回归）', () => {
+  it('installSt embedded：IsoGitOps.cloneRelease 接管（原 gitExe 门禁打通），无 spawn clone', async () => {
+    const harness = makeExecHarness(() => 0)
+    const cloneRelease = vi.fn(async () => ({ ok: true, message: 'SillyTavern安装完成', exitCode: 0 }))
+    const ops = makeRepoOpsMock({ cloneRelease })
+    const lifecycle = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded' }),
+      deps: {
+        ...embeddedInstallDeps(harness.deps),
+        createRepoOps: () => ops,
+      },
+    })
+
+    const result = await lifecycle.installSt()
+    expect(result.ok).toBe(true)
+    expect(cloneRelease).toHaveBeenCalledWith(
+      'https://github.com/SillyTavern/SillyTavern.git',
+      join(root, 'SillyTavern'),
+    )
+    // clone 经进程内 Git：exec 通道只出现后续 bun install，无任何 git 命令串
+    expect(harness.calls.some((call) => call.command.includes('clone'))).toBe(false)
+    expect(harness.calls[0]?.command).toBe(buildBunInstallCommand(EMBEDDED_EXE))
+  })
+
+  it('installSt portable/system（D3 焊死）：clone 命令串与 cwd 与现状逐字节一致', async () => {
+    // system（现状）："<git>" clone <ST_REPO_URL> -b release，cwd = 启动器根；
+    // 不注入 createRepoOps → 默认 SpawnGitOps 路由，产出与 Phase 4 前完全相同的命令串
+    const sysHarness = makeExecHarness(() => 0)
+    await makeLifecycle({ deps: sysHarness.deps }).installSt()
+    expect(sysHarness.calls[0]?.command).toBe(buildGitCloneCommand('C:/fake/git.exe'))
+    expect(sysHarness.calls[0]?.cwd).toBe(root)
+
+    // portable（现状）
+    const portHarness = makeExecHarness(() => 0)
+    await makeLifecycle({ portable: true, deps: portHarness.deps }).installSt()
+    expect(portHarness.calls[0]?.command).toBe(
+      buildGitCloneCommand(join(root, 'env', 'cmd', 'git.exe')),
+    )
+  })
+
+  it('installSt 失败目录清理语义（D3）：clone 退出码经 exitCode 透传，残留目录清理不回归', async () => {
+    const stDir = join(root, 'SillyTavern')
+    mkdirSync(join(stDir, '.git'), { recursive: true }) // 失败 clone 残留形态
+    const harness = makeExecHarness(() => 1)
+    const lifecycle = makeLifecycle({ deps: harness.deps })
+
+    const result = await lifecycle.installSt()
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('安装失败: git clone进程返回错误码: 1')
+    // 仅 .git 的残留目录被清理（← is_failed_clone_folder 语义）
+    expect(existsSync(stDir)).toBe(false)
+  })
+
+  it('updateSt portable/system（D3 焊死）：pull 命令串与前置步骤与现状逐字节一致', async () => {
+    setupSt()
+    const exec = makeExecHarness(() => 0)
+    const git = makeGitHarness((args) => {
+      if (args[0] === 'rev-parse') return { stdout: 'release\n' }
+      if (args[0] === 'remote' && args[1] === 'get-url') {
+        return { stdout: `${EXPECTED_ST_REMOTE}\n` }
+      }
+      return { ok: true }
+    })
+    const cleanup = vi.fn(async () => ({ ok: true, message: 'Git状态清理成功' }))
+    // 不注入 createRepoOps → 默认 SpawnGitOps 路由（包装原 executeCommand 命令串）
+    const lifecycle = makeLifecycle({
+      deps: { ...exec.deps, ...git.deps, cleanupGitState: cleanup },
+    })
+
+    const result = await lifecycle.updateSt()
+    expect(result.ok).toBe(true)
+    // 前置步骤全走原 runGit / cleanup（不经 Ops）
+    expect(cleanup).toHaveBeenCalledWith(join(root, 'SillyTavern'))
+    expect(git.calls).toContainEqual(['rev-parse', '--abbrev-ref', 'HEAD'])
+    expect(git.calls).toContainEqual(['remote', 'get-url', 'origin'])
+    expect(git.calls).not.toContainEqual(['remote', 'set-url', 'origin', EXPECTED_ST_REMOTE])
+    // pull 经 Ops 包装仍产出原命令串 + 原 cwd
+    const pullCall = exec.calls.find((call) => call.command === buildGitPullCommand('C:/fake/git.exe'))
+    expect(pullCall).toBeDefined()
+    expect(pullCall?.cwd).toBe(join(root, 'SillyTavern'))
+  })
+
+  it('checkForStUpdate embedded：fetchOrigin + ref 对比（up-to-date / needs-update / check-failed）', async () => {
+    setupSt()
+    const mk = (
+      ops: StRepoOps,
+    ): ReturnType<typeof makeLifecycle> =>
+      makeLifecycle({
+        config: makeConfig({ env_mode: 'embedded' }),
+        deps: { ...embeddedDeps({}), createRepoOps: () => ops },
+      })
+
+    // up-to-date：HEAD 与 origin/release 同 commit
+    const sameOps = makeRepoOpsMock({
+      fetchOrigin: async () => ({ ok: true, message: 'ok', exitCode: 0 }),
+      currentCommit: async () => 'a'.repeat(40),
+      originReleaseCommit: async () => 'a'.repeat(40),
+    })
+    expect((await mk(sameOps).checkForStUpdate()).status).toBe('up-to-date')
+
+    // needs-update：commit 不一致
+    const diffOps = makeRepoOpsMock({
+      fetchOrigin: async () => ({ ok: true, message: 'ok', exitCode: 0 }),
+      currentCommit: async () => 'a'.repeat(40),
+      originReleaseCommit: async () => 'b'.repeat(40),
+    })
+    expect((await mk(diffOps).checkForStUpdate()).status).toBe('needs-update')
+
+    // fetch 失败 → check-failed
+    const failOps = makeRepoOpsMock({
+      fetchOrigin: async () => ({ ok: false, message: 'net', exitCode: 1 }),
+    })
+    expect((await mk(failOps).checkForStUpdate()).status).toBe('check-failed')
+    // embedded 无 gitExe 也不再判 no-git（门禁打通）
+  })
+
+  it('checkForStUpdate portable/system（D3 焊死）：fetch --all / status -uno / diff 命令串不变', async () => {
+    setupSt()
+    const exec = makeExecHarness(() => 0)
+    const git = makeGitHarness((args) => (args[0] === 'diff' ? { stdout: '' } : {}))
+    const lifecycle = makeLifecycle({ deps: { ...exec.deps, ...git.deps } })
+
+    expect((await lifecycle.checkForStUpdate()).status).toBe('up-to-date')
+    const commands = exec.calls.map((call) => call.command)
+    expect(commands).toContain('"C:/fake/git.exe" fetch --all')
+    expect(commands).toContain('"C:/fake/git.exe" status -uno')
+    expect(git.calls).toContainEqual(['diff', 'release..origin/release'])
+  })
+
+  it('switchStVersion embedded：porcelain 白名单判定 + checkoutTag + currentCommit 经 Ops', async () => {
+    setupSt()
+    const checkoutTag = vi.fn(async () => ({ ok: true, message: '成功切换到 tag 1.13.0', exitCode: 0 }))
+    const ops = makeRepoOpsMock({
+      statusPorcelain: async () => ' M package-lock.json',
+      checkoutTag,
+      currentCommit: async () => 'abcdef1234567890abcdef1234567890abcdef12',
+    })
+    const lifecycle = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded' }),
+      deps: { ...embeddedDeps({}), createRepoOps: () => ops },
+    })
+
+    const result = await lifecycle.switchStVersion({ version: '1.13.0' }, '1.13.0')
+    expect(result.ok).toBe(true)
+    expect(checkoutTag).toHaveBeenCalledWith('1.13.0', join(root, 'SillyTavern'))
+    expect(logs.some((message) => message.includes('当前commit: abcdef1'))).toBe(true)
+    expect(logs.some((message) => message.includes('工作区干净（已自动恢复package-lock.json）'))).toBe(
+      false,
+    )
+
+    // 非白名单脏文件 → 拒绝且不触 checkoutTag
+    const dirtyOps = makeRepoOpsMock({
+      statusPorcelain: async () => ' M server.js\n?? other.txt',
+    })
+    const dirty = makeLifecycle({
+      config: makeConfig({ env_mode: 'embedded' }),
+      deps: { ...embeddedDeps({}), createRepoOps: () => dirtyOps },
+    })
+    const dirtyResult = await dirty.switchStVersion({ version: '1.13.0' }, '1.13.0')
+    expect(dirtyResult.ok).toBe(false)
+    expect(dirtyResult.message).toContain('检测到2个文件有未提交的更改')
+    expect(dirtyResult.message).toContain('切换可能丢失更改')
+    expect((dirtyOps.calls['checkoutTag'] ?? 0)).toBe(0)
+  })
+
+  it('switchStVersion portable/system（D3 焊死）：仍走 deps.checkGitStatus / checkoutStTag 注入面', async () => {
+    setupSt()
+    const checkout = vi.fn(async () => ({ ok: true, message: '成功切换到 tag 1.13.0' }))
+    const ops = makeRepoOpsMock()
+    const lifecycle = makeLifecycle({
+      deps: {
+        checkoutStTag: checkout,
+        checkGitStatus: vi.fn(async () => ({ ok: true, message: '工作区干净' })),
+        getCurrentCommit: vi.fn(async () => ({
+          ok: true,
+          commit: 'a'.repeat(40),
+          message: 'ok',
+        })),
+        createRepoOps: () => ops,
+      },
+    })
+    const result = await lifecycle.switchStVersion({ version: '1.13.0' }, '1.13.0')
+    expect(result.ok).toBe(true)
+    expect(checkout).toHaveBeenCalledWith('1.13.0', join(root, 'SillyTavern'))
+    expect(ops.calls).toEqual({}) // spawn 模式零 Ops 调用
+  })
+
+  it('updateMirrorSetting embedded：旁路 gitconfig INI 手术，仅 setRemote + config 保存', async () => {
+    setupSt()
+    const setRemote = vi.fn(async () => ({ ok: true, message: '已将远程地址设置为 ...', exitCode: 0 }))
+    const ops = makeRepoOpsMock({ setRemote })
+    const config = makeConfig({ env_mode: 'embedded' })
+    const lifecycle = makeLifecycle({
+      config,
+      deps: { ...embeddedDeps({}), createRepoOps: () => ops },
+    })
+
+    const result = await lifecycle.updateMirrorSetting('gh-proxy.org')
+    expect(result.ok).toBe(true)
+    expect(config.get<string>('github.mirror')).toBe('gh-proxy.org')
+    expect(setRemote).toHaveBeenCalledWith(
+      'https://github.com/SillyTavern/SillyTavern.git',
+      join(root, 'SillyTavern'),
+    )
+    // 无 gitconfig INI 手术（embedded 分支不创建 env/etc/gitconfig）
+    expect(existsSync(join(root, 'env', 'etc', 'gitconfig'))).toBe(false)
+    expect(existsSync(join(root, 'env'))).toBe(false)
+  })
+
+  it('checkStatusFromPorcelain：白名单语义与 checkGitStatus 文案一致', () => {
+    expect(checkStatusFromPorcelain('')).toEqual({ ok: true, message: '工作区干净' })
+    expect(checkStatusFromPorcelain(' M package-lock.json')).toEqual({
+      ok: true,
+      message: '工作区干净（已自动恢复package-lock.json）',
+    })
+    expect(checkStatusFromPorcelain(' M package-lock.json\n?? bun.txt')).toEqual({
+      ok: false,
+      message: '检测到1个文件有未提交的更改',
+    })
+    expect(checkStatusFromPorcelain(' M a.txt\n M b.txt\n?? c.txt')).toEqual({
+      ok: false,
+      message: '检测到3个文件有未提交的更改',
+    })
   })
 })
 
@@ -1001,7 +1751,7 @@ describe('updateMirrorSetting（← event.py:1673-1833）', () => {
     setupSt()
     const git = makeGitHarness(() => ({ ok: true }))
     const switchRemote = vi.fn(async () => ({ ok: true, message: 'ok' }))
-    const config = makeConfig({ use_sys_env: true, patchgit: false })
+    const config = makeConfig({ env_mode: 'system', patchgit: false })
     const lifecycle = makeLifecycle({ config, deps: { ...git.deps, switchGitRemote: switchRemote } })
     await lifecycle.updateMirrorSetting('gh-proxy.org')
     expect(existsSync(join(root, 'env'))).toBe(false)
@@ -1012,7 +1762,7 @@ describe('updateMirrorSetting（← event.py:1673-1833）', () => {
   it('系统 Git 且开启 patchgit → 走 ~/.gitconfig_internal 路径（不抛错）', async () => {
     setupSt()
     const git = makeGitHarness(() => ({ ok: true }))
-    const config = makeConfig({ use_sys_env: true, patchgit: true })
+    const config = makeConfig({ env_mode: 'system', patchgit: true })
     const lifecycle = new StLifecycle({
       baseDir: root,
       onLog: (message) => logs.push(message),

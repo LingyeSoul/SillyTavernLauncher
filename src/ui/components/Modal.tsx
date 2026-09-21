@@ -2,8 +2,18 @@
  * Modal（设计 §5.8）：FloatingLayer + 不透明遮罩（pointerEvents:'auto' 吃滚轮，铁律）
  * + Tab 陷阱（focusNextWithin/focusPreviousWithin 官方模式）+ Escape 关闭 + 关闭恢复焦点。
  * 退场：GPUIX 无 exit 动画 → closing 状态反向 animate + setTimeout(240ms) 后真卸载（降级 #8）。
+ * 遮罩淡入淡出（2026-09-21 动效 PR1）：遮罩自身也走 motion opacity 0↔1，与面板
+ * 同拍进退；40% 黑 alpha 由 t.scrim 自带，动画的是元素 opacity，不动 backgroundColor。
+ *
+ * 按钮退场统一（2026-09-21 动效 PR4）：ModalCloseContext 暴露 useModalClose() =
+ * 面板级 requestClose，title/children/actions 内的动作按钮一律经它关闭（播退场 +
+ * reduced-motion 门控），勿直呼 closeTopDialog（瞬间卸载、绕过门控）。
+ * 契约：onClose prop 是**结算回调**——退场播完后由 Modal 调用，必须真正卸载对话框
+ * （直呼 closeTopDialog）。不得把 onClose 传成 requestClose：settle 时 closing 已复位，
+ * 重入会二次起播退场 → onClose 永不真执行 → 死循环。无 onClose 的 Modal 上
+ * requestClose 是空操作——需要动画关闭的对话框必须传 onClose 结算通道。
  */
-import { useEffect, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { motion, useGpuixRequired, useWindowSize } from '@gpuix/react'
 import type { PublicInstance } from '@gpuix/react'
@@ -22,6 +32,23 @@ export interface ModalProps {
 }
 
 const EXIT_MS = 240
+
+/** 面板内容级 requestClose 通道（Provider 挂在 Modal 面板内容处，缺省 null） */
+const ModalCloseContext = createContext<(() => void) | null>(null)
+
+/**
+ * 在 Modal 面板内容（title/children/actions）内取当前面板的 requestClose：
+ * 播 240ms 退场后才触发 onClose 结算（reduced-motion 立即结算）。
+ * 必须由 Provider 子树内的组件调用——对话框的动作区/正文组件内取，不能在
+ * 渲染 Modal 的外壳组件里调（Provider 之外，先例 useTheme/useMotion 均 throw）。
+ */
+export function useModalClose(): () => void {
+  const requestClose = useContext(ModalCloseContext)
+  if (!requestClose) {
+    throw new Error('useModalClose 必须在 Modal 面板内容内使用（ModalCloseContext 子树）')
+  }
+  return requestClose
+}
 
 export function Modal({
   open,
@@ -105,20 +132,25 @@ export function Modal({
           pointerEvents: 'none',
           backgroundColor: 'transparent',
         }}>
-        {/* 遮罩：40% 黑；pointerEvents:'auto' 吃滚轮（GPUIX 滚轮不冒泡） */}
-        <div
-        style={{
-          position: 'absolute',
-          left: 0,
-          top: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: t.scrim,
-          pointerEvents: 'auto',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}>
+        {/* 遮罩：40% 黑（alpha 由 t.scrim 自带，动画走元素 opacity 0↔1）；pointerEvents:
+            'auto' 吃滚轮（GPUIX 滚轮不冒泡）；与面板同拍 240ms 淡入淡出，退场窗口内
+            保持命中拦截（防 closing 期重复触发） */}
+        <motion.div
+          initial={motionEnabled ? { opacity: 0 } : false}
+          animate={{ opacity: closing ? 0 : 1 }}
+          transition={{ duration: motionEnabled ? dur.enter : 0, ease: EASE_OUT_QUAD }}
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: t.scrim,
+            pointerEvents: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
         <motion.div
           initial={motionEnabled ? { opacity: 0, top: 6 } : false}
           animate={enterOrExit}
@@ -135,46 +167,54 @@ export function Modal({
             borderRadius: t.radius.md,
             pointerEvents: 'auto',
           }}>
-          {/* Tab 陷阱挂内层面板；Escape 关闭（强选择模态除外） */}
-          <div
-            ref={(r) => {
-              panelRef.current = r
-            }}
-            style={{ display: 'flex', flexDirection: 'column', padding: 16 }}
-            onKeyDown={(e) => {
-              if (!strong && e.key === 'escape') requestClose()
-              if (e.key === 'tab' && panelRef.current) {
-                if (e.modifiers?.shift) renderer.focusPreviousWithin?.(panelRef.current.id)
-                else renderer.focusNextWithin?.(panelRef.current.id)
-              }
-            }}>
-            {title !== undefined && (
-              <text
-                style={{
-                  fontSize: t.fs.h3,
-                  fontWeight: 600,
-                  color: t.text.primary,
-                  fontFamily: t.font.sans,
-                }}>
-                {title}
-              </text>
-            )}
-            <div style={{ marginTop: 12, minHeight: 0 }}>{children}</div>
-            {actions !== undefined && (
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'row',
-                  justifyContent: 'flex-end',
-                  gap: 8,
-                  marginTop: 16,
-                }}>
-                {actions}
-              </div>
-            )}
-          </div>
+          {/* Tab 陷阱挂内层面板；Escape 关闭（强选择模态除外）。
+              ModalCloseContext 注入面板级 requestClose：title/children/actions
+              内的动作按钮经 useModalClose() 取用，统一走退场动画 + 门控（PR4）。
+              closing 期间面板内容 pointerEvents:'none'——退场中的按钮不可再触发
+              （防误触旧对话框的业务回调：E2E terminal-error-paths 回归教训，
+              点击落在退场中旧按钮上会执行过期的 onConfirm）；遮罩保持 'auto'
+              维持模态命中拦截直到卸载 */}
+          <ModalCloseContext.Provider value={requestClose}>
+            <div
+              ref={(r) => {
+                panelRef.current = r
+              }}
+              style={{ display: 'flex', flexDirection: 'column', padding: 16, pointerEvents: closing ? 'none' : undefined }}
+              onKeyDown={(e) => {
+                if (!strong && e.key === 'escape') requestClose()
+                if (e.key === 'tab' && panelRef.current) {
+                  if (e.modifiers?.shift) renderer.focusPreviousWithin?.(panelRef.current.id)
+                  else renderer.focusNextWithin?.(panelRef.current.id)
+                }
+              }}>
+              {title !== undefined && (
+                <text
+                  style={{
+                    fontSize: t.fs.h3,
+                    fontWeight: 600,
+                    color: t.text.primary,
+                    fontFamily: t.font.sans,
+                  }}>
+                  {title}
+                </text>
+              )}
+              <div style={{ marginTop: 12, minHeight: 0 }}>{children}</div>
+              {actions !== undefined && (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'row',
+                    justifyContent: 'flex-end',
+                    gap: 8,
+                    marginTop: 16,
+                  }}>
+                  {actions}
+                </div>
+              )}
+            </div>
+          </ModalCloseContext.Provider>
         </motion.div>
-      </div>
+      </motion.div>
       </div>
     </anchored>
   )

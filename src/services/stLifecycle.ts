@@ -9,6 +9,9 @@
  * - npm install 全部 --no-audit --no-fund --loglevel=error --no-progress
  *   --omit=dev --registry=https://registry.npmmirror.com
  *   （install_npm_dependencies 变体无 --omit=dev，与 Python 一致）。
+ * - Phase 3（设计计划 §7）：embedded 模式依赖安装路由 bun install
+ *   （--production --registry=npmmirror，重试链 cache clean → install --force），
+ *   安装前幂等消解 bun.lock（.git/info/exclude）；portable/system 命令串不变（D3）。
  * - git pull --rebase --autostash；package-lock 冲突恢复 ≤2 重试；
  *   _with_callback 变体追加 npm cache clean --force + node_modules 重装重试 ≤2。
  * - 启动命令 "<node>" server.js [--max-old-space-size=4096] [校验过的自定义参数]，
@@ -25,7 +28,7 @@
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { getConfigStore, type ConfigStore } from './configStore'
+import { getConfigStore, type ConfigStore, type EnvMode } from './configStore'
 import {
   checkGitStatus,
   checkoutStTag,
@@ -48,6 +51,14 @@ import { checkNodeModules, checkStInstalled, resolvePortableEnv, type PortableEn
 import { getStConfig, type PrivateFilterHealResult } from './stConfig'
 import { IS_WINDOWS, spawnSyncCmd, which } from './runtime'
 import { ensureDirSync } from './atomicFs'
+import {
+  buildProcessEnvEmbedded,
+  defaultEmbeddedExecPath,
+  ensureBunLockExcluded,
+  ensureStEmbeddedRuntime,
+  type EmbeddedRuntimeOptions,
+} from './embeddedRuntime'
+import { createIsoGitOps, createSpawnGitOps, type StRepoOps } from './isoGit'
 import { errMsg, logError } from './errorLog'
 import type { BoolMessage, ProcessInfo, SyncSpawnResult } from './types'
 
@@ -77,6 +88,23 @@ export function buildNpmCacheCleanCommand(npmExe: string): string {
   return `"${npmExe}" cache clean --force`
 }
 
+/**
+ * Phase 3（设计计划 §7）：embedded 依赖安装命令——bun install。
+ * `--production` 对齐 npm 链路 `--omit=dev` 意图（跳过 devDependencies）；
+ * `--registry` 旗标覆盖 .npmrc/bunfig（F8 实测存在），npmmirror 语义与 npm 链路一致。
+ */
+export function buildBunInstallCommand(exePath: string): string {
+  return `"${exePath}" install --production --registry=${NPM_MIRROR_REGISTRY}`
+}
+
+/**
+ * Phase 3（设计计划 §7）：embedded 重试链首步——bun 无 `cache clean` 等价，
+ * 以 `install --force`（忽略缓存强制重装）替代；node_modules 删除重试语义原样保留。
+ */
+export function buildBunInstallForceCommand(exePath: string): string {
+  return `"${exePath}" install --force`
+}
+
 /** ← git clone -b release */
 export function buildGitCloneCommand(gitExe: string): string {
   return `"${gitExe}" clone ${ST_REPO_URL} -b release`
@@ -92,12 +120,37 @@ export function buildStStartCommand(options: {
   nodeExe: string
   useOptimizeArgs?: boolean
   customArgs?: string
+  /**
+   * embedded（Bun/JavaScriptCore）不支持 V8 旗标：--max-old-space-size 按 D7 跳过
+   * （调用方负责在跳过时产出终端可见日志行，见 startSt/restartSt）。
+   */
+  embedded?: boolean
 }): string {
   let command = `"${options.nodeExe}" server.js`
-  if (options.useOptimizeArgs) command += ' --max-old-space-size=4096'
+  if (options.useOptimizeArgs && !options.embedded) command += ' --max-old-space-size=4096'
   const customArgs = (options.customArgs ?? '').trim()
   if (customArgs) command += ` ${customArgs}`
   return command
+}
+
+/**
+ * Phase 4（设计计划 §8.3）：porcelain 输出 → 工作区白名单判定，embedded 分支
+ * 复用 checkGitStatus 的语义与消息文案（package-lock.json 白名单自动恢复；
+ * 其余改动判脏）。恢复动效由后续 checkoutTag 的 force checkout 承担
+ * （tag 版本覆盖工作区 = git checkout -- package-lock.json 的等价结果）。
+ */
+export function checkStatusFromPorcelain(porcelain: string): BoolMessage {
+  if (!porcelain.trim()) {
+    return { ok: true, message: '工作区干净' }
+  }
+  const nonPackageLockChanges = porcelain
+    .trim()
+    .split('\n')
+    .filter((line) => line.trim() && !line.includes('package-lock.json'))
+  if (nonPackageLockChanges.length === 0) {
+    return { ok: true, message: '工作区干净（已自动恢复package-lock.json）' }
+  }
+  return { ok: false, message: `检测到${nonPackageLockChanges.length}个文件有未提交的更改` }
 }
 
 // ---------------------------------------------------------------------------
@@ -189,11 +242,22 @@ export interface Toolchain {
   /** 镜像配置使用的 git 目录（env/cmd 或系统 git 所在目录） */
   gitDir: string | null
   portable: boolean
+  /**
+   * embedded 模式（设计计划 §6/D2）：node/npm 均派生为启动器自身可执行文件，
+   * 无外部 Git（Git 层 Phase 4 走 isoGit 服务，届时经 StRepoOps 路由）。
+   * portable/system 两分支恒 false（D3 零回归），TS strict 下消费方按此收窄。
+   */
+  embedded: boolean
 }
 
 export function resolveToolchain(
   config: Pick<ConfigStore, 'get'>,
-  options: { whichFn?: (binary: string) => string | null; portableEnv?: (envRoot?: string) => PortableEnvPaths } = {},
+  options: {
+    whichFn?: (binary: string) => string | null
+    portableEnv?: (envRoot?: string) => PortableEnvPaths
+    /** embedded 可执行文件来源（默认 process.execPath；测试注入假路径保持可测） */
+    embeddedExecPath?: () => string
+  } = {},
 ): Toolchain {
   const whichFn = options.whichFn ?? which
   const isFileOk = (p: string): boolean => {
@@ -203,8 +267,22 @@ export function resolveToolchain(
       return false
     }
   }
-  const useSysEnv = config.get<boolean>('use_sys_env', false)
-  if (!useSysEnv) {
+  const envMode = config.get<EnvMode>('env_mode', 'portable')
+  if (envMode === 'embedded') {
+    // Phase 2（设计计划 §6/D2）：ST 运行 = 自引用 execPath（BUN_BE_BUN 环境变量
+    // 在 executeCommand 侧注入）；gitExe 为 null——本阶段 git 相关调用在既有
+    // 收窄处给出明确错误（"未找到Git路径"类），Phase 4 由 isoGit 接管
+    const execPath = (options.embeddedExecPath ?? defaultEmbeddedExecPath)()
+    return {
+      gitExe: null,
+      nodeExe: execPath,
+      npmExe: execPath,
+      gitDir: null,
+      portable: false,
+      embedded: true,
+    }
+  }
+  if (envMode !== 'system') {
     // 内置环境：env/cmd/git.exe、env/node.exe、env/npm.cmd
     const paths = (options.portableEnv ?? resolvePortableEnv)()
     return {
@@ -213,6 +291,7 @@ export function resolveToolchain(
       npmExe: isFileOk(paths.npmCmd) ? paths.npmCmd : null,
       gitDir: paths.gitDir,
       portable: true,
+      embedded: false,
     }
   }
   // 系统环境：PATH 探测
@@ -225,6 +304,7 @@ export function resolveToolchain(
     npmExe,
     gitDir: gitExe ? dirname(gitExe) : null,
     portable: false,
+    embedded: false,
   }
 }
 
@@ -387,6 +467,28 @@ export interface StLifecycleDeps {
   stopAllProcesses?: (onEvent?: (message: string) => void) => Promise<boolean>
   whichFn?: (binary: string) => string | null
   portableEnv?: (envRoot?: string) => PortableEnvPaths
+  /**
+   * embedded 可执行文件来源（Phase 2 设计计划 §6）；默认 process.execPath。
+   * 测试注入假路径，隔离 vitest 宿主的真实 node.exe。
+   */
+  embeddedExecPath?: () => string
+  /**
+   * embedded 运行时启动前校验（Phase 2 设计计划 §6：execPath 存在性 + §9 CA 懒加载）。
+   * 默认真实实现；测试注入隔离 PowerShell CA 导出与真实 execPath。
+   */
+  ensureEmbeddedRuntime?: (options: EmbeddedRuntimeOptions) => Promise<BoolMessage>
+  /**
+   * bun.lock Git 排除消解（Phase 3 设计计划 §7/D6）：embedded 安装/更新前幂等写入
+   * <stDir>/.git/info/exclude。默认真实实现（embeddedRuntime.ts）；测试注入断言
+   * embedded 路径挂接且 portable/system 全程不触发（D3）。
+   */
+  ensureBunLockExcluded?: (stDir: string) => Promise<boolean>
+  /**
+   * StRepoOps 工厂（Phase 4 设计计划 §8.3）：git 调用点的路由钩子——
+   * 默认 embedded → IsoGitOps（进程内 Git）、portable/system → SpawnGitOps
+   * （包装原 executeCommand 命令串，D3 逐字节一致）；测试注入 mock 断言路由。
+   */
+  createRepoOps?: (tools: Toolchain) => StRepoOps
 }
 
 export interface StLifecycleOptions {
@@ -452,14 +554,33 @@ export class StLifecycle {
     kind?: string,
   ): Promise<ProcessInfo | null> {
     const execute = this.deps.executeProcessAsync ?? executeProcessAsync
-    const useSysEnv = this.config.get<boolean>('use_sys_env', false)
-    let prependDirs: string[] = []
-    if (!useSysEnv) {
-      const resolveEnv = this.deps.portableEnv ?? resolvePortableEnv
-      const paths = resolveEnv(join(this.baseDir, 'env'))
-      prependDirs = [dirname(paths.nodeExe), paths.gitDir]
+    const envMode = this.config.get<EnvMode>('env_mode', 'portable')
+    let env: Record<string, string>
+    if (envMode === 'embedded') {
+      // Phase 2（设计计划 §6）：embedded 不做 PATH 前置；启动前校验运行时
+      // （execPath 存在性 + §9 CA 懒加载），失败即走现有创建失败反馈路径
+      const ensure = this.deps.ensureEmbeddedRuntime ?? ensureStEmbeddedRuntime
+      const runtime = await ensure({
+        baseDir: this.baseDir,
+        execPath: this.deps.embeddedExecPath?.(),
+      })
+      if (!runtime.ok) {
+        this.log(runtime.message)
+        logError(`[stLifecycle] ${runtime.message}`)
+        return null
+      }
+      // BUN_BE_BUN 使 exe 退化为完整 bun CLI（F1）；NODE_EXTRA_CA_CERTS 按
+      // cache/win-ca.pem 存在性注入（F7 劫持网络 TLS 自愈）
+      env = buildProcessEnvEmbedded([], { baseDir: this.baseDir })
+    } else {
+      let prependDirs: string[] = []
+      if (envMode !== 'system') {
+        const resolveEnv = this.deps.portableEnv ?? resolvePortableEnv
+        const paths = resolveEnv(join(this.baseDir, 'env'))
+        prependDirs = [dirname(paths.nodeExe), paths.gitDir]
+      }
+      env = buildProcessEnv(prependDirs)
     }
-    const env = buildProcessEnv(prependDirs)
     // 确保工作目录存在（← os.makedirs(workdir, exist_ok=True)）
     ensureDirSync(workdir)
     // 进程 stdout/stderr 与命令回显接入终端日志（← Python execute_process_async 的 add_log 路径）
@@ -477,6 +598,42 @@ export class StLifecycle {
     return resolveToolchain(this.config, {
       whichFn: this.deps.whichFn,
       portableEnv: this.deps.portableEnv,
+      embeddedExecPath: this.deps.embeddedExecPath,
+    })
+  }
+
+  /**
+   * D7：use_optimize_args（--max-old-space-size，V8 旗标）在 embedded
+   * （Bun/JavaScriptCore）下无意义——跳过并产出终端可见日志行。
+   */
+  private logOptimizeArgsSkippedForEmbedded(tools: Toolchain, useOptimizeArgs: boolean): void {
+    if (useOptimizeArgs && tools.embedded) {
+      this.log('内置运行时（Bun）不支持 --max-old-space-size，已忽略')
+    }
+  }
+
+  /**
+   * Phase 4（设计计划 §8.3）：git 调用点的 StRepoOps 路由——
+   * - embedded → IsoGitOps（进程内 isomorphic-git；进度/错误经 onLog 进终端日志）；
+   * - portable/system → SpawnGitOps（包装原 executeCommand 命令串，D3 逐字节一致：
+   *   clone/pull/fetch 命令与 cwd 与 Phase 4 之前完全相同，仅多一层包装）。
+   * 测试经 deps.createRepoOps 注入 mock（不打网络、不跑真实 git）。
+   */
+  private repoOps(tools: Toolchain): StRepoOps {
+    if (this.deps.createRepoOps) return this.deps.createRepoOps(tools)
+    if (tools.embedded) {
+      return createIsoGitOps({ onLog: (message) => this.log(message) })
+    }
+    if (tools.gitExe === null) {
+      // 不可达：调用方均已过 gitExe/embedded 门禁；防御性兜底（不静默走错通道）
+      throw new Error('SpawnGitOps 需要 gitExe（portable/system 模式下 Git 未就绪）')
+    }
+    return createSpawnGitOps({
+      gitExe: tools.gitExe,
+      execCommand: async (command, workdir) => {
+        const proc = await this.executeCommand(command, workdir)
+        return proc ? await this.waitProcess(proc) : null
+      },
     })
   }
 
@@ -527,8 +684,9 @@ export class StLifecycle {
             return { ok: true, message: 'SillyTavern已安装，依赖项已安装' }
           }
           this.log('正在安装依赖...')
+          // Phase 3（设计计划 §7）：embedded 路由 bun install；portable/system 命令串不变（D3）
           const proc = await this.executeCommand(
-            buildNpmInstallCommand(tools.npmExe),
+            await this.resolveInstallCommand(tools),
             this.stDir,
           )
           if (proc) {
@@ -542,21 +700,21 @@ export class StLifecycle {
         return { ok: true, message: 'SillyTavern已安装，未找到nodejs' }
       }
 
-      // ST 未安装 → git clone
-      if (!tools.gitExe) {
+      // ST 未安装 → git clone（Phase 4 设计 §8.3：embedded → IsoGitOps 进程内克隆，
+      // 打通原 gitExe 门禁；portable/system → SpawnGitOps 包装原命令串，D3 逐字节一致）
+      if (!tools.gitExe && !tools.embedded) {
         this.log('Error: Git路径未正确配置')
         return { ok: false, message: 'Error: Git路径未正确配置' }
       }
 
       this.log(`正在从 ${ST_REPO_URL} 安装SillyTavern...`)
-      const proc = await this.executeCommand(buildGitCloneCommand(tools.gitExe), this.baseDir)
-      if (!proc) {
+      const cloneResult = await this.repoOps(tools).cloneRelease(ST_REPO_URL, this.stDir)
+      if (cloneResult.exitCode === null) {
         this.log('安装失败: 创建git clone进程失败')
         return { ok: false, message: '安装失败: 创建git clone进程失败' }
       }
-      const exitCode = await this.waitProcess(proc)
-      if (exitCode !== 0) {
-        const errorMsg = `安装失败: git clone进程返回错误码: ${exitCode}`
+      if (!cloneResult.ok) {
+        const errorMsg = `安装失败: git clone进程返回错误码: ${cloneResult.exitCode}`
         this.log(errorMsg)
         // 自动清理失败的clone文件夹
         if (this.isFailedCloneFolder(this.stDir)) {
@@ -576,8 +734,9 @@ export class StLifecycle {
       if (tools.npmExe) {
         if (!checkNodeModules(this.stDir)) {
           this.log('正在安装依赖...')
+          // Phase 3（设计计划 §7）：embedded 路由 bun install；portable/system 命令串不变（D3）
           const depProcess = await this.executeCommand(
-            buildNpmInstallCommand(tools.npmExe),
+            await this.resolveInstallCommand(tools),
             this.stDir,
           )
           if (depProcess) {
@@ -710,10 +869,13 @@ export class StLifecycle {
         }
       }
       const useOptimizeArgs = this.config.get<boolean>('use_optimize_args', false)
+      // D7：embedded（Bun）不支持 V8 优化旗标——跳过前先给终端可见提示
+      this.logOptimizeArgsSkippedForEmbedded(tools, useOptimizeArgs)
       const command = buildStStartCommand({
         nodeExe: tools.nodeExe,
         useOptimizeArgs,
         customArgs,
+        embedded: tools.embedded,
       })
 
       const proc = await this.executeCommand(command, this.stDir, 'st-server')
@@ -803,10 +965,13 @@ export class StLifecycle {
         }
       }
       const useOptimizeArgs = this.config.get<boolean>('use_optimize_args', false)
+      // D7：embedded（Bun）不支持 V8 优化旗标——跳过前先给终端可见提示
+      this.logOptimizeArgsSkippedForEmbedded(tools, useOptimizeArgs)
       const command = buildStStartCommand({
         nodeExe: tools.nodeExe,
         useOptimizeArgs,
         customArgs,
+        embedded: tools.embedded,
       })
 
       const proc = await this.executeCommand(command, this.stDir, 'st-server')
@@ -829,15 +994,59 @@ export class StLifecycle {
   // -------------------------------------------------------------------------
 
   /**
+   * Phase 3（设计计划 §7）：依赖安装命令的 embedded 路由——唯一挂接层，覆盖
+   * installSt 两处 / installNpmDependencies / updateSt→runNpmInstallWithRetry 全部调用点：
+   * - embedded → bun install，返回前幂等消解 bun.lock（D6，失败仅日志不阻断）；
+   * - portable/system → 原 npm 命令串逐字节不变，且零前置副作用（D3 零回归）。
+   * variant 'no-omit' 对应 installNpmDependencies 的 npm 变体；embedded 下两变体统一为
+   * 同一 bun 命令（§7 单命令设计：--production 即跳过 devDependencies，ST 运行无需 dev 依赖）。
+   */
+  private async resolveInstallCommand(
+    tools: Toolchain,
+    variant: 'omit-dev' | 'no-omit' = 'omit-dev',
+  ): Promise<string> {
+    const npmExe = tools.npmExe ?? ''
+    if (!tools.embedded) {
+      return variant === 'no-omit'
+        ? buildNpmInstallCommandNoOmit(npmExe)
+        : buildNpmInstallCommand(npmExe)
+    }
+    await this.ensureBunLockGuard()
+    return buildBunInstallCommand(npmExe)
+  }
+
+  /**
+   * Phase 3（设计计划 §7/D6）：bun.lock 消解——embedded 安装/更新前幂等追加到
+   * <stDir>/.git/info/exclude。bun install 生成 bun.lock 且不动 package-lock.json，
+   * checkGitStatus 的 porcelain 白名单只认 package-lock.json，未跟踪的 bun.lock 会
+   * 阻断版本切换（F4 实测）。失败仅终端警告（实现内部已 logError），不阻断安装——
+   * 最坏后果是版本切换时提示工作区不干净，重跑安装即自愈。
+   */
+  private async ensureBunLockGuard(): Promise<void> {
+    const ensure = this.deps.ensureBunLockExcluded ?? ensureBunLockExcluded
+    const ok = await ensure(this.stDir)
+    if (!ok) {
+      this.log('警告: bun.lock Git排除规则写入失败，版本切换时如提示工作区不干净请重试安装')
+    }
+  }
+
+  /**
    * 单次 npm install 执行；_with_callback 变体（withAutoStart）失败时
    * cache clean + 删除 node_modules 后重试（← on_npm_complete 重试链，≤2 重试；
    * 普通变体失败即止，1:1 对应 Python 两个 update 方法的行为差异）。
+   *
+   * Phase 3（设计计划 §7）：embedded 下主安装命令路由 bun install（含 bun.lock
+   * 消解前置），重试首步 cache clean 替换为 `install --force`（bun 无 cache clean
+   * 等价，忽略缓存强制重装）；node_modules 删除重试链原样保留。portable/system
+   * 命令串与重试链逐字节不变（D3 零回归）。
    */
-  private async runNpmInstallWithRetry(npmExe: string, withAutoStart: boolean): Promise<BoolMessage> {
+  private async runNpmInstallWithRetry(tools: Toolchain, withAutoStart: boolean): Promise<BoolMessage> {
+    const npmExe = tools.npmExe ?? ''
     let npmRetryCount = 0
     for (;;) {
       this.log('正在安装依赖...')
-      const proc = await this.executeCommand(buildNpmInstallCommand(npmExe), this.stDir)
+      const installCommand = await this.resolveInstallCommand(tools)
+      const proc = await this.executeCommand(installCommand, this.stDir)
       const exitCode = proc ? await this.waitProcess(proc) : null
       if (exitCode === 0) {
         this.log('依赖安装成功')
@@ -850,11 +1059,11 @@ export class StLifecycle {
       }
       npmRetryCount += 1
       this.log(`依赖安装失败，正在重试... (尝试次数: ${npmRetryCount}/2)`)
-      // 清理npm缓存
-      const cacheProcess = await this.executeCommand(
-        buildNpmCacheCleanCommand(npmExe),
-        this.stDir,
-      )
+      // 重试首步：npm → 清理缓存；embedded → bun 无 cache clean 等价，改 install --force
+      const cacheCommand = tools.embedded
+        ? buildBunInstallForceCommand(npmExe)
+        : buildNpmCacheCleanCommand(npmExe)
+      const cacheProcess = await this.executeCommand(cacheCommand, this.stDir)
       if (cacheProcess) await this.waitProcess(cacheProcess)
       // 删除node_modules
       const nodeModulesPath = join(this.stDir, 'node_modules')
@@ -885,83 +1094,92 @@ export class StLifecycle {
         return { ok: false, message: 'SillyTavern未安装' }
       }
       this.log('正在更新SillyTavern...')
-      if (!tools.gitExe) {
+      if (!tools.gitExe && !tools.embedded) {
         this.log('未找到Git路径，请手动更新SillyTavern')
         return { ok: false, message: '未找到Git路径，请手动更新SillyTavern' }
       }
 
-      // 步骤0：清理Git未完成状态（merge、rebase等）
-      this.log('清理Git状态...')
-      try {
-        const cleanup = this.deps.cleanupGitState ?? cleanupGitState
-        const { ok: cleanupOk, message: cleanupMessage } = await cleanup(this.stDir)
-        if (!cleanupOk) this.log(`警告: ${cleanupMessage}`)
-        else this.log(cleanupMessage)
-      } catch (err) {
-        this.log(`清理Git状态时出错: ${err instanceof Error ? err.message : String(err)}`)
-      }
+      if (tools.embedded) {
+        // Phase 4（设计 §8.3）：embedded 简化链——进程内 Git 无 merge/rebase 状态文件
+        // （cleanup 语义不适用）；detached HEAD 与远程地址由 pullFastForward 的
+        // 强制对齐与 cloneRelease/setRemote 维护，无需 spawn 式前置检查
+        this.log('内置运行时模式：跳过Git状态清理与detached HEAD检查')
+      } else {
+        // 步骤0：清理Git未完成状态（merge、rebase等）
+        this.log('清理Git状态...')
+        try {
+          const cleanup = this.deps.cleanupGitState ?? cleanupGitState
+          const { ok: cleanupOk, message: cleanupMessage } = await cleanup(this.stDir)
+          if (!cleanupOk) this.log(`警告: ${cleanupMessage}`)
+          else this.log(cleanupMessage)
+        } catch (err) {
+          this.log(`清理Git状态时出错: ${err instanceof Error ? err.message : String(err)}`)
+        }
 
-      // 检查并恢复detached HEAD状态
-      this.log('检查Git状态...')
-      try {
-        const branchCheck = await this.runGitFn(['rev-parse', '--abbrev-ref', 'HEAD'], this.stDir)
-        if (branchCheck.ok) {
-          const currentBranch = branchCheck.stdout.trim()
-          if (currentBranch === 'HEAD') {
-            this.log('检测到detached HEAD状态，正在切换到release分支...')
-            const checkoutResult = await this.runGitFn(
-              ['checkout', '-B', 'release', 'origin/release'],
-              this.stDir,
-            )
-            if (checkoutResult.ok) {
-              this.log('成功切换到release分支')
-            } else {
-              // 尝试更简单的恢复方式
-              this.log('尝试另一种恢复方式...')
-              const checkoutResult2 = await this.runGitFn(['checkout', 'release'], this.stDir)
-              if (checkoutResult2.ok) {
+        // 检查并恢复detached HEAD状态
+        this.log('检查Git状态...')
+        try {
+          const branchCheck = await this.runGitFn(['rev-parse', '--abbrev-ref', 'HEAD'], this.stDir)
+          if (branchCheck.ok) {
+            const currentBranch = branchCheck.stdout.trim()
+            if (currentBranch === 'HEAD') {
+              this.log('检测到detached HEAD状态，正在切换到release分支...')
+              const checkoutResult = await this.runGitFn(
+                ['checkout', '-B', 'release', 'origin/release'],
+                this.stDir,
+              )
+              if (checkoutResult.ok) {
                 this.log('成功切换到release分支')
               } else {
-                this.log('切换到release分支失败，请手动处理')
-                return { ok: false, message: '切换到release分支失败，请手动处理' }
+                // 尝试更简单的恢复方式
+                this.log('尝试另一种恢复方式...')
+                const checkoutResult2 = await this.runGitFn(['checkout', 'release'], this.stDir)
+                if (checkoutResult2.ok) {
+                  this.log('成功切换到release分支')
+                } else {
+                  this.log('切换到release分支失败，请手动处理')
+                  return { ok: false, message: '切换到release分支失败，请手动处理' }
+                }
               }
             }
           }
+        } catch (err) {
+          this.log(`检查detached HEAD状态时出错: ${err instanceof Error ? err.message : String(err)}`)
         }
-      } catch (err) {
-        this.log(`检查detached HEAD状态时出错: ${err instanceof Error ? err.message : String(err)}`)
-      }
 
-      // 检查当前远程仓库地址是否正确（所有镜像源都使用GitHub原始仓库地址）
-      try {
-        const currentRemoteProcess = await this.runGitFn(['remote', 'get-url', 'origin'], this.stDir)
-        if (currentRemoteProcess.ok) {
-          const currentRemote = currentRemoteProcess.stdout.trim()
-          if (currentRemote !== EXPECTED_ST_REMOTE) {
-            this.log(`更新远程仓库地址: ${EXPECTED_ST_REMOTE}`)
-            await this.runGitFn(['remote', 'set-url', 'origin', EXPECTED_ST_REMOTE], this.stDir)
+        // 检查当前远程仓库地址是否正确（所有镜像源都使用GitHub原始仓库地址）
+        try {
+          const currentRemoteProcess = await this.runGitFn(['remote', 'get-url', 'origin'], this.stDir)
+          if (currentRemoteProcess.ok) {
+            const currentRemote = currentRemoteProcess.stdout.trim()
+            if (currentRemote !== EXPECTED_ST_REMOTE) {
+              this.log(`更新远程仓库地址: ${EXPECTED_ST_REMOTE}`)
+              await this.runGitFn(['remote', 'set-url', 'origin', EXPECTED_ST_REMOTE], this.stDir)
+            }
           }
+        } catch (err) {
+          this.log(`检查/更新远程仓库地址时出错: ${err instanceof Error ? err.message : String(err)}`)
         }
-      } catch (err) {
-        this.log(`检查/更新远程仓库地址时出错: ${err instanceof Error ? err.message : String(err)}`)
       }
 
-      // 执行git pull（package-lock 冲突恢复 ≤2 重试）
+      // 执行git pull（Phase 4：经 StRepoOps 路由——embedded 为 fastForward + 非快进
+      // 强制对齐兜底；portable/system 命令串不变，package-lock 冲突恢复 ≤2 重试）
       let gitUpdated = false
       let retryCount = 0
       while (!gitUpdated) {
-        const pullProcess = await this.executeCommand(
-          buildGitPullCommand(tools.gitExe),
-          this.stDir,
-        )
-        const exitCode = pullProcess ? await this.waitProcess(pullProcess) : null
-        if (exitCode === 0) {
+        const pullResult = await this.repoOps(tools).pullFastForward(this.stDir)
+        if (pullResult.ok) {
           this.log('Git更新成功')
           gitUpdated = true
           break
         }
         if (retryCount < 2) {
           retryCount += 1
+          if (tools.embedded) {
+            // embedded：非快进兜底已在 Ops 内完成，重试仅覆盖网络抖动
+            this.log(`Git更新失败，正在重试... (尝试次数: ${retryCount}/2)`)
+            continue
+          }
           this.log(
             `Git更新失败，检查是否为package-lock.json冲突... (尝试次数: ${retryCount}/2)`,
           )
@@ -994,7 +1212,7 @@ export class StLifecycle {
 
       // 安装依赖（node_modules 重装重试链）
       if (tools.npmExe) {
-        const npmResult = await this.runNpmInstallWithRetry(tools.npmExe, withAutoStart)
+        const npmResult = await this.runNpmInstallWithRetry(tools, withAutoStart)
         if (withAutoStart) {
           if (npmResult.ok) {
             this.log('依赖安装成功，正在启动SillyTavern...')
@@ -1026,6 +1244,34 @@ export class StLifecycle {
     }
     this.log('正在检查更新...')
     const tools = this.toolchain()
+
+    // Phase 4（设计 §8.3）：embedded 进程内 fetch + 本地/远端 release ref 对比
+    // （git diff release..origin/release 的等价判定：commit 一致即无差异）
+    if (tools.embedded) {
+      try {
+        const ops = this.repoOps(tools)
+        const fetchResult = await ops.fetchOrigin(this.stDir)
+        if (!fetchResult.ok) {
+          return { status: 'check-failed', message: '检查更新失败，直接启动SillyTavern...' }
+        }
+        this.log('正在检查release分支状态...')
+        const localCommit = await ops.currentCommit(this.stDir)
+        const remoteCommit = (await ops.originReleaseCommit?.(this.stDir)) ?? null
+        if (localCommit !== null && remoteCommit !== null && localCommit === remoteCommit) {
+          return { status: 'up-to-date', message: '已是最新版本，正在启动SillyTavern...' }
+        }
+        if (localCommit === null || remoteCommit === null) {
+          return { status: 'check-failed', message: '检查更新失败，直接启动SillyTavern...' }
+        }
+        return { status: 'needs-update', message: '检测到新版本，正在更新...' }
+      } catch (err) {
+        return {
+          status: 'check-failed',
+          message: `检查更新时出错: ${err instanceof Error ? err.message : String(err)}，正在更新...`,
+        }
+      }
+    }
+
     if (!tools.gitExe) {
       return { status: 'no-git', message: '未找到Git路径，直接启动SillyTavern...' }
     }
@@ -1096,6 +1342,35 @@ export class StLifecycle {
 
       this.log(`开始切换到版本 v${versionInfo.version}...`)
 
+      const tools = this.toolchain()
+
+      // Phase 4（设计 §8.3）：embedded 经 IsoGitOps——porcelain 白名单判定 +
+      // checkoutTag（内含脏检查兜底与 force checkout）
+      if (tools.embedded) {
+        const ops = this.repoOps(tools)
+        const { ok: isCleanEmbedded, message: embeddedStatusMsg } = checkStatusFromPorcelain(
+          await ops.statusPorcelain(this.stDir),
+        )
+        if (!isCleanEmbedded) {
+          this.log(`警告: ${embeddedStatusMsg}`)
+          console.warn(`[stLifecycle] 版本切换警告: ${embeddedStatusMsg}`)
+          return { ok: false, message: `${embeddedStatusMsg}，切换可能丢失更改` }
+        }
+        const embeddedCheckout = await ops.checkoutTag(tagName, this.stDir)
+        if (!embeddedCheckout.ok) {
+          this.log(`✗ ${embeddedCheckout.message}`)
+          logError(`[stLifecycle] 切换版本失败: ${embeddedCheckout.message}`)
+          return { ok: false, message: `切换版本失败: ${embeddedCheckout.message}` }
+        }
+        this.log(`✓ ${embeddedCheckout.message}`)
+        this.log(`✓ 成功切换到版本 v${versionInfo.version}`)
+        const embeddedCommit = await ops.currentCommit(this.stDir)
+        if (embeddedCommit) {
+          this.log(`当前commit: ${embeddedCommit.slice(0, 7)}`)
+        }
+        return { ok: true, message: `成功切换到版本 v${versionInfo.version}` }
+      }
+
       // 2. 检查Git工作区状态
       const checkStatus = this.deps.checkGitStatus ?? checkGitStatus
       const { ok: isClean, message: statusMsg } = await checkStatus(this.stDir)
@@ -1146,7 +1421,12 @@ export class StLifecycle {
         return { ok: false, message: '未找到 Node.js' }
       }
       this.log('正在执行 npm install，这可能需要几分钟...')
-      const proc = await this.executeCommand(buildNpmInstallCommandNoOmit(tools.npmExe), this.stDir)
+      // Phase 3（设计计划 §7）：embedded 路由 bun install（§7 单命令设计，--production
+      // 统一两变体）；portable/system 命令串不变（D3）
+      const proc = await this.executeCommand(
+        await this.resolveInstallCommand(tools, 'no-omit'),
+        this.stDir,
+      )
       if (!proc) {
         this.log('错误: 无法执行npm install')
         return { ok: false, message: '无法执行npm install' }
@@ -1192,10 +1472,12 @@ export class StLifecycle {
       this.config.set('github.mirror', mirrorType)
       this.config.save()
 
-      // 判断是否应修改内部Git配置（仅限内置Git或启用了patchgit的系统Git）
-      const useSysEnv = this.config.get<boolean>('use_sys_env', false)
+      // 判断是否应修改内部Git配置（仅限内置Git或启用了patchgit的系统Git；
+      // D1 三态化：portable 恒改写 / system 看 patchgit / embedded 无 gitconfig 手术恒 false）
+      const envMode = this.config.get<EnvMode>('env_mode', 'portable')
       const shouldPatch =
-        (useSysEnv && this.config.get<boolean>('patchgit', false)) || !useSysEnv
+        envMode === 'portable' ||
+        (envMode === 'system' && this.config.get<boolean>('patchgit', false))
 
       const tools = this.toolchain()
       const gitDir = tools.gitDir
@@ -1281,12 +1563,24 @@ export class StLifecycle {
 
       // 若SillyTavern已存在，同步切换其远程地址为GitHub原始仓库
       if (checkStInstalled(this.stDir)) {
-        const switchRemote = this.deps.switchGitRemote ?? switchGitRemote
-        const { ok: remoteOk, message } = await switchRemote(mirrorType, this.stDir)
-        if (remoteOk) {
-          this.log(`远程仓库地址已同步: ${message}`)
+        // Phase 4（设计 §8.3）：embedded 无 gitconfig INI 手术（shouldPatch 恒 false），
+        // 远程同步经 IsoGitOps.setRemote（镜像加速为操作时内存前缀，remote 恒存官方地址）
+        if (tools.embedded) {
+          const ops = this.repoOps(tools)
+          const { ok: remoteOk, message } = await ops.setRemote(ST_REPO_URL, this.stDir)
+          if (remoteOk) {
+            this.log(`远程仓库地址已同步: ${message}`)
+          } else {
+            this.log(`切换SillyTavern仓库远程地址失败: ${message}`)
+          }
         } else {
-          this.log(`切换SillyTavern仓库远程地址失败: ${message}`)
+          const switchRemote = this.deps.switchGitRemote ?? switchGitRemote
+          const { ok: remoteOk, message } = await switchRemote(mirrorType, this.stDir)
+          if (remoteOk) {
+            this.log(`远程仓库地址已同步: ${message}`)
+          } else {
+            this.log(`切换SillyTavern仓库远程地址失败: ${message}`)
+          }
         }
       }
 

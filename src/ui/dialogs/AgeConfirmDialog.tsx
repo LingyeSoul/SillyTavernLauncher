@@ -7,7 +7,7 @@ import { useUiState } from '../../stores/uiState'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
 import { Checkbox } from '../components/Checkbox'
-import { Modal } from '../components/Modal'
+import { Modal, useModalClose } from '../components/Modal'
 
 const TEXTS = {
   installTitle: '安装确认',
@@ -31,14 +31,35 @@ export interface AgeConfirmDialogProps {
   onConfirm: (ok: boolean) => void
 }
 
+/** 动作区（Provider 子树内取 useModalClose，PR4）：取消/确认统一走 requestClose 播退场 */
+function AgeConfirmActions({ mode, checked, onConfirm }: AgeConfirmDialogProps & { checked: boolean }) {
+  const requestClose = useModalClose()
+
+  const closeAnd = (ok: boolean): void => {
+    requestClose()
+    onConfirm(ok)
+  }
+
+  return (
+    <>
+      <Button variant="quiet" onClick={() => closeAnd(false)} testId="age-cancel">
+        {TEXTS.cancel}
+      </Button>
+      <Button
+        variant="primary"
+        icon={mode === 'install' ? 'download' : 'play'}
+        disabled={!checked}
+        onClick={() => closeAnd(true)}
+        testId="age-confirm">
+        {mode === 'install' ? TEXTS.confirmInstall : TEXTS.confirmStart}
+      </Button>
+    </>
+  )
+}
+
 export function AgeConfirmDialog({ mode, onConfirm }: AgeConfirmDialogProps) {
   const t = useTheme()
   const [checked, setChecked] = useState(false)
-
-  const closeAnd = (ok: boolean): void => {
-    useUiState.getState().closeTopDialog()
-    onConfirm(ok)
-  }
 
   return (
     <Modal
@@ -46,21 +67,9 @@ export function AgeConfirmDialog({ mode, onConfirm }: AgeConfirmDialogProps) {
       strong
       width={400}
       title={mode === 'install' ? TEXTS.installTitle : TEXTS.startTitle}
-      actions={
-        <>
-          <Button variant="quiet" onClick={() => closeAnd(false)} testId="age-cancel">
-            {TEXTS.cancel}
-          </Button>
-          <Button
-            variant="primary"
-            icon={mode === 'install' ? 'download' : 'play'}
-            disabled={!checked}
-            onClick={() => closeAnd(true)}
-            testId="age-confirm">
-            {mode === 'install' ? TEXTS.confirmInstall : TEXTS.confirmStart}
-          </Button>
-        </>
-      }>
+      // 结算回调：退场播完后由 Modal 调用，直呼 closeTopDialog 真卸载（见 Modal.tsx 头注释）
+      onClose={() => useUiState.getState().closeTopDialog()}
+      actions={<AgeConfirmActions mode={mode} checked={checked} onConfirm={onConfirm} />}>
       {/* 长文案 JS 拆行（无 white-space:pre） */}
       {(mode === 'install' ? TEXTS.installBody : TEXTS.startBody)
         .split('。')

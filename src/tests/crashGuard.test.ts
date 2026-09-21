@@ -4,20 +4,24 @@
  *   （globalThis 标志去重，--hot 重求值不重复注册）。
  * - handler 把异常写入 logs/Error_*.txt（tag + message/stack），自身绝不抛
  *   （logError 文件通道失败自降级）。
+ * - 已知退出期噪音（isShutdownNoise，如关窗竞态 'The GPUI UI thread is not
+ *   running'）跳过落盘，但 exit 语义不变（独监听仍 process.exit(1)）。
  *
  * process.on 用 spy 拦截而非真注册：真 listener 会留在测试 worker 进程上，
  * 污染后续用例的 listenerCount 与无关异常的日志行为。
  */
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as crashGuardModule from '../services/crashGuard'
 
 type InstallFn = typeof crashGuardModule.installCrashGuard
+type IsShutdownNoiseFn = typeof crashGuardModule.isShutdownNoise
 
 interface CrashGuardModule {
   installCrashGuard: InstallFn
+  isShutdownNoise: IsShutdownNoiseFn
 }
 
 async function freshModule(): Promise<CrashGuardModule> {
@@ -76,13 +80,14 @@ describe('crashGuard（进程级异常落盘兜底）', () => {
     const onUncaught = handlers.get('uncaughtException')
     expect(onUncaught).toBeTypeOf('function')
 
-    expect(() => onUncaught?.(new Error('The GPUI UI thread is not running'))).not.toThrow()
+    // 非噪音错误：正常落盘（噪音过滤见后续专用用例）
+    expect(() => onUncaught?.(new Error('render commit exploded'))).not.toThrow()
 
     const files = readdirSync(join(tempDir, 'logs'))
     expect(files).toHaveLength(1)
     const content = readFileSync(join(tempDir, 'logs', files[0] ?? ''), 'utf8')
     expect(content).toContain('[crashGuard] uncaughtException:')
-    expect(content).toContain('The GPUI UI thread is not running')
+    expect(content).toContain('render commit exploded')
     expect(content).toContain('at ')
   })
 
@@ -130,5 +135,78 @@ describe('crashGuard（进程级异常落盘兜底）', () => {
     const content = readFileSync(join(tempDir, 'logs', files[0] ?? ''), 'utf8')
     expect(content).toContain('sole listener crash')
     expect(content).toContain('独监听 rejection')
+  })
+
+  it('退出期噪音（GPUI UI thread）跳过落盘：不产生日志文件、不重复打 stderr', async () => {
+    const onSpy = vi.spyOn(process, 'on').mockImplementation(() => process)
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { installCrashGuard } = await freshModule()
+    const { __setErrorLogDirForTests } = await import('../services/errorLog')
+    __setErrorLogDirForTests(join(tempDir, 'logs'))
+
+    installCrashGuard()
+    const handlers = new Map(onSpy.mock.calls as [string, (payload: unknown) => void][])
+    const onUncaught = handlers.get('uncaughtException')
+    expect(onUncaught).toBeTypeOf('function')
+
+    expect(() => onUncaught?.(new Error('The GPUI UI thread is not running'))).not.toThrow()
+
+    // 文件通道懒创建：无落盘即无 logs 目录；stderr 由 gpuix handler 留痕，此处不重复
+    expect(existsSync(join(tempDir, 'logs'))).toBe(false)
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
+  })
+
+  it('unhandledRejection 同享噪音过滤：GPUI 噪音不落盘，其余原因仍落盘', async () => {
+    const onSpy = vi.spyOn(process, 'on').mockImplementation(() => process)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { installCrashGuard } = await freshModule()
+    const { __setErrorLogDirForTests } = await import('../services/errorLog')
+    __setErrorLogDirForTests(join(tempDir, 'logs'))
+
+    installCrashGuard()
+    const handlers = new Map(onSpy.mock.calls as [string, (payload: unknown) => void][])
+    const onRejection = handlers.get('unhandledRejection')
+    expect(onRejection).toBeTypeOf('function')
+
+    onRejection?.(new Error('The GPUI UI thread is not running'))
+    expect(existsSync(join(tempDir, 'logs'))).toBe(false)
+
+    // 非噪音 rejection 照常落盘（同一 handler，过滤不误伤）
+    onRejection?.('真 rejection 原因')
+    const files = readdirSync(join(tempDir, 'logs'))
+    expect(files).toHaveLength(1)
+    const content = readFileSync(join(tempDir, 'logs', files[0] ?? ''), 'utf8')
+    expect(content).toContain('[crashGuard] unhandledRejection: 真 rejection 原因')
+  })
+
+  it('独监听防御对噪音保持 exit 语义：只跳过落盘，原生崩溃退出码不变', async () => {
+    const onSpy = vi.spyOn(process, 'on').mockImplementation(() => process)
+    vi.spyOn(process, 'listenerCount').mockReturnValue(0)
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { installCrashGuard } = await freshModule()
+    const { __setErrorLogDirForTests } = await import('../services/errorLog')
+    __setErrorLogDirForTests(join(tempDir, 'logs'))
+
+    installCrashGuard()
+    const handlers = new Map(onSpy.mock.calls as [string, (payload: unknown) => void][])
+
+    handlers.get('uncaughtException')?.(new Error('The GPUI UI thread is not running'))
+    expect(exitSpy).toHaveBeenCalledWith(1)
+    expect(existsSync(join(tempDir, 'logs'))).toBe(false)
+
+    exitSpy.mockClear()
+    handlers.get('unhandledRejection')?.(new Error('The GPUI UI thread is not running'))
+    expect(exitSpy).toHaveBeenCalledWith(1)
+    expect(existsSync(join(tempDir, 'logs'))).toBe(false)
+  })
+
+  it('isShutdownNoise：精确匹配已知噪音，不误伤其他错误', async () => {
+    const { isShutdownNoise } = await freshModule()
+    expect(isShutdownNoise(new Error('The GPUI UI thread is not running'))).toBe(true)
+    expect(isShutdownNoise('The GPUI UI thread is not running')).toBe(true)
+    expect(isShutdownNoise(new Error('ECONNREFUSED 127.0.0.1:8000'))).toBe(false)
+    expect(isShutdownNoise(new Error('the gpui ui thread is not running'))).toBe(false)
+    expect(isShutdownNoise(undefined)).toBe(false)
   })
 })

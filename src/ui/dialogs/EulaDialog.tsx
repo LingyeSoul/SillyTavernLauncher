@@ -18,7 +18,7 @@ import { errMsg, logError } from '../../services/errorLog'
 import { useUiState } from '../../stores/uiState'
 import { editorTheme, useTheme, useThemeContext } from '../theme'
 import { Button } from '../components/Button'
-import { Modal } from '../components/Modal'
+import { Modal, useModalClose } from '../components/Modal'
 import { SmartScrollArea } from '../components/SmartScroll'
 
 const TEXTS = {
@@ -38,6 +38,43 @@ const TEXTS = {
 
 /** 倒计时秒数（E2E 测试可用 EULA_COUNTDOWN_SECONDS 环境变量缩短等待） */
 const COUNTDOWN_SECONDS = Number(process.env.EULA_COUNTDOWN_SECONDS ?? 30)
+
+/** 动作区（Provider 子树内取 useModalClose，PR4）：同意走 requestClose 播退场
+ *  （welcome 在栈下层，退场结算后才揭示，无链式弹窗风险） */
+function EulaActions({ countdown, version, content }: { countdown: number; version: string; content: string | null }) {
+  const requestClose = useModalClose()
+
+  const handleAgree = (): void => {
+    const config = getConfigStore()
+    config.set('agreement_accepted', true)
+    // 缓存路径下 version 可能仍为空（缓存无 date）——同样以内容指纹兜底
+    config.set('agreement_version', version || (content ? contentFingerprint(content) : 'unknown'))
+    try {
+      config.save()
+    } catch (err) {
+      logError(`[eula] 保存协议同意状态失败: ${errMsg(err)}`)
+    }
+    requestClose()
+  }
+
+  return (
+    <>
+      <Button
+        variant="quietDanger"
+        onClick={() => process.exit(0)}
+        testId="eula-disagree">
+        {TEXTS.disagree}
+      </Button>
+      <Button
+        variant="primary"
+        disabled={countdown > 0}
+        onClick={handleAgree}
+        testId="eula-agree">
+        {TEXTS.agree}
+      </Button>
+    </>
+  )
+}
 
 export function EulaDialog() {
   const t = useTheme()
@@ -76,19 +113,6 @@ export function EulaDialog() {
     return () => clearInterval(id)
   }, [countdown])
 
-  const handleAgree = (): void => {
-    const config = getConfigStore()
-    config.set('agreement_accepted', true)
-    // 缓存路径下 version 可能仍为空（缓存无 date）——同样以内容指纹兜底
-    config.set('agreement_version', version || (content ? contentFingerprint(content) : 'unknown'))
-    try {
-      config.save()
-    } catch (err) {
-      logError(`[eula] 保存协议同意状态失败: ${errMsg(err)}`)
-    }
-    useUiState.getState().closeTopDialog()
-  }
-
   // 获取失败且无缓存：不可关闭，仅可退出（← show_network_error_dialog）
   if (fetchError !== null && content === null) {
     return (
@@ -119,23 +143,9 @@ export function EulaDialog() {
       strong
       width={520}
       title={TEXTS.title}
-      actions={
-        <>
-          <Button
-            variant="quietDanger"
-            onClick={() => process.exit(0)}
-            testId="eula-disagree">
-            {TEXTS.disagree}
-          </Button>
-          <Button
-            variant="primary"
-            disabled={countdown > 0}
-            onClick={handleAgree}
-            testId="eula-agree">
-            {TEXTS.agree}
-          </Button>
-        </>
-      }>
+      // 结算回调：退场播完后由 Modal 调用，直呼 closeTopDialog 真卸载（见 Modal.tsx 头注释）
+      onClose={() => useUiState.getState().closeTopDialog()}
+      actions={<EulaActions countdown={countdown} version={version} content={content} />}>
       {/* 倒计时状态行 */}
       <text
         style={{

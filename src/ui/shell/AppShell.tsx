@@ -51,6 +51,7 @@ const VIEWS: Record<ViewId, ComponentType> = {
 
 export function AppShell() {
   const t = useTheme()
+  const { enabled: motionEnabled } = useMotion()
   const view = useUiState((s) => s.view)
   const setView = useUiState((s) => s.setView)
   const refresh = useStState((s) => s.refresh)
@@ -91,9 +92,9 @@ export function AppShell() {
           // 开滚动；外层不包滚动容器，嵌套滚动禁止），M1 入场动画保留
           <motion.div
             key={view}
-            initial={{ opacity: 0, top: 6 }}
+            initial={motionEnabled ? { opacity: 0, top: 6 } : false}
             animate={{ opacity: 1, top: 0 }}
-            transition={{ duration: dur.enter, ease: EASE_OUT_QUAD }}
+            transition={{ duration: motionEnabled ? dur.enter : 0, ease: EASE_OUT_QUAD }}
             style={{ position: 'relative', flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             <CurrentView />
           </motion.div>

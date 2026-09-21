@@ -18,7 +18,7 @@ import { DEFAULT_PRIVATE_ADDRESS_RANGES, type StConfig } from '../../services/st
 import { uiStateActions, useUiState } from '../../stores/uiState'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
-import { Modal } from '../components/Modal'
+import { Modal, useModalClose } from '../components/Modal'
 import { SectionTitle } from '../components/Card'
 import { SwitchRow } from '../components/Switch'
 import { Textarea } from '../components/Textarea'
@@ -126,17 +126,13 @@ export function ipWhitelistDraftError(draft: IpWhitelistDraft): string | null {
   return null
 }
 
-export function IpWhitelistDialog() {
-  const t = useTheme()
+/** IP 白名单动作区（Provider 子树内取 useModalClose，PR4）：取消/保存统一走
+ *  requestClose 播退场；保存逻辑 ← _on_save → event.py on_save 1:1 随迁 */
+function IpWhitelistActions({ draft, onReset }: { draft: IpWhitelistDraft; onReset: () => void }) {
+  const requestClose = useModalClose()
   const st = getStConfig()
   const reload = useSettings((s) => s.reload)
-  const [draft, setDraft] = useState<IpWhitelistDraft>(() => draftFromStConfig(st))
 
-  const patch = (partial: Partial<IpWhitelistDraft>): void => {
-    setDraft((d) => ({ ...d, ...partial }))
-  }
-
-  /** ← _on_save → event.py on_save：写 8 字段后按 unified 走双向同步或直存 */
   const handleSave = (): void => {
     const ips = parseLines(draft.ips)
     const ranges = parseLines(draft.ranges)
@@ -163,7 +159,31 @@ export function IpWhitelistDialog() {
     }
     uiStateActions.pushToast('success', TEXTS.ipSavedToast(ips.length, draft.mode, draft.privateEnabled, ranges.length))
     reload()
-    useUiState.getState().closeTopDialog()
+    requestClose()
+  }
+
+  return (
+    <>
+      <Button variant="quiet" icon="refresh" onClick={onReset} testId="ip-whitelist-reset">
+        {TEXTS.reset}
+      </Button>
+      <Button variant="quiet" onClick={requestClose} testId="ip-whitelist-cancel">
+        {TEXTS.cancel}
+      </Button>
+      <Button variant="primary" icon="save" onClick={handleSave} testId="ip-whitelist-save">
+        {TEXTS.save}
+      </Button>
+    </>
+  )
+}
+
+export function IpWhitelistDialog() {
+  const t = useTheme()
+  const st = getStConfig()
+  const [draft, setDraft] = useState<IpWhitelistDraft>(() => draftFromStConfig(st))
+
+  const patch = (partial: Partial<IpWhitelistDraft>): void => {
+    setDraft((d) => ({ ...d, ...partial }))
   }
 
   /** ← _append_current_subnet：智能检测当前网段，null 时提示无法检测 */
@@ -245,19 +265,13 @@ export function IpWhitelistDialog() {
       open
       width={600}
       title={TEXTS.ipTitle}
+      // 结算回调：退场播完后由 Modal 调用，直呼 closeTopDialog 真卸载（见 Modal.tsx 头注释）
       onClose={() => useUiState.getState().closeTopDialog()}
       actions={
-        <>
-          <Button variant="quiet" icon="refresh" onClick={() => setDraft(defaultIpWhitelistDraft())} testId="ip-whitelist-reset">
-            {TEXTS.reset}
-          </Button>
-          <Button variant="quiet" onClick={() => useUiState.getState().closeTopDialog()} testId="ip-whitelist-cancel">
-            {TEXTS.cancel}
-          </Button>
-          <Button variant="primary" icon="save" onClick={handleSave} testId="ip-whitelist-save">
-            {TEXTS.save}
-          </Button>
-        </>
+        <IpWhitelistActions
+          draft={draft}
+          onReset={() => setDraft(defaultIpWhitelistDraft())}
+        />
       }>
       {/* 单一根 div + 内部滚动（模态浮层内合法，同 EulaDialog 正文模式）；
           Modal 面板 maxHeight 480，扣除标题/动作条/内边距后内容区限高 330 */}
@@ -300,11 +314,11 @@ export function IpWhitelistDialog() {
   )
 }
 
-export function HostWhitelistDialog() {
-  const t = useTheme()
+/** 主机白名单动作区（Provider 子树内取 useModalClose，PR4）：取消/保存统一播退场 */
+function HostWhitelistActions({ draft }: { draft: string }) {
+  const requestClose = useModalClose()
   const st = getStConfig()
   const reload = useSettings((s) => s.reload)
-  const [draft, setDraft] = useState(st.hostWhitelistHosts.join('\n'))
 
   const handleSave = (): void => {
     const hosts = parseLines(draft)
@@ -320,25 +334,34 @@ export function HostWhitelistDialog() {
       TEXTS.hostSavedToast(hosts.length, st.hostWhitelistEnabled, st.hostWhitelistScan),
     )
     reload()
-    useUiState.getState().closeTopDialog()
+    requestClose()
   }
+
+  return (
+    <>
+      <Button variant="quiet" onClick={requestClose} testId="host-whitelist-cancel">
+        {TEXTS.cancel}
+      </Button>
+      <Button variant="primary" onClick={handleSave} testId="host-whitelist-save">
+        {TEXTS.save}
+      </Button>
+    </>
+  )
+}
+
+export function HostWhitelistDialog() {
+  const t = useTheme()
+  const st = getStConfig()
+  const [draft, setDraft] = useState(st.hostWhitelistHosts.join('\n'))
 
   return (
     <Modal
       open
       width={480}
       title={TEXTS.hostTitle}
+      // 结算回调：退场播完后由 Modal 调用，直呼 closeTopDialog 真卸载（见 Modal.tsx 头注释）
       onClose={() => useUiState.getState().closeTopDialog()}
-      actions={
-        <>
-          <Button variant="quiet" onClick={() => useUiState.getState().closeTopDialog()} testId="host-whitelist-cancel">
-            {TEXTS.cancel}
-          </Button>
-          <Button variant="primary" onClick={handleSave} testId="host-whitelist-save">
-            {TEXTS.save}
-          </Button>
-        </>
-      }>
+      actions={<HostWhitelistActions draft={draft} />}>
       <Textarea value={draft} onChange={setDraft} minRows={10} testId="host-whitelist-textarea" />
       <div style={{ height: 6 }} />
       <text style={{ fontSize: 12, color: t.text.muted, fontFamily: t.font.sans }}>
