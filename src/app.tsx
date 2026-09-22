@@ -44,6 +44,7 @@ import { APP_VERSION } from './version'
 import { layout } from './theme'
 import { ThemeProvider } from './ui/theme'
 import { AppShell } from './ui/shell/AppShell'
+import { applyTrayEnabled } from './ui/trayBridge'
 import { DialogHost } from './ui/dialogs/DialogHost'
 import { TooltipProvider } from './ui/components/Tooltip'
 import { LOGO_DATA_URL } from './ui/assets/logo'
@@ -241,3 +242,10 @@ void applyWindowIcon(LOGO_DATA_URL, WINDOW_OPTIONS.title)
 // 自绘标题栏的窗口控制：启动期定位本进程窗口句柄（标题 + PID 双匹配），
 // TitleBar 的拖动/最小化/关闭全部经它投递（见 services/windowControl）。
 void initWindowControl(WINDOW_OPTIONS.title)
+
+// 系统托盘（config.tray，默认关；← features/tray/tray.py，2026-09-22 恢复）。
+// 开启后关闭按钮分流为"隐藏到托盘"（AppShell.requestClose），托盘菜单可唤回/
+// 起停酒馆/退出。初始化失败仅记日志（initTray 内部 catch），应用照常运行。
+if (getConfigStore().get<boolean>('tray', false)) {
+  void applyTrayEnabled(true)
+}

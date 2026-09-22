@@ -20,6 +20,8 @@ import type { ReactNode } from 'react'
 import { useWindowSize, useGpuixRequired } from '@gpuix/react'
 import type { PublicInstance } from '@gpuix/react'
 import { layout } from '../../theme'
+import { errMsg, logError } from '../../services/errorLog'
+import { mainWindowQueryState } from '../../services/windowControl'
 
 export interface SmartScrollAreaProps {
   /** 滚动区内容（flex 列排布；间距由子元素自带或外层显式 gap） */
@@ -74,24 +76,39 @@ export function SmartScrollArea({
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     let tries = 0
+    let warned = false
     const measure = (): void => {
       if (cancelled) return
+      // 窗口隐藏（close-to-tray）/最小化时原生侧不回应 bounds 查询：实测同步
+      // 阻塞整 2s 后抛 GenericFailure，500ms 看门狗会连环炸 + 冻死 JS 线程
+      // （2026-09-22 回归）。冻结态布局不变，跳过本轮即可——恢复可见后下一
+      // 个看门狗周期自然重测，自愈语义不变
+      if (mainWindowQueryState() === 'frozen') return
       const vp = viewportRef.current
       const ct = contentRef.current
       if (!vp || !ct) return
-      const vb = renderer.getElementBounds?.(vp.id) ?? null
-      const cb = renderer.getElementBounds?.(ct.id) ?? null
-      if (!vb || !cb) {
-        // 尚未绘制：短轮询等待；超次放弃（保持 'scroll'，不阻塞 UI）
-        if (++tries < MEASURE_RETRY) timer = setTimeout(measure, MEASURE_INTERVAL_MS)
-        return
-      }
-      const fits = cb.height <= vb.height - padY * 2 + 1
-      if (fits) {
-        renderer.scrollTo?.(vp.id, 0, 0)
-        setOverflow('hidden')
-      } else {
-        setOverflow('scroll')
+      try {
+        const vb = renderer.getElementBounds?.(vp.id) ?? null
+        const cb = renderer.getElementBounds?.(ct.id) ?? null
+        if (!vb || !cb) {
+          // 尚未绘制：短轮询等待；超次放弃（保持 'scroll'，不阻塞 UI）
+          if (++tries < MEASURE_RETRY) timer = setTimeout(measure, MEASURE_INTERVAL_MS)
+          return
+        }
+        const fits = cb.height <= vb.height - padY * 2 + 1
+        if (fits) {
+          renderer.scrollTo?.(vp.id, 0, 0)
+          setOverflow('hidden')
+        } else {
+          setOverflow('scroll')
+        }
+      } catch (err) {
+        // 竞态兜底（门检与查询之间窗口刚被隐藏等）：放弃本轮，看门狗下轮再试；
+        // 只记一次日志防刷屏（错误路径每次都阻塞 2s，不能进高频重试）
+        if (!warned) {
+          warned = true
+          logError(`[SmartScroll] 元素测量失败（窗口冻结竞态兜底）: ${errMsg(err)}`)
+        }
       }
     }
     timer = setTimeout(measure, MEASURE_INTERVAL_MS)

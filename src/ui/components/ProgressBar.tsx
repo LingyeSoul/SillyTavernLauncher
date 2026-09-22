@@ -21,6 +21,8 @@ import { motion, useGpuixRequired, useWindowSize } from '@gpuix/react'
 import type { PublicInstance } from '@gpuix/react'
 import { EASE_OUT_QUAD, dur } from '../../theme'
 import { useMotion, useTheme, useThemeContext } from '../theme'
+import { errMsg, logError } from '../../services/errorLog'
+import { mainWindowQueryState } from '../../services/windowControl'
 
 export interface ProgressBarProps {
   /** 0-100；undefined = 不确定模式 */
@@ -36,6 +38,8 @@ const INDETERMINATE_TRAVEL = 0.7
 /** 轨道宽测量时序（SmartScroll 同款）：16ms 短轮询至多 12 次等首帧绘制 */
 const MEASURE_RETRY = 12
 const MEASURE_INTERVAL_MS = 16
+/** 窗口冻结（隐藏/最小化）期间的低频自唤醒：只做可见性门检，不发 bounds 查询 */
+const FROZEN_RECHECK_MS = 1000
 
 export function ProgressBar({ value, testId }: ProgressBarProps) {
   const t = useTheme()
@@ -51,23 +55,40 @@ export function ProgressBar({ value, testId }: ProgressBarProps) {
 
   // 轨道宽实测（照 SmartScroll 模式）：注意不可把方法捕获为局部变量调用
   // （会丢 renderer this 绑定）；旧 renderer 无 API 时不启动轮询（trackW 恒 null
-  // 走保底，避免空转重试）。窗口尺寸变化 → 重测（轨道宽随布局变）
+  // 走保底，避免空转重试）。窗口尺寸变化 → 重测（轨道宽随布局变）。
+  // 冻结态门检 + 竞态 catch 与 SmartScroll 同源（2026-09-22 close-to-tray 回归）：
+  // 隐藏/最小化下 bounds 查询会同步阻塞 2s 后抛 GenericFailure。本组件无看门狗，
+  // 冻结期以 1s 低频轮询自唤醒，恢复可见后完成补测（不因此走保底渲染卡死）
   useEffect(() => {
     if (typeof renderer.getElementBounds !== 'function') return
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     let tries = 0
+    let warned = false
     const measure = (): void => {
       if (cancelled) return
-      const el = trackRef.current
-      if (!el) return
-      const b = renderer.getElementBounds?.(el.id) ?? null
-      if (!b || !(b.width > 0)) {
-        // 尚未布局出宽：短轮询等待；超次放弃（保持 null 走保底，不阻塞 UI）
-        if (++tries < MEASURE_RETRY) timer = setTimeout(measure, MEASURE_INTERVAL_MS)
+      if (mainWindowQueryState() === 'frozen') {
+        timer = setTimeout(measure, FROZEN_RECHECK_MS)
         return
       }
-      setTrackW(b.width)
+      const el = trackRef.current
+      if (!el) return
+      try {
+        const b = renderer.getElementBounds?.(el.id) ?? null
+        if (!b || !(b.width > 0)) {
+          // 尚未布局出宽：短轮询等待；超次放弃（保持 null 走保底，不阻塞 UI）
+          if (++tries < MEASURE_RETRY) timer = setTimeout(measure, MEASURE_INTERVAL_MS)
+          return
+        }
+        setTrackW(b.width)
+      } catch (err) {
+        // 竞态兜底（门检与查询之间窗口刚被隐藏）：放弃本轮，尺寸变化时 effect
+        // 重跑；只记一次日志防刷屏（错误路径每次阻塞 2s，不进高频重试）
+        if (!warned) {
+          warned = true
+          logError(`[ProgressBar] 轨道宽测量失败（窗口冻结竞态兜底）: ${errMsg(err)}`)
+        }
+      }
     }
     timer = setTimeout(measure, MEASURE_INTERVAL_MS)
     return () => {

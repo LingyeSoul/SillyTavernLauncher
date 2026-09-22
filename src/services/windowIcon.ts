@@ -346,6 +346,25 @@ export async function findWindowByTitleAndPid(title: string, pid: number): Promi
  * 内部自吞异常（logError 记录），任何失败都不影响应用主流程——
  * 最坏情况窗口保持默认 exe 图标。
  */
+/**
+ * 从 PNG dataURL 创建指定尺寸的 HICON（窗口图标三槽位与系统托盘共用）。
+ * 就近选档预缩放（预乘 alpha 盒式采样）再 CreateIconFromResourceEx 直喂 PNG 字节。
+ * 返回 0 = 创建失败；dataURL 非法/格式不支持会抛错，调用方自行 catch 记日志。
+ * 仅 win32 + Bun 可调用（user32 符号经 loadUser32 懒加载）。
+ */
+export async function createHiconFromDataUrl(dataUrl: string, targetW: number, targetH: number): Promise<number> {
+  const user32 = await loadUser32()
+  const pngBytes = pngBytesFromDataUrl(dataUrl)
+  const source = decodePngRgba(pngBytes)
+  const w = pickNearestSize(targetW)
+  const h = pickNearestSize(targetH)
+  const png =
+    w === source.width && h === source.height
+      ? pngBytes // 原尺寸直接复用原始字节，避免重编码损失
+      : encodePngRgba(resizeRgba(source, w, h), w, h)
+  return user32.CreateIconFromResourceEx(png, png.length, 1, 0x00030000, 0, 0, 0)
+}
+
 export async function applyWindowIcon(dataUrl: string, title: string): Promise<void> {
   const flag = globalThis as IconAppliedFlag
   if (flag.__stlWindowIconApplied) return
@@ -369,22 +388,11 @@ export async function applyWindowIcon(dataUrl: string, title: string): Promise<v
     }
     if (hwnd === 0) throw new Error('未找到本进程的窗口（枚举 10 次重试后放弃）')
 
-    // 2. 按系统图标槽位尺寸预缩放并创建 HICON。
-    //    dataURL 解析必须留在 try 内：非法格式（logo.ts 手工重生成手误）
-    //    要走 catch 的 logError，上移到调用点求值会绕过 try 直接炸主流程
-    const pngBytes = pngBytesFromDataUrl(dataUrl)
-    const source = decodePngRgba(pngBytes)
-    const makeIcon = (targetW: number, targetH: number): number => {
-      const w = pickNearestSize(targetW)
-      const h = pickNearestSize(targetH)
-      const png =
-        w === source.width && h === source.height
-          ? pngBytes // 原尺寸直接复用原始字节，避免重编码损失
-          : encodePngRgba(resizeRgba(source, w, h), w, h)
-      return user32.CreateIconFromResourceEx(png, png.length, 1, 0x00030000, 0, 0, 0)
-    }
-    const hIconSmall = makeIcon(user32.GetSystemMetrics(SM_CXSMICON), user32.GetSystemMetrics(SM_CYSMICON))
-    const hIconBig = makeIcon(user32.GetSystemMetrics(SM_CXICON), user32.GetSystemMetrics(SM_CYICON))
+    // 2. 按系统图标槽位尺寸预缩放并创建 HICON（createHiconFromDataUrl 内做
+    //    dataURL 解析——必须留在 try 内：非法格式（logo.ts 手工重生成手误）
+    //    要走 catch 的 logError，上移到调用点求值会绕过 try 直接炸主流程）
+    const hIconSmall = await createHiconFromDataUrl(dataUrl, user32.GetSystemMetrics(SM_CXSMICON), user32.GetSystemMetrics(SM_CYSMICON))
+    const hIconBig = await createHiconFromDataUrl(dataUrl, user32.GetSystemMetrics(SM_CXICON), user32.GetSystemMetrics(SM_CYICON))
     if (hIconSmall === 0 || hIconBig === 0) throw new Error(`CreateIconFromResourceEx 失败：small=${hIconSmall} big=${hIconBig}`)
 
     // 3. 三槽位投递（PostMessage 异步，避免跨线程 SendMessage 死锁风险）。

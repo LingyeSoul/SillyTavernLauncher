@@ -27,7 +27,8 @@ import { IconButton } from '../components/IconButton'
 import type { IconName } from '../components/icons'
 import { useUiState, VIEW_IDS, type ViewId } from '../../stores/uiState'
 import { useStState } from '../../stores/stState'
-import { closeWindow } from '../../services/windowControl'
+import { closeWindow, hideMainWindow } from '../../services/windowControl'
+import { isTrayActive } from '../../services/tray'
 import { TerminalView } from '../views/TerminalView'
 import { VersionView } from '../views/VersionView'
 import { SyncView } from '../views/SyncView'
@@ -254,8 +255,14 @@ function StStatusDot({ status }: { status: 'running' | 'stopped' | 'not-installe
  * 2026-09-22：原生标题栏隐藏 + 侧栏"退出启动器"入口移除后，自绘标题栏关闭按钮成为
  * 全应用唯一可见的关闭入口——此前设计因"无法拦截窗口 X"把保护退守在侧栏，自绘铬层
  * 把 D1 语义还了回来。running 用 getState 现读而非订阅值：避免闭包捕获陈旧状态。
+ *
+ * 托盘启用时（2026-09-22 托盘恢复）：关闭按钮 = 隐藏到托盘——ST 继续运行、托盘
+ * 可唤回，无需退出确认（确认对话框的存在前提是"关闭会杀 ST"）。隐藏失败（非
+ * win32/Bun、句柄未定位的启动初期）回落原路径，不留"点了没反应"的死入口。
+ * Alt+F4 走原生 WM_CLOSE 仍是直接退出——该链路拦不住（见 app.tsx DEVIATION）。
  */
 function requestClose(): void {
+  if (isTrayActive() && hideMainWindow()) return
   if (useStState.getState().running) {
     useUiState.getState().openDialog({ kind: 'exitConfirm', onConfirm: () => void quitLauncher() })
   } else if (!closeWindow()) {

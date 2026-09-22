@@ -27,6 +27,7 @@ import { isValidMirrorHost } from '../../services/mirrors'
 import { useTerminalLogs } from '../../stores/terminalLogs'
 import { uiStateActions } from '../../stores/uiState'
 import { useThemeContext } from '../theme'
+import { applyTrayEnabled } from '../trayBridge'
 import { THEME_ACCENTS, type ThemeAccentId } from '../../theme'
 import { Button } from '../components/Button'
 import { Card, SectionTitle } from '../components/Card'
@@ -100,6 +101,8 @@ const TEXTS = {
   sectionLauncher: '启动器',
   autostart: '启用自动启动',
   autostartDesc: '启动启动器后自动启动酒馆（主窗口正常显示）',
+  tray: '启用系统托盘',
+  trayDesc: '关闭按钮将隐藏窗口到托盘、酒馆保持运行；从托盘菜单唤回或退出',
   reduceMotion: '减少动效',
   reduceMotionDesc: '关闭界面过渡动画与状态动效（性能受限设备建议开启）',
   sectionAppearance: '外观',
@@ -577,10 +580,14 @@ export function SettingsView() {
             {switchRow('checkupdate', TEXTS.checkupdate, TEXTS.checkupdateDesc, settings.checkupdate, (v) => settings.update({ checkupdate: v }))}
           </Card>
 
-          {/* 启动器（tray 已按 D1 移除） */}
+          {/* 启动器（tray 2026-09-22 恢复：开关即时挂/撤托盘，见 ui/trayBridge.ts） */}
           <Card>
             <SectionTitle title={TEXTS.sectionLauncher} />
             {switchRow('autostart', TEXTS.autostart, TEXTS.autostartDesc, settings.autostart, (v) => settings.update({ autostart: v }))}
+            {switchRow('tray', TEXTS.tray, TEXTS.trayDesc, settings.tray, (v) => {
+              settings.update({ tray: v })
+              void applyTrayEnabled(v)
+            })}
             {switchRow('reduce_motion', TEXTS.reduceMotion, TEXTS.reduceMotionDesc, !motionEnabled, (v) => setMotionEnabled(!v))}
           </Card>
 

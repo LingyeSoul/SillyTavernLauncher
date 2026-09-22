@@ -72,8 +72,9 @@ export interface LauncherConfig {
   checkupdate: boolean
   stcheckupdate: boolean
   /**
-   * @deprecated 设计计划 D1：托盘功能暂不迁移。字段仅为旧配置兼容保留，
-   * 读取但忽略（设置界面不再展示该开关），请勿在新代码中消费它。
+   * 系统托盘（2026-09-22 恢复启用：托盘菜单 + 关闭到托盘，实现见 services/tray.ts）。
+   * D1 期间曾标 deprecated（彼时 GPUIX 无托盘 API 且关窗不可拦截）；O12 自绘标题栏
+   * 后可见关闭入口可拦截，恢复条件成立。
    */
   tray: boolean
   autostart: boolean

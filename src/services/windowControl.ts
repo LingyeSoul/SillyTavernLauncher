@@ -85,6 +85,10 @@ interface User32Symbols {
   GetWindowRect(hwnd: bigint, rectOut: Int32Array): number
   SetWindowPos(hwnd: bigint, insertAfter: bigint, x: number, y: number, cx: number, cy: number, flags: number): number
   PostMessageW(hwnd: bigint, msg: number, wParam: bigint, lParam: bigint): number
+  ShowWindow(hwnd: bigint, cmd: number): number
+  SetForegroundWindow(hwnd: bigint): number
+  IsWindowVisible(hwnd: bigint): number
+  IsIconic(hwnd: bigint): number
 }
 
 let user32: User32Symbols | null = null
@@ -105,6 +109,10 @@ async function loadUser32(): Promise<User32Symbols> {
       returns: FFIType.i32,
     },
     PostMessageW: { args: [FFIType.u64, FFIType.u32, FFIType.u64, FFIType.i64], returns: FFIType.i32 },
+    ShowWindow: { args: [FFIType.u64, FFIType.u32], returns: FFIType.i32 },
+    SetForegroundWindow: { args: [FFIType.u64], returns: FFIType.i32 },
+    IsWindowVisible: { args: [FFIType.u64], returns: FFIType.i32 },
+    IsIconic: { args: [FFIType.u64], returns: FFIType.i32 },
   }).symbols as unknown as User32Symbols
   return user32
 }
@@ -205,4 +213,41 @@ export function minimizeWindow(): void {
  */
 export function closeWindow(): boolean {
   return postMessage(WM_CLOSE, 0n, 0n)
+}
+
+const SW_HIDE = 0
+const SW_SHOW = 5
+
+/**
+ * 隐藏主窗口（托盘驻留，2026-09-22 托盘恢复）。ShowWindow 返回的是**隐藏前**的
+ * 可见性（非 0 = 原本可见，即本次真实执行了隐藏）——非 0 当作成功。
+ * false = 非 win32/Bun/句柄未定位，或窗口本就不可见；调用方（requestClose）
+ * 必须回落到原退出路径，不留"点了没反应"的死入口。
+ */
+export function hideMainWindow(): boolean {
+  if (!available() || !user32) return false
+  return user32.ShowWindow(hwnd, SW_HIDE) !== 0
+}
+
+/** 显示并前台化主窗口（托盘唤回 / 托盘菜单「打开主窗口」） */
+export function showMainWindow(): boolean {
+  if (!available() || !user32) return false
+  user32.ShowWindow(hwnd, SW_SHOW)
+  user32.SetForegroundWindow(hwnd)
+  return true
+}
+
+/**
+ * 主窗口是否处于"布局冻结"态（隐藏到托盘 / 最小化）：此态下 gpui 原生侧
+ * 不回应 renderer 的元素 bounds 查询——实测同步阻塞整 2s 后抛
+ * "Timed out after 2 seconds waiting for the element bounds query"
+ * （GenericFailure）。close-to-tray 落地后 SmartScroll 的 500ms 看门狗在
+ * 隐藏期间连环炸的根因（2026-09-22 RCA）。冻结态布局不会变化，测量方
+ * （SmartScroll / ProgressBar）应跳过本轮，恢复可见后下个周期自愈。
+ * 'unknown' = 非 win32/Bun 或句柄未定位（按可测量处理，保住旧行为）。
+ */
+export function mainWindowQueryState(): 'live' | 'frozen' | 'unknown' {
+  if (!available() || !user32) return 'unknown'
+  if (user32.IsWindowVisible(hwnd) === 0 || user32.IsIconic(hwnd) !== 0) return 'frozen'
+  return 'live'
 }
