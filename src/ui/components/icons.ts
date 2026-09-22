@@ -46,6 +46,7 @@ export const ICONS = {
     '<path fill="#000" d="M7 4.8v14.4c0 .9 1 1.5 1.8 1L20.6 13a1.2 1.2 0 0 0 0-2L8.8 3.8C8 3.3 7 3.9 7 4.8Z"/>',
   ),
   stop: wrap('<rect fill="#000" x="5" y="5" width="14" height="14" rx="2.5"/>'),
+  minus: wrap('<rect fill="#000" x="4" y="10.9" width="16" height="2.2" rx="1.1"/>'),
   download: wrap(
     '<path fill="#000" d="M11 3h2v8.2l3-3 1.4 1.4L12 15l-5.4-5.4L8 8.2l3 3V3Z"/>' +
     '<rect fill="#000" x="4" y="17" width="16" height="2.6" rx="1.3"/>',

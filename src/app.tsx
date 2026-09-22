@@ -2,7 +2,10 @@
  * SillyTavernLauncher GPUIX 版入口（Phase 2 UI 组装）。
  *
  * - render() 结尾（幂等，--hot 安全；禁止 createRenderer()/init()）。
- * - 800×644 固定窗 + 原生标题栏（D4；resizable: false 已验证存在于 renderer.rs）。
+ * - 800×(644+36) 固定窗 + 自绘标题栏（D4 + O12；resizable: false 已验证存在于
+ *   renderer.rs）。原生标题栏经 titlebarTransparent 隐藏，铬层由 ui/shell/TitleBar
+ *   自绘：拖动（services/windowControl 的 SetWindowPos）、最小化、关闭、品牌区。
+ *   内容区仍为 644——标题栏高度不计入 layout.windowH，各视图纵向预算不变。
  * - 启动流程（← main.py check_first_launch）：first_run → 欢迎问答；
  *   未同意协议/协议版本变化 → EULA；checkupdate → 后台检查启动器更新；
  *   autostart → 自动启动酒馆（D1 新语义：主窗口正常显示）。
@@ -34,7 +37,9 @@ import { stopAllProcessesSync } from './services/processManager'
 import { fetchAgreementDocument } from './services/agreement'
 import { checkForUpdates, fetchChangelog, normalizeVersion } from './services/updater'
 import { applyWindowIcon } from './services/windowIcon'
+import { initWindowControl } from './services/windowControl'
 import { APP_VERSION } from './version'
+import { layout } from './theme'
 import { ThemeProvider } from './ui/theme'
 import { AppShell } from './ui/shell/AppShell'
 import { DialogHost } from './ui/dialogs/DialogHost'
@@ -206,10 +211,15 @@ process.on('exit', () => {
 const WINDOW_OPTIONS = {
   title: 'SillyTavernLauncher',
   width: 800,
+  // 高度 = 内容区 644 + 自绘标题栏 36（theme.layout）：自绘标题栏不占内容预算，
+  // 各视图纵向布局值与 E2E 的 644 视口断言（settings 智能滚动回归）全部维持原契约
   // E2E 可加高窗口（STL_E2E_WINDOW_HEIGHT）：设置页为长表单，后台自动化模式下
   // 视口外元素不可点（wheel 亦无效），加高一次性渲染完整表单以驱动开关/端口交互
-  height: Number(process.env.STL_E2E_WINDOW_HEIGHT ?? 644),
+  height: Number(process.env.STL_E2E_WINDOW_HEIGHT ?? layout.windowH + layout.titlebarH),
   resizable: false,
+  // 隐藏原生标题栏，铬层由 React 侧 TitleBar 自绘（拖动/最小化/关闭；Windows 侧
+  // 0.9.0 无 window move API，拖动经 services/windowControl 的 SetWindowPos 自力更生）
+  titlebarTransparent: true,
   // agent 驱动（GPUIX_BACKGROUND=1）时后台开窗，不抢焦点。
   // E2E 走 @gpuix/react/automation 的官方 launch()：stdio 协议在管道时自动监听，
   // 应用侧无需任何 automation 分支（曾有的 createRenderer+enableAutomation 路径
@@ -219,7 +229,13 @@ const WINDOW_OPTIONS = {
 
 render(<App />, WINDOW_OPTIONS)
 
-// 原生标题栏/任务栏/Alt-Tab 图标（WM_SETICON）：render() 同步建窗后即可查找。
+// 原生任务栏/Alt-Tab 图标（WM_SETICON）：render() 同步建窗后即可查找。
 // 仅 win32+Bun 生效，其余平台静默空操作；dataURL 解析与投递失败均在
 // applyWindowIcon 内部 catch（logError），不影响主流程。
+// 注：标题栏图标已随原生标题栏退出视野（titlebarTransparent），本调用只剩
+// 任务栏/Alt-Tab 两处收益，投递链路与三槽位顺序保持不变。
 void applyWindowIcon(LOGO_DATA_URL, WINDOW_OPTIONS.title)
+
+// 自绘标题栏的窗口控制：启动期定位本进程窗口句柄（标题 + PID 双匹配），
+// TitleBar 的拖动/最小化/关闭全部经它投递（见 services/windowControl）。
+void initWindowControl(WINDOW_OPTIONS.title)

@@ -1,5 +1,7 @@
 /**
- * AppShell（设计 §3）：侧栏 168px（DEVIATION: 原设计 192，用户要求改窄；bg-deep + 右 1px border-subtle）+ 主区两种形态
+ * AppShell（设计 §3；2026-09-22 起含自绘标题栏，O12）：外壳根为**纵向**两段——
+ * 36px TitleBar（窗口铬层）+ 本体行（侧栏 168px（DEVIATION: 原设计 192，用户要求改窄；
+ * bg-deep + 右 1px border-subtle）+ 主区两种形态
  * （终端自管滚动 / 其余视图自管滚动：2026-09-20 起全部非终端视图统一为"标题区固定、
  * 仅内容区滚动"——DEVIATION: §3.A/§4.2-4.4 原单滚动型 heading 随内容滚动，经
  * O11 回写；版本/同步/扩展/设置四视图共用 PageScaffold（设置页 tab 经 scrollKey
@@ -17,6 +19,7 @@ import { EASE_OUT_QUAD, dur, layout } from '../../theme'
 import { errMsg, logError } from '../../services/errorLog'
 import { useMotion, useTheme, useThemeContext, useBreath } from '../theme'
 import { NavItem } from './NavItem'
+import { TitleBar } from './TitleBar'
 import { Tooltip } from '../components/Tooltip'
 import { ToastHost } from '../components/Toast'
 import { Chip } from '../components/Chip'
@@ -68,39 +71,45 @@ export function AppShell() {
     <div
       style={{
         display: 'flex',
-        flexDirection: 'row',
+        flexDirection: 'column',
         width: '100%',
-        height: '100%',
+        flexGrow: 1,
+        minHeight: 0,
         position: 'relative',
         backgroundColor: t.bg.base,
         selectionColor: t.selection.ember,
       }}>
-      <Sidebar />
-      {/* 右 1px border-subtle 分隔线（StyleDesc 无分边框色，用 1px div） */}
-      <div style={{ width: 1, height: '100%', backgroundColor: t.border.subtle, flexShrink: 0 }} />
-      <div
-        style={{
-          flexGrow: 1,
-          minWidth: 0,
-          display: 'flex',
-          flexDirection: 'column',
-        }}>
-        {view === 'terminal' ? (
-          <TerminalView />
-        ) : (
-          // 非终端视图统一自管滚动（固定头 + 内容区 SmartScrollArea，实测超高才
-          // 开滚动；外层不包滚动容器，嵌套滚动禁止），M1 入场动画保留
-          <motion.div
-            key={view}
-            initial={motionEnabled ? { opacity: 0, top: 6 } : false}
-            animate={{ opacity: 1, top: 0 }}
-            transition={{ duration: motionEnabled ? dur.enter : 0, ease: EASE_OUT_QUAD }}
-            style={{ position: 'relative', flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <CurrentView />
-          </motion.div>
-        )}
+      {/* 自绘标题栏（窗口铬层，36px）：不占内容区 644 预算，见 theme.ts layout.titlebarH */}
+      <TitleBar />
+      <div style={{ display: 'flex', flexDirection: 'row', flexGrow: 1, minHeight: 0 }}>
+        <Sidebar />
+        {/* 右 1px border-subtle 分隔线（StyleDesc 无分边框色，用 1px div） */}
+        <div style={{ width: 1, height: '100%', backgroundColor: t.border.subtle, flexShrink: 0 }} />
+        <div
+          style={{
+            flexGrow: 1,
+            minWidth: 0,
+            display: 'flex',
+            flexDirection: 'column',
+          }}>
+          {view === 'terminal' ? (
+            <TerminalView />
+          ) : (
+            // 非终端视图统一自管滚动（固定头 + 内容区 SmartScrollArea，实测超高才
+            // 开滚动；外层不包滚动容器，嵌套滚动禁止），M1 入场动画保留
+            <motion.div
+              key={view}
+              initial={motionEnabled ? { opacity: 0, top: 6 } : false}
+              animate={{ opacity: 1, top: 0 }}
+              transition={{ duration: motionEnabled ? dur.enter : 0, ease: EASE_OUT_QUAD }}
+              style={{ position: 'relative', flexGrow: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+              <CurrentView />
+            </motion.div>
+          )}
+        </div>
       </div>
-      {/* Toast 层嵌在外壳内（根层级的 anchored 浮层会把基础树挤成 8px，GPUIX 0.9.0 实测） */}
+      {/* Toast 层嵌在外壳内（根层级的 anchored 浮层会把基础树挤成 8px，GPUIX 0.9.0 实测）；
+          挂外壳根 = 撑满窗口的锚定父盒，右上角落点与自绘标题栏之前一致 */}
       <ToastHost />
     </div>
   )

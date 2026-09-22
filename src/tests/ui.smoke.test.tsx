@@ -111,8 +111,10 @@ describe('AppShell 视图切换与终端（smoke）', () => {
     for (const id of ['nav-terminal', 'nav-version', 'nav-sync', 'nav-extensions', 'nav-settings', 'nav-about']) {
       expect(renderer.findByTestId(id)).toBeDefined()
     }
-    // 品牌区已按要求移除：侧栏不再渲染 logo 与软件名（AboutView 仍保留品牌信息）
-    expect(renderer.findByText('SillyTavernLauncher')).toBeUndefined()
+    // 品牌位移入自绘标题栏（侧栏左上角仍按要求不放标识）：应用名现在挂在
+    // titlebar-brand 下，侧栏导航区不含它
+    expect(renderer.findByTestId('titlebar-brand')).toBeDefined()
+    expect(renderer.getAllText()).toContain('SillyTavernLauncher')
   })
 
   it('点击导航切换视图（terminal → settings → about）', async () => {

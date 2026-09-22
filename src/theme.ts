@@ -5,6 +5,10 @@
  * 偏离声明 O1–O5 见同文档 §1.C：侧栏 168（DEVIATION: O1 原设计 192，用户要求
  * 改窄，NavItem/footer 布局预算 168 下均有富余）、无顶栏、表单 padding 20/24、
  * 微软雅黑 + Consolas、无玻璃态。
+ * DEVIATION O12（2026-09-22，同文档 §1.C/§3.A）：O2「取消顶栏」约束的是 Forge
+ * 60px 内容顶栏（面包屑 + 引擎徽章），**不含窗口铬层**——新增 36px 自绘标题栏
+ * （拖动 + 最小化/关闭 + 品牌区），原生标题栏由 titlebarTransparent 隐藏，
+ * 内容区 644 预算不变（窗口 = 644 + 36）。
  * 偏离声明 O6（2026-09-20，同文档 §1.C）：亮色 bg.elevated 由 #FFFFFF 改为
  * #F0F3F6——原值使骨架块/进度轨道/扩展图标回退等 elevated 填充元素在白色卡片上
  * 不可辨（仅靠 1px 边级别无填充对比）；卡片本身仍为 surface 白底，分层语言
@@ -61,6 +65,10 @@ export const space = { cardPad: 16, cardGap: 8, sectionGap: 16, navItemGap: 3, f
 export const size = { controlH: 34, navItemH: 38, fieldH: 34, emptyMark: 72 } as const
 export const layout = {
   windowW: 800, windowH: 644, sidebarW: 168,
+  // 自绘标题栏总高（栏体 35 + 底 1px 分隔线，见 ui/shell/TitleBar.tsx）：
+  // **窗口高 = windowH + titlebarH**（windowH 是内容区高度，自绘标题栏不占内容预算，
+  // 各视图纵向布局值维持 644 契约不变）
+  titlebarH: 36,
   padFormX: 24, padFormY: 20, padTerminal: 12,
 } as const
 

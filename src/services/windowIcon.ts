@@ -1,5 +1,8 @@
 /**
- * 窗口图标服务：让 win32 原生标题栏/任务栏/Alt-Tab 渲染启动器 logo。
+ * 窗口图标服务：让 win32 任务栏/Alt-Tab 渲染启动器 logo。
+ * 注（2026-09-22 自绘标题栏 O12 起）：原生标题栏被 titlebarTransparent 隐藏后，
+ * ICON_SMALL/SMALL2 两个槽位已无可见消费者（标题栏图标位不存在），本服务只剩
+ * 任务栏/Alt-Tab 两处收益——三槽位投递链路与顺序**保持不变**（改动无收益、有回归风险）。
  *
  * 为什么不用 GPUIX 的 API：@gpuix/native 0.9.0 的 WindowOptions 没有 icon
  * 字段，native 导出面（activateWindow/setWindowTitle/...）也没有任何窗口
