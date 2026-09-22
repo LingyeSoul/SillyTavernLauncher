@@ -29,7 +29,6 @@ import { layout } from '../../theme'
 import { LOGO_DATA_URL } from '../assets/logo'
 import { beginWindowMove, continueWindowMove, endWindowMove, minimizeWindow } from '../../services/windowControl'
 
-const BTN_W = 46
 const BTN_ICON = 14
 
 export function TitleBar({ onCloseRequest }: { onCloseRequest: () => void }) {
@@ -119,7 +118,7 @@ function TitleBarButton({
       aria-label={label}
       testId={testId}
       style={{
-        width: BTN_W,
+        width: layout.titlebarBtnW,
         height: '100%',
         flexShrink: 0,
         display: 'flex',

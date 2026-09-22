@@ -230,6 +230,7 @@ interface TrayUser32 {
   AppendMenuW(menu: bigint, flags: number, id: bigint, text: unknown): number
   TrackPopupMenu(menu: bigint, flags: number, x: number, y: number, reserved: number, hwnd: bigint, rect: bigint): number
   DestroyMenu(menu: bigint): number
+  DestroyIcon(icon: bigint): number
 }
 
 /** 托盘动作束（UI 层注入——services 不反向依赖 stores/UI 的分层约束） */
@@ -264,6 +265,10 @@ interface TrayRuntime {
   /** UnregisterClass 需要（类名地址 + 模块句柄） */
   classNameAddr: bigint
   hInstance: bigint
+  /** HICON：Shell_NotifyIcon 不接管所有权，destroyTray 必须 DestroyIcon（否则开关循环泄漏） */
+  iconHandle: bigint
+  /** 类名缓冲的 HeapFree 闭包（捕获 processHeap：--hot 重求值后 runtime 仍能自拆） */
+  freeClassNameMem(): number
 }
 
 interface TrayGlobal {
@@ -311,6 +316,7 @@ async function loadFfi(): Promise<void> {
     AppendMenuW: { args: [FFIType.u64, FFIType.u32, FFIType.u64, FFIType.pointer], returns: FFIType.i32 },
     TrackPopupMenu: { args: [FFIType.u64, FFIType.u32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.u64, FFIType.pointer], returns: FFIType.i32 },
     DestroyMenu: { args: [FFIType.u64], returns: FFIType.i32 },
+    DestroyIcon: { args: [FFIType.u64], returns: FFIType.i32 },
   }).symbols as unknown as TrayUser32
   shellNotifyIconFn = dlopen('shell32.dll', {
     Shell_NotifyIconW: { args: [FFIType.u32, FFIType.pointer], returns: FFIType.i32 },
@@ -402,8 +408,15 @@ export async function initTray(options: TrayInitOptions): Promise<boolean> {
     return true
   }
   if (process.platform !== 'win32' || !process.versions.bun) return false
-  // 已注册窗口类的回滚凭证（失败路径必须 UnregisterClass，否则重开撞"类已注册"）
-  let registered: { addr: bigint; instance: bigint } | null = null
+  // 失败路径回滚凭证：HeapAlloc 类名缓冲**分配即登记**（RegisterClassW 失败也要
+  // HeapFree，否则每次失败尝试漏一块不可移动堆内存）；已注册的窗口类必须
+  // UnregisterClass，否则重开撞"类已注册"
+  let rollback: {
+    addr: bigint
+    instance: bigint
+    heapFree(addr: bigint): number
+    classRegistered: boolean
+  } | null = null
   try {
     await loadFfi()
     const { dlopen, FFIType, JSCallback } = await import('bun:ffi')
@@ -446,10 +459,12 @@ export async function initTray(options: TrayInitOptions): Promise<boolean> {
       GetModuleHandleW: { args: [FFIType.pointer], returns: FFIType.u64 },
       GetProcessHeap: { args: [], returns: FFIType.u64 },
       HeapAlloc: { args: [FFIType.u64, FFIType.u32, FFIType.u64], returns: FFIType.u64 },
+      HeapFree: { args: [FFIType.u64, FFIType.u32, FFIType.u64], returns: FFIType.i32 },
     }).symbols as unknown as {
       GetModuleHandleW(name: bigint): bigint
       GetProcessHeap(): bigint
       HeapAlloc(heap: bigint, flags: number, size: number): bigint
+      HeapFree(heap: bigint, flags: number, addr: bigint): number
     }
     // msvcrt.memcpy：把类名字节拷进 HeapAlloc 的不可移动内存（WNDCLASSW 内嵌
     // 指针字段需要持久地址，JS Buffer 的 FFI 取址只在调用瞬间有效）
@@ -457,18 +472,21 @@ export async function initTray(options: TrayInitOptions): Promise<boolean> {
       memcpy: { args: [FFIType.pointer, FFIType.pointer, FFIType.u64], returns: FFIType.i32 },
     }).symbols.memcpy as unknown as (dst: bigint, src: unknown, size: number) => number
 
+    const processHeap = kernel32.GetProcessHeap()
+    const hInstance = kernel32.GetModuleHandleW(0n)
     const classNameBuf = utf16zBuf(TRAY_WINDOW_CLASS)
-    const classNameAddr = kernel32.HeapAlloc(kernel32.GetProcessHeap(), HEAP_ZERO_MEMORY, classNameBuf.length)
+    const classNameAddr = kernel32.HeapAlloc(processHeap, HEAP_ZERO_MEMORY, classNameBuf.length)
     if (classNameAddr === 0n) throw new Error('HeapAlloc(类名缓冲) 失败')
     memcpy(classNameAddr, classNameBuf, classNameBuf.length)
+    const heapFree = (addr: bigint): number => kernel32.HeapFree(processHeap, 0, addr)
+    rollback = { addr: classNameAddr, instance: hInstance, heapFree, classRegistered: false }
 
-    const hInstance = kernel32.GetModuleHandleW(0n)
     const wc = Buffer.alloc(WNDCLASS_SIZE)
     wc.writeBigUInt64LE(BigInt.asUintN(64, BigInt(wndProc.ptr)), WC_WNDPROC)
     wc.writeBigUInt64LE(hInstance, WC_HINSTANCE)
     wc.writeBigUInt64LE(classNameAddr, WC_CLASSNAME)
     if (user32.RegisterClassW(wc) === 0) throw new Error('RegisterClassW 失败（类已注册或参数非法）')
-    registered = { addr: classNameAddr, instance: hInstance }
+    rollback.classRegistered = true
 
     // 消息号先落模块级：wndproc 在建窗期间就可能被调（WM_NCCREATE），读的是它
     taskbarCreatedMsg = user32.RegisterWindowMessageW(utf16zBuf('TaskbarCreated'))
@@ -524,7 +542,9 @@ export async function initTray(options: TrayInitOptions): Promise<boolean> {
       try {
         shellNotifyIcon(NIM_DELETE, notifyData)
       } catch {
-        // 解释器关闭阶段尽力而为（窗口随进程回收，幽灵图标风险接受——崩溃路径同款）
+        // DEVIATION（错误处理纪律）：exit 钩子运行在解释器关闭阶段，logError 的
+        // 文件 IO 此时不可依赖——此处静默吞异常（窗口随进程回收，幽灵图标风险
+        // 接受，崩溃路径同款）；运行期路径的异常一律 logError，不适用本豁免
       }
     }
     process.on('exit', exitHook)
@@ -539,17 +559,26 @@ export async function initTray(options: TrayInitOptions): Promise<boolean> {
       exitHook,
       classNameAddr,
       hInstance,
+      iconHandle: BigInt(iconHandle),
+      freeClassNameMem: () => heapFree(classNameAddr),
     }
     ;(globalThis as TrayGlobal).__stlTray = runtime
     handlers = options.handlers
     console.log(`[tray] 系统托盘已启用（helper hwnd=${helperHwnd}）`)
     return true
   } catch (err) {
-    if (registered !== null) {
+    if (rollback !== null) {
+      if (rollback.classRegistered) {
+        try {
+          user32Cache?.UnregisterClassW(rollback.addr, rollback.instance)
+        } catch (unregErr) {
+          logError(`[tray] 初始化失败回滚：UnregisterClass 失败: ${errMsg(unregErr)}`)
+        }
+      }
       try {
-        user32Cache?.UnregisterClassW(registered.addr, registered.instance)
-      } catch {
-        // 回滚失败不阻断（进程级资源，泄漏量级可忽略）
+        rollback.heapFree(rollback.addr)
+      } catch (freeErr) {
+        logError(`[tray] 初始化失败回滚：HeapFree(类名缓冲) 失败: ${errMsg(freeErr)}`)
       }
     }
     logError(`[tray] 初始化失败: ${errMsg(err)}`)
@@ -557,21 +586,37 @@ export async function initTray(options: TrayInitOptions): Promise<boolean> {
   }
 }
 
-/** 停用系统托盘（设置页关闭开关；未启用时空操作） */
+/** 停用系统托盘（设置页关闭开关；未启用时空操作）。逐项拆除、逐项记错：
+ *  单步失败不阻断后续拆除（NIM_DELETE 失败也要拆窗/释放句柄），但绝不静默。 */
 export function destroyTray(): void {
   const rt = runtime
   if (rt === null) return
   clearInterval(rt.pumpTimer)
   try {
     rt.shellNotifyIcon(NIM_DELETE, rt.notifyData)
-  } catch {
-    // 图标已失效（explorer 重启等）——继续拆
+  } catch (err) {
+    // 图标已失效（explorer 重启等）属预期路径——记录但继续拆
+    logError(`[tray] 移除托盘图标失败（可能 explorer 已重启）: ${errMsg(err)}`)
   }
   try {
     rt.user32.DestroyWindow(rt.helperHwnd)
+  } catch (err) {
+    logError(`[tray] 拆除 helper 窗失败: ${errMsg(err)}`)
+  }
+  try {
     rt.user32.UnregisterClassW(BigInt(rt.classNameAddr), rt.hInstance)
-  } catch {
-    // 拆除失败不阻断停用（进程级资源，泄漏量级可忽略）
+  } catch (err) {
+    logError(`[tray] 注销窗口类失败（重开托盘可能撞"类已注册"）: ${errMsg(err)}`)
+  }
+  try {
+    rt.user32.DestroyIcon(rt.iconHandle)
+  } catch (err) {
+    logError(`[tray] 销毁托盘图标句柄失败: ${errMsg(err)}`)
+  }
+  try {
+    rt.freeClassNameMem()
+  } catch (err) {
+    logError(`[tray] 释放类名堆缓冲失败: ${errMsg(err)}`)
   }
   process.removeListener('exit', rt.exitHook)
   runtime = null

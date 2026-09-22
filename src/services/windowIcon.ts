@@ -341,12 +341,6 @@ export async function findWindowByTitleAndPid(title: string, pid: number): Promi
 }
 
 /**
- * 为本进程标题为 title 的窗口设置图标（icon 源为 PNG dataURL 字符串，
- * 解析在本函数 try 内进行，调用点无裸抛路径）。win32 + Bun 之外静默空操作；
- * 内部自吞异常（logError 记录），任何失败都不影响应用主流程——
- * 最坏情况窗口保持默认 exe 图标。
- */
-/**
  * 从 PNG dataURL 创建指定尺寸的 HICON（窗口图标三槽位与系统托盘共用）。
  * 就近选档预缩放（预乘 alpha 盒式采样）再 CreateIconFromResourceEx 直喂 PNG 字节。
  * 返回 0 = 创建失败；dataURL 非法/格式不支持会抛错，调用方自行 catch 记日志。
@@ -365,6 +359,12 @@ export async function createHiconFromDataUrl(dataUrl: string, targetW: number, t
   return user32.CreateIconFromResourceEx(png, png.length, 1, 0x00030000, 0, 0, 0)
 }
 
+/**
+ * 为本进程标题为 title 的窗口设置图标（icon 源为 PNG dataURL 字符串，
+ * 解析在本函数 try 内进行，调用点无裸抛路径）。win32 + Bun 之外静默空操作；
+ * 内部自吞异常（logError 记录），任何失败都不影响应用主流程——
+ * 最坏情况窗口保持默认 exe 图标。
+ */
 export async function applyWindowIcon(dataUrl: string, title: string): Promise<void> {
   const flag = globalThis as IconAppliedFlag
   if (flag.__stlWindowIconApplied) return

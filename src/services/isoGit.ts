@@ -184,8 +184,8 @@ export function applyStMirrorPrefix(url: string, mirror: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * isomorphic-git 的 packfile 索引/包缓冲缓存：读操作期间共享，最后一个读操作
- * 结束即释放。
+ * isomorphic-git 的 packfile 索引/包缓冲缓存：操作（读或写）期间共享，持有
+ * 归零即释放。
  *
  * 为什么必须共享：iso 的每个命令各接收一个 cache 对象，不传即每次调用新建空
  * cache——每次对象读取都要重新整读并解析 pack 索引（ST 仓库 .idx 2.46MB、十万级
@@ -196,32 +196,37 @@ export function applyStMirrorPrefix(url: string, mirror: string): string {
  *
  * 为什么归零即释放：缓存里是 pack 文件缓冲与解压出的对象——ST 仓库一次版本读取
  * 实测常驻 440MB ArrayBuffer，进程级常驻对启动器不可接受；归零释放后 GC 可回收
- * （实测 rss 530MB → 49MB）。pack 内容寻址（文件名含内容哈希），变更类操作也会
- * 显式失效，故不存在读到旧对象的窗口。
+ * （实测 rss 530MB → 49MB）。pack 内容寻址（文件名含内容哈希），变更类操作结束后
+ * 随持有归零一并失效，故不存在读到旧对象的窗口。
  */
 const isoReadCache: Record<string, unknown> = {}
 
-/** 进行中的读操作数：0 → 1 时缓存自然重建，归零时释放 */
-let activeIsoReads = 0
+/** 进行中的缓存持有操作数（读/写同计）：0 → 1 时缓存自然重建，归零时释放 */
+let activeIsoOps = 0
 
 /**
- * 释放读缓存（pack 索引与包缓冲对外失去引用，内存可回收）。
- * 有读操作在进行中时不动——缓存归最后一个读操作收尾释放，避免读到一半被抽走。
+ * 释放缓存（pack 索引与包缓冲对外失去引用，内存可回收）。
+ * 有操作在进行中时不动——缓存归最后一个操作收尾释放，避免持有中被抽走。
  */
 function releaseIsoReadCache(): void {
-  if (activeIsoReads > 0) return
+  if (activeIsoOps > 0) return
   for (const key of Reflect.ownKeys(isoReadCache)) {
     Reflect.deleteProperty(isoReadCache, key)
   }
 }
 
-/** 读操作包装：操作内全部 iso 调用共享缓存；最后一个操作结束即释放（内存归零） */
-async function withIsoReadCache<T>(read: () => Promise<T>): Promise<T> {
-  activeIsoReads += 1
+/**
+ * 缓存持有包装（读/写通用）：操作内全部 iso 调用共享缓存；最后一个操作结束
+ * 即释放（内存归零）。写操作同样计数：写进行中并发读的收尾归零不得把写正持有
+ * 的缓存抽走（pullFastForward 内部的 statusPorcelain 就曾把外层 pull 的缓存
+ * 提前清掉）；写结束后随持有归零失效，变更后读到旧 pack 的窗口仍被关死。
+ */
+async function withIsoCache<T>(op: () => Promise<T>): Promise<T> {
+  activeIsoOps += 1
   try {
-    return await read()
+    return await op()
   } finally {
-    activeIsoReads -= 1
+    activeIsoOps -= 1
     releaseIsoReadCache()
   }
 }
@@ -510,68 +515,68 @@ export class IsoGitOps implements StRepoOps {
         return { ok: false, message: `清理残留目录失败: ${errMsg(err)}`, exitCode: 1 }
       }
     }
-    const effectiveUrl = applyStMirrorPrefix(url, this.getMirror())
-    this.log(`正在从 ${url} 安装SillyTavern（进程内 Git）...`)
-    try {
-      await isoClone({
-        fs: nodeFs,
-        http: this.http,
-        dir,
-        url: effectiveUrl,
-        ref: 'release',
-        onProgress: this.progressLogger(),
-        cache: isoReadCache,
-      })
-      // remote 存镜像前缀会影响外部工具与 ST 自身读到的地址——统一回写官方 URL
-      // （实际抓取 URL 每次操作时经 resolveFetchUrl 现算，D6 内存前缀语义）；
-      // 仓库本地固化 core.autocrlf=false：iso 写出/比较的是 LF 原生字节，与真 git
-      // （受全局 autocrlf=true 影响会做 CRLF 换算）对同一工作区的判定保持一致，
-      // 消除外部 git 视角的 CRLF 伪修改（冒烟实测）
-      await isoSetConfig({ fs: nodeFs, dir, path: 'remote.origin.url', value: url })
-      await isoSetConfig({ fs: nodeFs, dir, path: 'core.autocrlf', value: false })
-      return { ok: true, message: 'SillyTavern安装完成', exitCode: 0 }
-    } catch (err) {
-      const message = errMsg(err)
-      logError(`[isoGit] clone 失败: ${message}`)
-      // isomorphic-git clone 失败时已自清 .git（#1283）；兜底清残留空目录
+    return withIsoCache(async () => {
+      const effectiveUrl = applyStMirrorPrefix(url, this.getMirror())
+      this.log(`正在从 ${url} 安装SillyTavern（进程内 Git）...`)
       try {
-        if (existsSync(dir)) {
-          const entries = nodeFs.readdirSync(dir)
-          if (entries.length === 0 || (entries.length === 1 && entries[0] === '.git')) {
-            rmSync(dir, { recursive: true, force: true })
+        await isoClone({
+          fs: nodeFs,
+          http: this.http,
+          dir,
+          url: effectiveUrl,
+          ref: 'release',
+          onProgress: this.progressLogger(),
+          cache: isoReadCache,
+        })
+        // remote 存镜像前缀会影响外部工具与 ST 自身读到的地址——统一回写官方 URL
+        // （实际抓取 URL 每次操作时经 resolveFetchUrl 现算，D6 内存前缀语义）；
+        // 仓库本地固化 core.autocrlf=false：iso 写出/比较的是 LF 原生字节，与真 git
+        // （受全局 autocrlf=true 影响会做 CRLF 换算）对同一工作区的判定保持一致，
+        // 消除外部 git 视角的 CRLF 伪修改（冒烟实测）
+        await isoSetConfig({ fs: nodeFs, dir, path: 'remote.origin.url', value: url })
+        await isoSetConfig({ fs: nodeFs, dir, path: 'core.autocrlf', value: false })
+        return { ok: true, message: 'SillyTavern安装完成', exitCode: 0 }
+      } catch (err) {
+        const message = errMsg(err)
+        logError(`[isoGit] clone 失败: ${message}`)
+        // isomorphic-git clone 失败时已自清 .git（#1283）；兜底清残留空目录
+        try {
+          if (existsSync(dir)) {
+            const entries = nodeFs.readdirSync(dir)
+            if (entries.length === 0 || (entries.length === 1 && entries[0] === '.git')) {
+              rmSync(dir, { recursive: true, force: true })
+            }
           }
+        } catch (cleanupErr) {
+          logError(`[isoGit] 克隆失败后清理残留失败: ${errMsg(cleanupErr)}`)
         }
-      } catch (cleanupErr) {
-        logError(`[isoGit] 克隆失败后清理残留失败: ${errMsg(cleanupErr)}`)
+        return { ok: false, message: `安装失败: ${message}`, exitCode: 1 }
       }
-      return { ok: false, message: `安装失败: ${message}`, exitCode: 1 }
-    } finally {
-      releaseIsoReadCache()
-    }
+    })
   }
 
   async fetchOrigin(dir: string): Promise<RepoOpResult> {
-    try {
-      const url = await this.resolveFetchUrl(dir)
-      await isoFetch({
-        fs: nodeFs,
-        http: this.http,
-        dir,
-        remote: 'origin',
-        url,
-        tags: true, // 对齐 git fetch --all 的 tag 透传（版本页数据源）
-        onProgress: this.progressLogger(),
-        cache: isoReadCache,
-      })
-      return { ok: true, message: 'Git更新成功', exitCode: 0 }
-    } catch (err) {
-      const message = errMsg(err)
-      logError(`[isoGit] fetch 失败: ${message}`)
-      this.log(`Git抓取失败: ${message}`)
-      return { ok: false, message, exitCode: 1 }
-    } finally {
-      releaseIsoReadCache()
-    }
+    return withIsoCache(async () => {
+      try {
+        const url = await this.resolveFetchUrl(dir)
+        await isoFetch({
+          fs: nodeFs,
+          http: this.http,
+          dir,
+          remote: 'origin',
+          url,
+          tags: true, // 对齐 git fetch --all 的 tag 透传（版本页数据源）
+          onProgress: this.progressLogger(),
+          cache: isoReadCache,
+        })
+        return { ok: true, message: 'Git更新成功', exitCode: 0 }
+      } catch (err) {
+        const message = errMsg(err)
+        logError(`[isoGit] fetch 失败: ${message}`)
+        this.log(`Git抓取失败: ${message}`)
+        return { ok: false, message, exitCode: 1 }
+      }
+    })
   }
 
   /**
@@ -622,60 +627,60 @@ export class IsoGitOps implements StRepoOps {
   }
 
   async pullFastForward(dir: string): Promise<RepoOpResult> {
-    let fetchUrl: string
-    try {
-      fetchUrl = await this.resolveFetchUrl(dir)
-    } catch (err) {
-      return { ok: false, message: errMsg(err), exitCode: 1 }
-    }
-    // 前置防御快照：fastForward 的内部 checkout 在脏工作区上可能直接覆盖
-    // （iso 无 autostash 语义；spawn 路径的 pull --rebase --autostash 会暂存）。
-    // 脏文件先快照留底，无论后续走快进还是强制对齐，用户数据不丢。
-    const preBackup = await this.backupDirtyWorkdir(dir)
-    if (!preBackup.ok) {
-      return { ok: false, message: '本地更改快照失败，已中止更新', exitCode: 1 }
-    }
-    try {
-      // fastForward 内部含 fetch + merge(fastForwardOnly)，即 git pull --ff-only 语义
-      await isoFastForward({
-        fs: nodeFs,
-        http: this.http,
-        dir,
-        ref: 'release',
-        remote: 'origin',
-        url: fetchUrl,
-        onProgress: this.progressLogger(),
-        cache: isoReadCache,
-      })
-      return { ok: true, message: 'Git更新成功', exitCode: 0 }
-    } catch (err) {
-      if (isNetworkError(err)) {
-        const message = errMsg(err)
-        logError(`[isoGit] pull 网络失败: ${message}`)
-        return { ok: false, message, exitCode: 1 }
-      }
-      // 非快进 / 工作区冲突 → 已快照 → reset --hard origin/release
-      // （设计 §8.2 防御语义；fastForward 内部 fetch 已更新 refs/remotes/origin/*）
-      this.log(`Git更新非快进或存在冲突，强制对齐 origin/release...`)
+    return withIsoCache(async () => {
+      let fetchUrl: string
       try {
-        const target = await isoResolveRef({ fs: nodeFs, dir, ref: 'refs/remotes/origin/release' })
-        // 快照完成 → 删除被跟踪的脏文件（未跟踪不动，对齐 reset --hard 语义），
-        // 确保 force 改写不因 stat 误判跳过（亚秒窗口内确定性生效）
-        this.deleteTrackedDirtyFiles(dir, preBackup.porcelain)
-        // reset --hard origin/release：分支指针对齐 + checkout force 重写索引与工作区；
-        // checkout(ref: 'release') 会将 HEAD 重挂为 refs/heads/release（覆盖 detached HEAD）
-        await isoWriteRef({ fs: nodeFs, dir, ref: 'refs/heads/release', value: target, force: true })
-        await isoCheckout({ fs: nodeFs, dir, ref: 'release', force: true, cache: isoReadCache })
-        this.log('已快照本地更改并强制对齐 origin/release')
-        return { ok: true, message: '已快照本地更改并强制对齐 origin/release', exitCode: 0 }
-      } catch (resetErr) {
-        const message = errMsg(resetErr)
-        logError(`[isoGit] 强制对齐失败: ${message}`)
-        return { ok: false, message: `Git更新失败且强制对齐失败: ${message}`, exitCode: 1 }
+        fetchUrl = await this.resolveFetchUrl(dir)
+      } catch (err) {
+        return { ok: false, message: errMsg(err), exitCode: 1 }
       }
-    } finally {
-      releaseIsoReadCache()
-    }
+      // 前置防御快照：fastForward 的内部 checkout 在脏工作区上可能直接覆盖
+      // （iso 无 autostash 语义；spawn 路径的 pull --rebase --autostash 会暂存）。
+      // 脏文件先快照留底，无论后续走快进还是强制对齐，用户数据不丢。
+      const preBackup = await this.backupDirtyWorkdir(dir)
+      if (!preBackup.ok) {
+        return { ok: false, message: '本地更改快照失败，已中止更新', exitCode: 1 }
+      }
+      try {
+        // fastForward 内部含 fetch + merge(fastForwardOnly)，即 git pull --ff-only 语义
+        await isoFastForward({
+          fs: nodeFs,
+          http: this.http,
+          dir,
+          ref: 'release',
+          remote: 'origin',
+          url: fetchUrl,
+          onProgress: this.progressLogger(),
+          cache: isoReadCache,
+        })
+        return { ok: true, message: 'Git更新成功', exitCode: 0 }
+      } catch (err) {
+        if (isNetworkError(err)) {
+          const message = errMsg(err)
+          logError(`[isoGit] pull 网络失败: ${message}`)
+          return { ok: false, message, exitCode: 1 }
+        }
+        // 非快进 / 工作区冲突 → 已快照 → reset --hard origin/release
+        // （设计 §8.2 防御语义；fastForward 内部 fetch 已更新 refs/remotes/origin/*）
+        this.log(`Git更新非快进或存在冲突，强制对齐 origin/release...`)
+        try {
+          const target = await isoResolveRef({ fs: nodeFs, dir, ref: 'refs/remotes/origin/release' })
+          // 快照完成 → 删除被跟踪的脏文件（未跟踪不动，对齐 reset --hard 语义），
+          // 确保 force 改写不因 stat 误判跳过（亚秒窗口内确定性生效）
+          this.deleteTrackedDirtyFiles(dir, preBackup.porcelain)
+          // reset --hard origin/release：分支指针对齐 + checkout force 重写索引与工作区；
+          // checkout(ref: 'release') 会将 HEAD 重挂为 refs/heads/release（覆盖 detached HEAD）
+          await isoWriteRef({ fs: nodeFs, dir, ref: 'refs/heads/release', value: target, force: true })
+          await isoCheckout({ fs: nodeFs, dir, ref: 'release', force: true, cache: isoReadCache })
+          this.log('已快照本地更改并强制对齐 origin/release')
+          return { ok: true, message: '已快照本地更改并强制对齐 origin/release', exitCode: 0 }
+        } catch (resetErr) {
+          const message = errMsg(resetErr)
+          logError(`[isoGit] 强制对齐失败: ${message}`)
+          return { ok: false, message: `Git更新失败且强制对齐失败: ${message}`, exitCode: 1 }
+        }
+      }
+    })
   }
 
   async checkoutTag(tag: string, dir: string): Promise<RepoOpResult> {
@@ -683,43 +688,43 @@ export class IsoGitOps implements StRepoOps {
     if (!TAG_NAME_RE.test(tag)) {
       return { ok: false, message: `无效的 tag 名称格式: ${tag}`, exitCode: 1 }
     }
-    try {
-      // 脏检查：白名单 package-lock.json（对齐 checkGitStatus）+ bun.lock 兜底
-      // （.git/info/exclude 已消解的 bun.lock 通常不进 porcelain，双保险）
-      const porcelain = await this.statusPorcelain(dir)
-      const lines = porcelain.split('\n').filter((line) => line.trim().length > 0)
-      const dirty = lines.filter(
-        (line) => !line.includes('package-lock.json') && !line.includes('bun.lock'),
-      )
-      if (dirty.length > 0) {
-        return { ok: false, message: `检测到${dirty.length}个文件有未提交的更改`, exitCode: 1 }
-      }
-      // 白名单内被跟踪的改动 → 删除后由 checkout 重写为 tag 版本
-      // （= git checkout -- package-lock.json 的自动恢复语义；删除式改写
-      //   不受 compareStats 亚秒 stat 误判影响，确定性生效）
-      const whitelisted = lines.filter(
-        (line) => line.includes('package-lock.json') || line.includes('bun.lock'),
-      )
-      this.deleteTrackedDirtyFiles(dir, whitelisted.join('\n'))
-      // checkout(force) = git checkout <tag> + reset --hard 的合并语义：
-      // HEAD 挂到 tag commit（detached，对齐 git 行为）并重写索引与工作区
-      await isoCheckout({ fs: nodeFs, dir, ref: tag, force: true, cache: isoReadCache })
-      this.log(`成功切换到 tag ${tag}`)
-      return { ok: true, message: `成功切换到 tag ${tag}`, exitCode: 0 }
-    } catch (err) {
-      if ((err as { code?: unknown } | null | undefined)?.code === 'NotFoundError') {
-        return {
-          ok: false,
-          message: `切换失败: Tag ${tag} 不存在。\n请先使用更新功能获取最新版本。`,
-          exitCode: 1,
+    return withIsoCache(async () => {
+      try {
+        // 脏检查：白名单 package-lock.json（对齐 checkGitStatus）+ bun.lock 兜底
+        // （.git/info/exclude 已消解的 bun.lock 通常不进 porcelain，双保险）
+        const porcelain = await this.statusPorcelain(dir)
+        const lines = porcelain.split('\n').filter((line) => line.trim().length > 0)
+        const dirty = lines.filter(
+          (line) => !line.includes('package-lock.json') && !line.includes('bun.lock'),
+        )
+        if (dirty.length > 0) {
+          return { ok: false, message: `检测到${dirty.length}个文件有未提交的更改`, exitCode: 1 }
         }
+        // 白名单内被跟踪的改动 → 删除后由 checkout 重写为 tag 版本
+        // （= git checkout -- package-lock.json 的自动恢复语义；删除式改写
+        //   不受 compareStats 亚秒 stat 误判影响，确定性生效）
+        const whitelisted = lines.filter(
+          (line) => line.includes('package-lock.json') || line.includes('bun.lock'),
+        )
+        this.deleteTrackedDirtyFiles(dir, whitelisted.join('\n'))
+        // checkout(force) = git checkout <tag> + reset --hard 的合并语义：
+        // HEAD 挂到 tag commit（detached，对齐 git 行为）并重写索引与工作区
+        await isoCheckout({ fs: nodeFs, dir, ref: tag, force: true, cache: isoReadCache })
+        this.log(`成功切换到 tag ${tag}`)
+        return { ok: true, message: `成功切换到 tag ${tag}`, exitCode: 0 }
+      } catch (err) {
+        if ((err as { code?: unknown } | null | undefined)?.code === 'NotFoundError') {
+          return {
+            ok: false,
+            message: `切换失败: Tag ${tag} 不存在。\n请先使用更新功能获取最新版本。`,
+            exitCode: 1,
+          }
+        }
+        const message = errMsg(err)
+        logError(`[isoGit] checkoutTag 失败: ${message}`)
+        return { ok: false, message: `切换失败: ${message}`, exitCode: 1 }
       }
-      const message = errMsg(err)
-      logError(`[isoGit] checkoutTag 失败: ${message}`)
-      return { ok: false, message: `切换失败: ${message}`, exitCode: 1 }
-    } finally {
-      releaseIsoReadCache()
-    }
+    })
   }
 
   /**
@@ -737,7 +742,7 @@ export class IsoGitOps implements StRepoOps {
    * 未跟踪（??）在后。
    */
   async statusPorcelain(dir: string): Promise<string> {
-    return withIsoReadCache(async () => {
+    return withIsoCache(async () => {
       try {
         const tracked = await isoListFiles({ fs: nodeFs, dir, cache: isoReadCache })
         // mtime 顶到未来 +5s：compareStats 任一字段不等即判「文件已变」并重哈希；
@@ -809,33 +814,33 @@ export class IsoGitOps implements StRepoOps {
     if (existsSync(dir)) {
       return { ok: false, message: `目标目录已存在: ${dir}`, exitCode: 1 }
     }
-    try {
-      await isoClone({
-        fs: nodeFs,
-        http: this.http,
-        dir,
-        url,
-        depth,
-        singleBranch: true,
-        onProgress: this.progressLogger(),
-        cache: isoReadCache,
-      })
-      // 同 cloneRelease：仓库本地 core.autocrlf=false，外部真 git 视角零 CRLF 歧义
-      await isoSetConfig({ fs: nodeFs, dir, path: 'core.autocrlf', value: false })
-      return { ok: true, message: '克隆完成', exitCode: 0 }
-    } catch (err) {
-      const message = errMsg(err)
-      logError(`[isoGit] cloneDepth 失败: ${message}`)
-      // isomorphic-git 失败已自清 .git；兜底清残留目录（扩展安装要求目录不存在）
+    return withIsoCache(async () => {
       try {
-        if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
-      } catch (cleanupErr) {
-        logError(`[isoGit] 浅克隆失败后清理残留失败: ${errMsg(cleanupErr)}`)
+        await isoClone({
+          fs: nodeFs,
+          http: this.http,
+          dir,
+          url,
+          depth,
+          singleBranch: true,
+          onProgress: this.progressLogger(),
+          cache: isoReadCache,
+        })
+        // 同 cloneRelease：仓库本地 core.autocrlf=false，外部真 git 视角零 CRLF 歧义
+        await isoSetConfig({ fs: nodeFs, dir, path: 'core.autocrlf', value: false })
+        return { ok: true, message: '克隆完成', exitCode: 0 }
+      } catch (err) {
+        const message = errMsg(err)
+        logError(`[isoGit] cloneDepth 失败: ${message}`)
+        // isomorphic-git 失败已自清 .git；兜底清残留目录（扩展安装要求目录不存在）
+        try {
+          if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
+        } catch (cleanupErr) {
+          logError(`[isoGit] 浅克隆失败后清理残留失败: ${errMsg(cleanupErr)}`)
+        }
+        return { ok: false, message, exitCode: 1 }
       }
-      return { ok: false, message, exitCode: 1 }
-    } finally {
-      releaseIsoReadCache()
-    }
+    })
   }
 }
 
@@ -897,7 +902,7 @@ export async function getStTagsEmbedded(stDir?: string): Promise<TagsResult> {
   if (!existsSync(join(dir, '.git'))) {
     return { ok: false, data: null, message: 'SillyTavern目录不是Git仓库' }
   }
-  return withIsoReadCache(async () => {
+  return withIsoCache(async () => {
     try {
       const allTags = await isoListTags({ fs: nodeFs, dir })
       const versions: Record<string, { commit: string; date: string; tag_name: string }> = {}
@@ -948,7 +953,7 @@ export async function currentVersionEmbedded(
 ): Promise<{ version: string | null; commit: string | null }> {
   const dir = stDir ?? join(process.cwd(), 'SillyTavern')
   const walkWindow = options.walkWindow ?? ANCESTRY_WALK_WINDOW
-  return withIsoReadCache(async () => {
+  return withIsoCache(async () => {
     try {
       const head = await isoResolveRef({ fs: nodeFs, dir, ref: 'HEAD' })
       const allTags = await isoListTags({ fs: nodeFs, dir })

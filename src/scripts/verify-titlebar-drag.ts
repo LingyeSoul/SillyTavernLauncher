@@ -23,101 +23,43 @@
  * 与 services/windowControl 里的拖动实现共用同一套坐标语义：
  *   抓取偏移 = 光标 − 窗口左上角；拖动帧窗口 = 光标 − 抓取偏移
  * 这里的期望位移因此是"光标位移量本身"（拖动前后光标位移 = 窗口位移）。
+ * 台架（spawn/输入/断言收集）来自 scripts/_verifyLib.ts。
  */
-import { dlopen, FFIType } from 'bun:ffi'
-import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { findWindowByTitleAndPid } from '../services/windowIcon'
+import { layout } from '../theme'
+import {
+  HWND_TOP,
+  MOUSEEVENTF_LEFTDOWN,
+  MOUSEEVENTF_LEFTUP,
+  SW_RESTORE,
+  SWP_NOACTIVATE,
+  SWP_NOSIZE,
+  bringUp,
+  check,
+  clickAt,
+  disposeApp,
+  readClientRect,
+  readClientOrigin,
+  readWindowRect,
+  reportScriptError,
+  sendMouse,
+  sleep,
+  startApp,
+  user32,
+  verifyFailureCount,
+  type Rect,
+  type RunningApp,
+} from './_verifyLib'
 
-if (process.platform !== 'win32' || !process.versions.bun) {
-  console.log('非 win32 + Bun 环境，跳过')
-  process.exit(0)
-}
-
-// —— 常量（与 app.tsx / services/windowControl.ts 对齐）——
-const APP_TITLE = 'SillyTavernLauncher' // WINDOW_OPTIONS.title
-const WINDOW_W = 800
-const WINDOW_H = 644 + 36 // 内容区 + 自绘标题栏
+// —— 常量（几何取 theme.layout 单一出处；拖动参数为本脚本专属）——
+const WINDOW_W = layout.windowW
+const WINDOW_H = layout.windowH + layout.titlebarH // 内容区 + 自绘标题栏
 const TITLEBAR_MID_Y = 18 // 标题栏内拖动落点（栏体 35px 的中部）
 const DRAG_START_X = 300 // 拖动落点：品牌区右侧、按钮组左侧的拖动区
-const BTN_W = 46
+const BTN_W = layout.titlebarBtnW
 const DRAG_STEPS = 8
 const DRAG_STEP_X = 8
 const DRAG_STEP_Y = 4
 const RECT_TOLERANCE = 6 // 每步 SetCursorPos → SetWindowPos 有一帧延迟，允许偏差
-
-const SW_RESTORE = 9
-const SW_SHOW = 5
-const SWP_NOSIZE = 0x0001
-const SWP_NOMOVE = 0x0002
-const SWP_NOACTIVATE = 0x0010
-const HWND_TOP = 0n
-const INPUT_MOUSE = 0
-const MOUSEEVENTF_LEFTDOWN = 0x0002
-const MOUSEEVENTF_LEFTUP = 0x0004
-
-interface User32Symbols {
-  GetWindowRect(hwnd: bigint, rectOut: Int32Array): number
-  GetClientRect(hwnd: bigint, rectOut: Int32Array): number
-  ClientToScreen(hwnd: bigint, pointOut: Int32Array): number
-  SetCursorPos(x: number, y: number): number
-  SendInput(count: number, inputs: Buffer, size: number): number
-  IsIconic(hwnd: bigint): number
-  IsWindow(hwnd: bigint): number
-  IsWindowVisible(hwnd: bigint): number
-  ShowWindow(hwnd: bigint, cmd: number): number
-  SetWindowPos(hwnd: bigint, insertAfter: bigint, x: number, y: number, cx: number, cy: number, flags: number): number
-  GetForegroundWindow(): bigint
-  SetForegroundWindow(hwnd: bigint): number
-}
-
-const user32 = dlopen('user32.dll', {
-  GetWindowRect: { args: [FFIType.u64, FFIType.pointer], returns: FFIType.i32 },
-  GetClientRect: { args: [FFIType.u64, FFIType.pointer], returns: FFIType.i32 },
-  ClientToScreen: { args: [FFIType.u64, FFIType.pointer], returns: FFIType.i32 },
-  SetCursorPos: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
-  SendInput: { args: [FFIType.u32, FFIType.pointer, FFIType.i32], returns: FFIType.u32 },
-  IsIconic: { args: [FFIType.u64], returns: FFIType.i32 },
-  IsWindow: { args: [FFIType.u64], returns: FFIType.i32 },
-  IsWindowVisible: { args: [FFIType.u64], returns: FFIType.i32 },
-  ShowWindow: { args: [FFIType.u64, FFIType.i32], returns: FFIType.i32 },
-  SetWindowPos: {
-    args: [FFIType.u64, FFIType.u64, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32, FFIType.u32],
-    returns: FFIType.i32,
-  },
-  GetForegroundWindow: { args: [], returns: FFIType.u64 },
-  SetForegroundWindow: { args: [FFIType.u64], returns: FFIType.i32 },
-}).symbols as unknown as User32Symbols
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
-
-interface Rect {
-  left: number
-  top: number
-  right: number
-  bottom: number
-}
-
-function readWindowRect(hwnd: bigint): Rect {
-  const buf = new Int32Array(4)
-  if (user32.GetWindowRect(hwnd, buf) === 0) throw new Error('GetWindowRect 失败')
-  return { left: buf[0], top: buf[1], right: buf[2], bottom: buf[3] }
-}
-
-function readClientRect(hwnd: bigint): Rect {
-  const buf = new Int32Array(4)
-  if (user32.GetClientRect(hwnd, buf) === 0) throw new Error('GetClientRect 失败')
-  return { left: buf[0], top: buf[1], right: buf[2], bottom: buf[3] }
-}
-
-/** 客户区原点（0,0）在屏幕坐标下的位置：窗口外框含 DWM 隐形边，按钮落点必须由它换算 */
-function readClientOrigin(hwnd: bigint): { x: number; y: number } {
-  const point = new Int32Array([0, 0])
-  if (user32.ClientToScreen(hwnd, point) === 0) throw new Error('ClientToScreen 失败')
-  return { x: point[0], y: point[1] }
-}
 
 /**
  * 真实拖动一小段并报告两件事：窗口是否被搬动、是否被最小化（按钮点击在抬起时结算）。
@@ -146,24 +88,6 @@ async function dragFromPoint(hwnd: bigint, x: number, y: number, dx: number, dy:
   const moved: [number, number] | null =
     minimized || (after.left === before.left && after.top === before.top) ? null : [after.left - before.left, after.top - before.top]
   return { moved, minimized }
-}
-
-/** 等窗口出现并置顶（各阶段共用的落地动作）；45s 未出现直接抛错 */
-async function bringUp(pid: number, settleMs: number): Promise<bigint> {
-  const hwnd = await waitForWindow(pid, 45_000)
-  if (hwnd === 0n) throw new Error('未找到被测窗口（45s 超时）')
-  await sleep(settleMs)
-  if (user32.IsWindowVisible(hwnd) === 0) user32.ShowWindow(hwnd, SW_SHOW)
-  user32.SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
-  // 前台确认：SetForegroundWindow 会被前台锁拒绝（调用方不是前台进程时），真实输入的
-  // 落点依赖前台状态——重试几次并留读数，避免"输入打到别家窗口"被误判成功能缺陷
-  for (let i = 0; i < 3 && user32.GetForegroundWindow() !== hwnd; i++) {
-    user32.SetForegroundWindow(hwnd)
-    await sleep(300)
-  }
-  console.log(`  窗口 hwnd=${hwnd}｜前台窗口=${user32.GetForegroundWindow()}`)
-  await sleep(200)
-  return hwnd
 }
 
 /**
@@ -195,128 +119,6 @@ async function dragWindow(hwnd: bigint, x: number, y: number): Promise<[number, 
   return [0, 0]
 }
 
-/** x64 INPUT 结构（40 字节）：type 在 0，MOUSEINPUT 从 8 开始，dwFlags 在 20 */
-function mouseInput(flags: number): Buffer {
-  const buf = Buffer.alloc(40)
-  buf.writeUInt32LE(INPUT_MOUSE, 0)
-  buf.writeInt32LE(0, 8) // dx
-  buf.writeInt32LE(0, 12) // dy
-  buf.writeUInt32LE(0, 16) // mouseData
-  buf.writeUInt32LE(flags, 20)
-  buf.writeUInt32LE(0, 24) // time
-  buf.writeBigUInt64LE(0n, 32) // dwExtraInfo
-  return buf
-}
-
-function sendMouse(flags: number): void {
-  const sent = user32.SendInput(1, mouseInput(flags), 40)
-  if (sent !== 1) throw new Error(`SendInput 失败（flags=0x${flags.toString(16)}）`)
-}
-
-/** 真实左键点击（按下 + 抬起，同点） */
-async function clickAt(x: number, y: number): Promise<void> {
-  user32.SetCursorPos(x, y)
-  await sleep(60)
-  sendMouse(MOUSEEVENTF_LEFTDOWN)
-  await sleep(60)
-  sendMouse(MOUSEEVENTF_LEFTUP)
-  await sleep(120)
-}
-
-// —— 断言收集 ——
-let failures = 0
-function check(label: string, ok: boolean, detail: string): void {
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}：${detail}`)
-  if (!ok) failures++
-}
-
-/** 被测应用实例（spawn 句柄 + pid + 临时 cwd） */
-interface RunningApp {
-  proc: ReturnType<typeof spawn>
-  pid: number
-  dir: string
-}
-
-/**
- * 启动被测应用（临时 cwd 种子 config：跳过首启弹窗，绝不让模态遮住标题栏）。
- * 直接 spawn bun 而非 `cmd /c bun ...`：窗口归属的进程必须是拿到 pid 的那个，
- * cmd 中转时 proc.pid 是 cmd 的 pid，按 PID 匹配窗口永远找不到（实测踩过）。
- * 不经 `bun run`/`npm run`：那两者的 windowsHide 语义会让窗口只创建不显示。
- *
- * seedEula=true 时不写"已同意"种子：应用启动即弹 EULA 模态（用于验证遮罩
- * 确实盖住标题栏——模态打开时拖动/按钮必须无效）。
- */
-async function startApp(appEntry: string, seedEula = false): Promise<RunningApp> {
-  const dir = mkdtempSync(join(tmpdir(), 'stl-titlebar-verify'))
-  writeFileSync(
-    join(dir, 'config.json'),
-    JSON.stringify(
-      {
-        first_run: false,
-        agreement_accepted: !seedEula,
-        agreement_version: '2099-01-01',
-        checkupdate: false,
-        stcheckupdate: false,
-        autostart: false,
-        auto_proxy: false,
-        theme: 'dark',
-      },
-      null,
-      4,
-    ),
-  )
-  writeFileSync(join(dir, 'agreement_cache.json'), JSON.stringify({ date: '2099-01-01', content: '# 离线种子' }))
-
-  const proc = spawn('bun', [appEntry], {
-    cwd: dir,
-    env: {
-      ...process.env,
-      STL_SKIP_AGREEMENT_RECHECK: '1',
-      STL_SKIP_MIRROR_AUTOSELECT: '1',
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  const pid = proc.pid ?? 0
-  if (pid === 0) throw new Error('子进程启动失败（无 pid）')
-  proc.stdout?.on('data', (chunk: Buffer) => process.stdout.write(`  [app] ${chunk.toString().trim()}\n`))
-  proc.stderr?.on('data', (chunk: Buffer) => process.stdout.write(`  [app:err] ${chunk.toString().trim()}\n`))
-  return { proc, pid, dir }
-}
-
-async function waitForWindow(pid: number, timeoutMs: number): Promise<bigint> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    const hwnd = await findWindowByTitleAndPid(APP_TITLE, pid)
-    if (hwnd !== 0) return BigInt(hwnd)
-    await sleep(200)
-  }
-  return 0n
-}
-
-function killTree(pid: number): void {
-  try {
-    spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
-  } catch {
-    // 已退出
-  }
-}
-
-/** 结束一个被测实例：杀进程树 + 删临时目录（Windows 下 cwd 被占用，删除要重试） */
-async function disposeApp(instance: RunningApp): Promise<void> {
-  if (instance.proc.exitCode === null && instance.proc.signalCode === null) killTree(instance.pid)
-  await sleep(800)
-  for (let i = 0; i < 10; i++) {
-    try {
-      rmSync(instance.dir, { recursive: true, force: true })
-      return
-    } catch {
-      await sleep(300)
-    }
-  }
-  // 删不掉只意味着 %TEMP% 残留一个目录，不影响校验结论
-}
-
-const appEntry = resolve(import.meta.dir, '..', 'app.tsx')
 let running: RunningApp | null = null
 
 try {
@@ -324,7 +126,7 @@ try {
   // 阶段一：铬层隐藏 + 拖动 + 最小化
   // =====================================================================
   console.log('— 阶段一：启动被测应用（真实窗口，非后台）—')
-  running = await startApp(appEntry)
+  running = await startApp({ dirPrefix: 'stl-titlebar-verify' })
   const hwnd = await bringUp(running.pid, 1500)
 
   // ① 铬层隐藏：客户区尺寸 = 请求的内容尺寸，且客户区**贴窗口上沿**（无标题栏带宽）。
@@ -360,7 +162,7 @@ try {
   )
 
   // 置顶 + 前台已由 bringUp 完成 —— 注入的真实点击必须落在被测窗口上
-  const startRect = readWindowRect(hwnd)
+  const startRect: Rect = readWindowRect(hwnd)
   const startOrigin = readClientOrigin(hwnd)
   // 拖动落点：客户区内 300px（品牌区右侧、按钮组左侧）
   const dragX = startOrigin.x + DRAG_START_X
@@ -447,7 +249,9 @@ try {
   await disposeApp(running)
   running = null
   console.log('\n— 阶段三：模态（EULA）打开时标题栏连通性（种子未同意协议）—')
-  running = await startApp(appEntry, true)
+  // seedEula=true 时不写"已同意"种子：应用启动即弹 EULA 模态（用于验证遮罩
+  // 确实盖住标题栏——模态打开时拖动/按钮必须无效）
+  running = await startApp({ dirPrefix: 'stl-titlebar-verify', seed: { agreement_accepted: false } })
   const eulaHwnd = await bringUp(running.pid, 2500)
   const eulaOrigin = readClientOrigin(eulaHwnd)
   const eulaDrag = await dragFromPoint(eulaHwnd, eulaOrigin.x + DRAG_START_X, eulaOrigin.y + TITLEBAR_MID_Y, 60, 0)
@@ -462,12 +266,12 @@ try {
   const aliveAfterClick = running.proc.exitCode === null && running.proc.signalCode === null
   check('模态打开时点击关闭按钮不退出（遮罩拦截）', aliveAfterClick, `进程存活=${aliveAfterClick}`)
 } catch (err) {
-  failures++
-  console.error(`FAIL  脚本异常：${err instanceof Error ? err.message : String(err)}`)
+  reportScriptError(err)
 } finally {
   const leftover: RunningApp | null = running
   if (leftover) await disposeApp(leftover)
 }
 
+const failures = verifyFailureCount()
 console.log(failures === 0 ? '\n全部校验通过' : `\n${failures} 项校验失败`)
 process.exit(failures === 0 ? 0 : 1)

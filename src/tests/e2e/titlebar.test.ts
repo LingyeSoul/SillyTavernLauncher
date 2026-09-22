@@ -16,7 +16,6 @@ import type { E2ESession } from './helpers'
 import { layout } from '../../theme'
 
 const TITLEBAR_H = layout.titlebarH
-const BTN_W = 46
 
 let session: E2ESession | null = null
 
@@ -62,7 +61,7 @@ describe('自绘标题栏', () => {
 
     // 窗口按钮贴右缘：关闭占最右 46px，最小化紧邻其左；拖动区右缘 == 最小化左缘
     expect(close!.x + close!.width).toBe(layout.windowW)
-    expect(close!.width).toBe(BTN_W)
+    expect(close!.width).toBe(layout.titlebarBtnW)
     expect(min!.x + min!.width).toBe(close!.x)
     expect(drag!.x + drag!.width).toBe(min!.x)
 

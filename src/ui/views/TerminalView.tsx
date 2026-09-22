@@ -31,7 +31,7 @@ import {
   type TerminalLine,
 } from '../../stores/terminalLogs'
 import { computeCols } from '../../services/terminalEngine'
-import { useStState } from '../../stores/stState'
+import { useStState, isDirBusy } from '../../stores/stState'
 import { terminalRowHeight, useSettings } from '../../stores/settings'
 import { useUiState } from '../../stores/uiState'
 import { getConfigStore } from '../../services/configStore'
@@ -195,7 +195,10 @@ export function TerminalView() {
   }, [windowWidth, fontSize, fontFamily])
   const running = useStState((s) => s.running)
   const installed = useStState((s) => s.installed)
-  const busy = useStState((s) => s.busy)
+  // 按钮禁用走 isDirBusy 单一口径（与 store 守卫同源，勿散写三连 ||）；
+  // stop 只需自家 busy
+  const dirBusy = useStState((s) => isDirBusy(s.busy))
+  const stopBusy = useStState((s) => s.busy.stop)
   const installSt = useStState((s) => s.installSt)
   const startSt = useStState((s) => s.startSt)
   const stopSt = useStState((s) => s.stopSt)
@@ -262,20 +265,20 @@ export function TerminalView() {
     {
       key: 'install', label: TEXTS.install, tip: TEXTS.installTip, icon: 'download',
       // 跨操作互斥（2026-09-21 真机竞态）：安装/启动/更新共享 ST 目录，互斥禁用
-      disabled: running || busy.install || busy.start || busy.update, onClick: handleInstall, variant: 'default',
+      disabled: running || dirBusy, onClick: handleInstall, variant: 'default',
     },
     {
       key: 'start', label: TEXTS.start, tip: TEXTS.startTip, icon: 'play',
-      disabled: running || busy.start || busy.install || busy.update, onClick: handleStart, variant: 'primary',
+      disabled: running || dirBusy, onClick: handleStart, variant: 'primary',
     },
     {
       key: 'stop', label: TEXTS.stop, tip: TEXTS.stopTip, icon: 'stop',
-      disabled: !running || busy.stop, onClick: () => void stopSt(), variant: 'default',
+      disabled: !running || stopBusy, onClick: () => void stopSt(), variant: 'default',
       dangerText: true,
     },
     {
       key: 'update', label: TEXTS.update, tip: TEXTS.updateTip, icon: 'refresh',
-      disabled: running || busy.update || busy.install || busy.start, onClick: () => void updateSt(), variant: 'default',
+      disabled: running || dirBusy, onClick: () => void updateSt(), variant: 'default',
     },
     {
       key: 'clear', label: TEXTS.clear, tip: TEXTS.clearTip, icon: 'trash',

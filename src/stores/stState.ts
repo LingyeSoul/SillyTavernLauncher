@@ -18,9 +18,26 @@ import { useTerminalLogs } from './terminalLogs'
 import { uiStateActions } from './uiState'
 
 export interface StVersionInfo {
-  /** 当前 checkout 的 tag（git describe --tags --abbrev=0），无 tag 时为 null */
+  /** 当前 checkout 的 tag（git describe --tags --abbrev=0），无 tag 时 null */
   version: string | null
   commit: string | null
+}
+
+export interface StBusyState {
+  install: boolean
+  start: boolean
+  stop: boolean
+  update: boolean
+}
+
+/**
+ * 目录级互斥判定（2026-09-21 真机竞态：安装中点启动 → 半成品依赖秒崩）：
+ * 安装/启动/更新三者共享 ST 目录与 node_modules，任一进行中不接受新操作；
+ * stop 只停进程不碰目录，不参与互斥。store 守卫与视图按钮禁用共用此口径，
+ * 勿再散写三连 `||`——两处漂移即互斥失守（store 拒绝但按钮可点，或反之）。
+ */
+export function isDirBusy(busy: StBusyState): boolean {
+  return busy.install || busy.start || busy.update
 }
 
 function appendLog(message: string): void {
@@ -43,7 +60,7 @@ export function stDirPath(): string {
 interface StStateState {
   running: boolean
   installed: boolean
-  busy: { install: boolean; start: boolean; stop: boolean; update: boolean }
+  busy: StBusyState
   currentVersion: StVersionInfo | null
   versionLoading: boolean
 
@@ -101,10 +118,8 @@ export const useStState = create<StStateState>((set, get) => ({
   },
 
   installSt: async () => {
-    // 跨操作互斥（2026-09-21 真机竞态：安装中点启动 → 半成品依赖直接崩）：
-    // 安装/启动/更新三者共享 ST 目录与 node_modules，任一进行中不接受新操作。
-    const busy = get().busy
-    if (busy.install || busy.start || busy.update) {
+    // 跨操作互斥（isDirBusy 单一口径，见其文档）
+    if (isDirBusy(get().busy)) {
       appendLog('已有安装/启动/更新操作进行中，已忽略本次安装请求')
       return
     }
@@ -121,8 +136,7 @@ export const useStState = create<StStateState>((set, get) => ({
   },
 
   startSt: async () => {
-    const busy = get().busy
-    if (busy.start || busy.install || busy.update) {
+    if (isDirBusy(get().busy)) {
       appendLog('已有安装/启动/更新操作进行中，已忽略本次启动请求')
       return
     }
@@ -163,8 +177,7 @@ export const useStState = create<StStateState>((set, get) => ({
   },
 
   updateSt: async () => {
-    const busy = get().busy
-    if (busy.update || busy.install || busy.start) {
+    if (isDirBusy(get().busy)) {
       appendLog('已有安装/启动/更新操作进行中，已忽略本次更新请求')
       return
     }

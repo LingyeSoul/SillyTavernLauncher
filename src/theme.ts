@@ -69,6 +69,9 @@ export const layout = {
   // **窗口高 = windowH + titlebarH**（windowH 是内容区高度，自绘标题栏不占内容预算，
   // 各视图纵向布局值维持 644 契约不变）
   titlebarH: 36,
+  // 标题栏窗口按钮宽（Windows 惯例宽扁形）：TitleBar 组件、E2E 几何断言与
+  // verify-* 取证脚本的按钮落点换算共用——四处各写一份 46 是取证落点漂移的源头
+  titlebarBtnW: 46,
   padFormX: 24, padFormY: 20, padTerminal: 12,
 } as const
 

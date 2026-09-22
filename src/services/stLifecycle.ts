@@ -93,6 +93,15 @@ export const EXPECTED_ST_REMOTE = ST_REPO_URL
  * 错误出现在数百毫秒内），而旧实现 spawn 成功即成即报「✓ SillyTavern启动成功」，
  * 真机日志出现「启动成功」与崩溃报错同屏。窗口取 2.5s：覆盖启动期崩溃的常见
  * 时间尺度，又不显著拖慢正常启动的成功反馈（ST 就绪实测 ~5-22s，远在窗口外）。
+ *
+ * DEVIATION（设计 D3 字面边界，2026-09-21 e696bda）：embedded-all 设计 D3 要求
+ * portable/system「代码路径与命令串完全不动」——本探针与 deps-pending 标记、
+ * busy 互斥实际挂在三模式公共路径（startSt/installNpmDependencies/
+ * runNpmInstallWithRetry），portable/system 用户可感知变化：成功反馈延迟 ≤2.5s、
+ * 安装失败不再报「完成」、更新失败后不再带残树自动启动（fail-closed）。命令串
+ * 本体未动（tests/stLifecycle.test.ts D3 焊死断言仍在）——三模式共享同一棵
+ * node_modules，秒崩与残树启动不限 embedded，只修 embedded 留一半才是回归；
+ * 收尾诚实性三模式同修是对 D3 意图（零回归）的遵守而非违背。
  */
 export const START_PROBE_MS = 2500
 
