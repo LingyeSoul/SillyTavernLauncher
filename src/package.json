@@ -1,6 +1,6 @@
 {
   "name": "sillytavern-launcher",
-  "version": "2.0.0-beta.2",
+  "version": "2.0.0-beta.3",
   "private": true,
   "scripts": {
     "dev": "cmd /c bun --hot app.tsx",
