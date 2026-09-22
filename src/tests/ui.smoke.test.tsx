@@ -17,6 +17,16 @@ import type { ReactElement, ReactNode } from 'react'
 import type { TestRenderer, TestRoot } from '@gpuix/react/testing'
 import { layout } from '../theme'
 
+/**
+ * windowControl 替身：只把 closeWindow 覆写为"投递成功"。ST 未运行时点击关闭按钮
+ * 若投递失败会落进 AppShell.requestClose 的 quitLauncher 兜底——真实 quitLauncher
+ * 会 process.exit 掉测试宿主。其余 API 保持真实实现（非 win32 宿主下本就是安全降级）。
+ */
+vi.mock('../services/windowControl', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/windowControl')>()
+  return { ...actual, closeWindow: () => true }
+})
+
 let tempDir: string
 let originalCwd: string
 
@@ -29,10 +39,11 @@ type AppModule = {
   useUiState: typeof import('../stores/uiState').useUiState
   useTerminalLogs: typeof import('../stores/terminalLogs').useTerminalLogs
   useSettings: typeof import('../stores/settings').useSettings
+  useStState: typeof import('../stores/stState').useStState
 }
 
 async function loadApp(): Promise<AppModule> {
-  const [{ AppShell }, { DialogHost }, { ThemeProvider }, { TooltipProvider }, { useUiState }, { useTerminalLogs }, { useSettings }] =
+  const [{ AppShell }, { DialogHost }, { ThemeProvider }, { TooltipProvider }, { useUiState }, { useTerminalLogs }, { useSettings }, { useStState }] =
     await Promise.all([
       import('../ui/shell/AppShell'),
       import('../ui/dialogs/DialogHost'),
@@ -41,8 +52,9 @@ async function loadApp(): Promise<AppModule> {
       import('../stores/uiState'),
       import('../stores/terminalLogs'),
       import('../stores/settings'),
+      import('../stores/stState'),
     ])
-  return { AppShell, DialogHost, ThemeProvider, TooltipProvider, useUiState, useTerminalLogs, useSettings }
+  return { AppShell, DialogHost, ThemeProvider, TooltipProvider, useUiState, useTerminalLogs, useSettings, useStState }
 }
 
 let testRoot: TestRoot
@@ -407,6 +419,37 @@ describe('对话框（smoke）', () => {
     await clickTestId('exit-confirm-stop')
     expect(onConfirm).toHaveBeenCalledTimes(1)
     expect(app.useUiState.getState().dialogs.length).toBe(0)
+  })
+
+  it('关闭入口契约：标题栏关闭按钮 ST 运行中先确认、未运行直关不弹窗', async () => {
+    await resetUiStack()
+
+    // 未运行：点关闭不弹确认（closeWindow 经上方 vi.mock 返回"投递成功"，只锁
+    // "不弹对话框"这一半；WM_CLOSE 真退出语义由 e2e exit 用例与真窗取证脚本覆盖）
+    await clickTestId('titlebar-close')
+    expect(app.useUiState.getState().dialogs.length).toBe(0)
+
+    // 运行中：弹退出确认（D1 入口迁移契约——自绘标题栏关闭按钮是唯一可见关闭入口）。
+    // running 由进程计数派生且 AppShell 每 2s 轮询 refresh：用例期间把 refresh 置 no-op
+    // 消除 2s 边界抖动，finally 还原。
+    const realRefresh = app.useStState.getState().refresh
+    app.useStState.setState({ refresh: () => undefined, running: true })
+    try {
+      await settle()
+      await clickTestId('titlebar-close')
+      const dialogs = app.useUiState.getState().dialogs
+      expect(dialogs.length).toBe(1)
+      expect(dialogs[0]?.kind).toBe('exitConfirm')
+
+      // 取消 = 安全默认：栈清空。绝不能点 exit-confirm-stop——AppShell 的 onConfirm
+      // 是真实 quitLauncher，会 process.exit 掉测试宿主
+      await clickTestId('exit-confirm-cancel')
+      expect(app.useUiState.getState().dialogs.length).toBe(0)
+    } finally {
+      app.useStState.setState({ refresh: realRefresh, running: false })
+      await settle()
+    }
+    await resetUiStack()
   })
 
   it('错误对话框：标题/正文/复制按钮渲染', async () => {

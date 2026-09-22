@@ -108,13 +108,13 @@ describe('首启全流程（EULA 先行 → 欢迎问答 → 主界面）', () =
     }
     expect(firstRun).toBe(false)
 
-    // --- 里程碑 7：主界面出现（侧栏 6 项 + 终端视图 + footer）---
+    // --- 里程碑 7：主界面出现（标题栏 + 侧栏 6 项 + 终端视图 + footer）---
     for (const nav of ['terminal', 'version', 'sync', 'extensions', 'settings', 'about']) {
       await app.getByTestId(`nav-${nav}`).waitFor({ timeoutMs: 5_000 })
     }
     await app.getByTestId('terminal-start').waitFor({ timeoutMs: 5_000 })
     await app.getByTestId('terminal-install').waitFor({ timeoutMs: 5_000 })
-    await app.getByTestId('exit-launcher').waitFor({ timeoutMs: 5_000 })
+    await app.getByTestId('titlebar-close').waitFor({ timeoutMs: 5_000 })
     await app.getByTestId('theme-toggle').waitFor({ timeoutMs: 5_000 })
 
     // 终端空态（临时目录无 SillyTavern → 未安装文案）

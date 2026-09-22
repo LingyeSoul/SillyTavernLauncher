@@ -260,7 +260,7 @@ describe('全量 UI 渲染几何审计', () => {
     await sleep(SETTLE_MS)
     await audit('about', 'audit-about.png')
 
-    // 白名单弹窗收尾（种子环境 ST 未运行，exit-launcher 点击=直接退进程，
+    // 白名单弹窗收尾（种子环境 ST 未运行，titlebar-close 点击=直接退进程，
     // 退出确认弹窗不可达——该弹窗为固定文案简单 Modal，由静态审计覆盖）。
     // 重进设置页默认 env tab，白名单入口在酒馆（st）tab 网络区，先切 tab
     await app.getByTestId('nav-settings').click()

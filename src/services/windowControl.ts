@@ -19,9 +19,10 @@
  * 窗口是 resizable:false 固定窗（D4），本服务也不提供最大化——标题栏只有
  * 最小化与关闭两个按钮，不自造无法成立的交互。
  *
- * 关闭按钮语义与原生 X 完全一致：投递 WM_CLOSE 走 gpui 自身拆除路径（进程退出，
- * `process.on('exit')` 钩子同步硬杀子进程），不在这里做确认拦截——退出保护仍收敛
- * 在侧栏"退出启动器"显式入口（D1 行为定义）。
+ * 关闭按钮：ST 未运行时由 AppShell.requestClose 调 `closeWindow()` 投递 WM_CLOSE，
+ * 走 gpui 自身拆除路径（进程退出，`process.on('exit')` 钩子同步硬杀子进程）——与系统
+ * X 同链路；ST 运行中调用方先经 exitConfirm 确认（D1/§4.7）再 quitLauncher 停进程
+ * 退出。确认策略不落在本模块：这里只提供窗口原语。
  *
  * 纯函数部分（抓取偏移/拖动位置换算）在 Node/vitest 下可测；FFI 部分仅
  * win32 + Bun 运行时执行，其余环境全部静默降级（不抛错、不改行为）。
@@ -196,7 +197,12 @@ export function minimizeWindow(): void {
 /**
  * 关闭窗口 = 退出启动器：投递 WM_CLOSE 让 gpui 走原生拆除路径
  * （与点击系统 X 同一条链路，含拆除期噪音与进程退出语义）。
+ * ST 运行中先确认的策略在调用方（AppShell.requestClose），此处只投递。
+ *
+ * @returns 是否成功投递。false = 非 win32/Bun 或窗口句柄未定位（启动初期/定位失败）
+ *   ——关闭按钮已是唯一可见退出入口，调用方必须据此退化为 `quitLauncher()`，
+ *   否则会出现"点了关闭没反应"的死入口。
  */
-export function closeWindow(): void {
-  postMessage(WM_CLOSE, 0n, 0n)
+export function closeWindow(): boolean {
+  return postMessage(WM_CLOSE, 0n, 0n)
 }

@@ -10,11 +10,13 @@
  *   未同意协议/协议版本变化 → EULA；checkupdate → 后台检查启动器更新；
  *   autostart → 自动启动酒馆（D1 新语义：主窗口正常显示）。
  *
- * DEVIATION: GPUIX 0.9.0 无窗口关闭拦截（onClose），窗口 X = 进程直接退出，
- *   无法挂退出确认。退出保护收敛到侧栏 footer 的"退出启动器"显式入口
- *   （exitConfirm 确认后 stopAllProcesses + process.exit）；窗口 X 直接退出
- *   视为已知行为（迁移计划 D1 行为定义第 1 条：关窗 = 停止所有子进程并退出——
- *   原生退出路径上 processManager 的 exit 钩子仍会同步硬杀子进程）。
+ * DEVIATION: GPUIX 0.9.0 无窗口关闭拦截（onClose），系统 X / Alt+F4（WM_CLOSE）
+ *   = 进程直接退出，无法挂退出确认（迁移计划 D1 行为定义第 1 条：关窗 = 停止所有
+ *   子进程并退出——原生退出路径上 processManager 的 exit 钩子仍会同步硬杀子进程）。
+ *   2026-09-22（O12）起可见关闭入口是自绘标题栏按钮，其 click 是我们自己的 handler、
+ *   可以拦截：退出保护（ST 运行中 exitConfirm 确认后 stopAllProcesses + process.exit）
+ *   收敛在 AppShell.requestClose——即 D1 原始语义"关窗时 ST 运行中则确认"；未运行
+ *   时同走 WM_CLOSE 原生链路（侧栏原"退出启动器"入口已移除）。
  *
  * WINDOWS 陷阱：`bun run`/`npm run` 以 windowsHide 语义 spawn 脚本子进程
  *   （STARTF_USESHOWWINDOW + wShowWindow=SW_HIDE），gpuix 0.9.0 的窗口初始

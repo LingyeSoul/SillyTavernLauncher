@@ -7,7 +7,9 @@
  *    createTestRoot 已最小复现）。用例直接断言"点按钮只出按钮动作、不出拖动动作"，
  *    以及"拖动区右缘 == 最小化按钮左缘"（结构不变量）。
  * 2) 品牌区在拖动区内部且 pointerEvents none：在 logo/文字上按下也算拖动。
- * 3) 窗口按钮点击 = 投递窗口消息（minimize/close 经 vi.mock 记录，不碰真实 FFI）。
+ * 3) 窗口按钮点击：最小化 = 投递窗口消息（windowControl 经 vi.mock 记录，不碰真实
+ *    FFI）；关闭 = 回调调用方的 `onCloseRequest`（退出保护/直关语义在 AppShell，
+ *    TitleBar 保持哑展示）。
  *
  * 几何断言用 createTestRoot 的真实 GPUI 布局；点击走 nativeSimulateClick 真实命中链路。
  */
@@ -28,9 +30,6 @@ vi.mock('../services/windowControl', () => ({
   },
   minimizeWindow: () => {
     calls.push('minimize')
-  },
-  closeWindow: () => {
-    calls.push('close')
   },
 }))
 
@@ -68,7 +67,11 @@ beforeEach(async () => {
     <ThemeProvider>
       {/* 与 app.tsx 同构：栏体处于纵向根列中的顶部 */}
       <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: '#141618' }}>
-        <TitleBar />
+        <TitleBar
+          onCloseRequest={() => {
+            calls.push('closeRequest')
+          }}
+        />
       </div>
     </ThemeProvider>,
   )
@@ -121,11 +124,11 @@ describe('TitleBar 命中归属（祖先监听器吞点击的回归）', () => {
     expect(calls).toEqual(['minimize'])
   })
 
-  it('点击关闭按钮：只投递关闭，不触发拖动', async () => {
+  it('点击关闭按钮：只触发关闭请求，不触发拖动', async () => {
     const p = centerOf('titlebar-close')
     renderer().nativeSimulateClick(p.x, p.y)
     await settle()
-    expect(calls).toEqual(['close'])
+    expect(calls).toEqual(['closeRequest'])
   })
 
   it('拖动区按下-移动-抬起：武装 / 跟随 / 收尾各一次', async () => {

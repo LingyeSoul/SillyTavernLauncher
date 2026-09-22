@@ -8,8 +8,8 @@
  * 重挂），关于页居中布局整体自管；全应用任何时刻只有一个垂直滚动容器，铁律——自管
  * 视图的外层不得再包 overflow:scroll）。
  * - footer：ST 状态芯片（运行中呼吸微光 = 全应用唯一无限动画实例 M7）+ 主题切换
- *   + 退出启动器入口（DEVIATION: GPUIX 无 onClose 拦截，窗口 X 直接退出为已知行为，
- *     退出保护收敛到主界面的显式入口走 exitConfirm）。
+ *   （§3.B 契约）。2026-09-22：退出启动器按钮移除——自绘标题栏（O12）成为唯一可见
+ *   关闭入口，退出保护随之迁到那里，见 requestClose。
  * - 2s 轮询刷新 ST 运行状态（进程退出无回调，running 派生自进程计数）。
  */
 import { useEffect } from 'react'
@@ -27,6 +27,7 @@ import { IconButton } from '../components/IconButton'
 import type { IconName } from '../components/icons'
 import { useUiState, VIEW_IDS, type ViewId } from '../../stores/uiState'
 import { useStState } from '../../stores/stState'
+import { closeWindow } from '../../services/windowControl'
 import { TerminalView } from '../views/TerminalView'
 import { VersionView } from '../views/VersionView'
 import { SyncView } from '../views/SyncView'
@@ -80,7 +81,7 @@ export function AppShell() {
         selectionColor: t.selection.ember,
       }}>
       {/* 自绘标题栏（窗口铬层，36px）：不占内容区 644 预算，见 theme.ts layout.titlebarH */}
-      <TitleBar />
+      <TitleBar onCloseRequest={requestClose} />
       <div style={{ display: 'flex', flexDirection: 'row', flexGrow: 1, minHeight: 0 }}>
         <Sidebar />
         {/* 右 1px border-subtle 分隔线（StyleDesc 无分边框色，用 1px div） */}
@@ -120,7 +121,6 @@ function Sidebar() {
   const { mode, setMode, motionEnabled } = useThemeContext()
   const view = useUiState((s) => s.view)
   const setView = useUiState((s) => s.setView)
-  const openDialog = useUiState((s) => s.openDialog)
   const running = useStState((s) => s.running)
   const installed = useStState((s) => s.installed)
 
@@ -178,7 +178,7 @@ function Sidebar() {
         }}
       />
 
-      {/* footer：ST 状态芯片 + 主题切换 + 退出，高 62 */}
+      {/* footer：ST 状态芯片 + 主题切换，高 62（§3.B 契约；退出入口在自绘标题栏） */}
       <div
         style={{
           height: 62,
@@ -206,22 +206,6 @@ function Sidebar() {
             label="切换主题"
             onClick={() => setMode(mode === 'dark' ? 'light' : 'dark')}
             testId="theme-toggle"
-          />
-        </Tooltip>
-        <Tooltip label="退出启动器">
-          <IconButton
-            icon="x"
-            size={28}
-            label="退出启动器"
-            testId="exit-launcher"
-            onClick={() => {
-              // ← D1 行为定义：ST 未运行直接退出；运行中先确认
-              if (!running) {
-                void quitLauncher()
-              } else {
-                openDialog({ kind: 'exitConfirm', onConfirm: () => void quitLauncher() })
-              }
-            }}
           />
         </Tooltip>
       </div>
@@ -261,6 +245,24 @@ function StStatusDot({ status }: { status: 'running' | 'stopped' | 'not-installe
       }}
     />
   )
+}
+
+/**
+ * 关窗请求（D1/§4.7 原始语义："关窗时 ST 运行中则确认"）：ST 运行中先经 exitConfirm
+ * 确认再"停止并退出"；未运行直接走原生 WM_CLOSE 链路（O12：与系统 X 同链路）。
+ *
+ * 2026-09-22：原生标题栏隐藏 + 侧栏"退出启动器"入口移除后，自绘标题栏关闭按钮成为
+ * 全应用唯一可见的关闭入口——此前设计因"无法拦截窗口 X"把保护退守在侧栏，自绘铬层
+ * 把 D1 语义还了回来。running 用 getState 现读而非订阅值：避免闭包捕获陈旧状态。
+ */
+function requestClose(): void {
+  if (useStState.getState().running) {
+    useUiState.getState().openDialog({ kind: 'exitConfirm', onConfirm: () => void quitLauncher() })
+  } else if (!closeWindow()) {
+    // 投递失败（非 win32/Bun、窗口句柄未定位的启动初期）：退化为直接退出——
+    // 关闭按钮是唯一可见退出入口，不能留下"点了没反应"的死入口
+    void quitLauncher()
+  }
 }
 
 /** 退出：ST 运行中已在 exitConfirm 确认，这里停止全部进程后退出进程 */

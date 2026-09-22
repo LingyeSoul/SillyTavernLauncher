@@ -15,8 +15,10 @@
  * ② 拖动区内的填充子元素（品牌区）要 `pointerEvents: 'none'`，否则命中被它吃掉、
  *    在 logo/文字上按下拖不动窗口（命中测试解析到最深可命中盒子）。
  *
- * 按钮点击 = 投递窗口消息（services/windowControl，WM_SYSCOMMAND/SC_MINIMIZE、
- * WM_CLOSE），与系统标题栏同一条原生路径；非 win32/Bun 下整体空操作。
+ * 最小化按钮 = 投递 WM_SYSCOMMAND/SC_MINIMIZE（services/windowControl）；关闭按钮的
+ * 语义由调用方经 `onCloseRequest` 注入（AppShell.requestClose：ST 运行中先确认再
+ * 停止退出，未运行走 closeWindow 的 WM_CLOSE 原生链路）——本组件保持哑展示，不读
+ * store，退出保护语义只此一处。非 win32/Bun 下窗口原语整体空操作。
  * 窗口 resizable:false（D4）故不设最大化——见 windowControl 模块头。
  */
 import { useGpuix } from '@gpuix/react'
@@ -25,12 +27,12 @@ import { ICONS } from '../components/icons'
 import { useTheme } from '../theme'
 import { layout } from '../../theme'
 import { LOGO_DATA_URL } from '../assets/logo'
-import { beginWindowMove, closeWindow, continueWindowMove, endWindowMove, minimizeWindow } from '../../services/windowControl'
+import { beginWindowMove, continueWindowMove, endWindowMove, minimizeWindow } from '../../services/windowControl'
 
 const BTN_W = 46
 const BTN_ICON = 14
 
-export function TitleBar() {
+export function TitleBar({ onCloseRequest }: { onCloseRequest: () => void }) {
   const t = useTheme()
   const { renderer } = useGpuix()
 
@@ -86,7 +88,7 @@ export function TitleBar() {
           </div>
         </div>
         <TitleBarButton icon="minus" label="最小化" onClick={minimizeWindow} testId="titlebar-minimize" />
-        <TitleBarButton icon="x" label="关闭启动器" onClick={closeWindow} testId="titlebar-close" />
+        <TitleBarButton icon="x" label="关闭启动器" onClick={onCloseRequest} testId="titlebar-close" />
       </div>
       {/* 底部分隔线：与侧栏右线同款 1px border-subtle */}
       <div style={{ height: 1, backgroundColor: t.border.subtle }} />

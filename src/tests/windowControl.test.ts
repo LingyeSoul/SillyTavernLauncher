@@ -48,6 +48,9 @@ describe('非 win32/Bun 宿主降级（Node + vitest）', () => {
     expect(() => continueWindowMove()).not.toThrow()
     expect(() => endWindowMove()).not.toThrow()
     expect(() => minimizeWindow()).not.toThrow()
-    expect(() => closeWindow()).not.toThrow()
+  })
+
+  it('closeWindow 投递不可用时返回 false（AppShell 据此退化为直接退出，不留死入口）', () => {
+    expect(closeWindow()).toBe(false)
   })
 })

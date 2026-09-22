@@ -1,7 +1,7 @@
 /**
  * E2E 用例 5：退出路径（种子 config，无 ST 运行）。
- * 侧栏「退出启动器」→ ST 未运行应直接退出（进程结束，无确认弹窗），
- * 退出时 config 落盘（process.on('exit') → saveOnExit）。
+ * 自绘标题栏关闭按钮 → ST 未运行应直接退出（closeWindow 的 WM_CLOSE 原生链路，
+ * 进程结束，无确认弹窗），退出时 config 落盘（process.on('exit') → saveOnExit）。
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import { launchE2E, sleep, pidAlive } from './helpers'
@@ -22,9 +22,9 @@ describe('退出路径', () => {
     const app = session.app
     const pid = session.pid
 
-    await app.getByTestId('exit-launcher').waitFor({ timeoutMs: 10_000 })
+    await app.getByTestId('titlebar-close').waitFor({ timeoutMs: 10_000 })
 
-    await app.getByTestId('exit-launcher').click()
+    await app.getByTestId('titlebar-close').click()
 
     // 无 ST 运行 → 不弹确认框，进程应在数秒内退出
     let exited = false
