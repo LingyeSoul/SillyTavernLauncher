@@ -78,6 +78,13 @@ export interface LauncherConfig {
    */
   tray: boolean
   autostart: boolean
+  /**
+   * 自动启动时静默隐藏主窗口（2026-09-22）：autostart + 本键 + tray 三键齐开且
+   * 本轮启动无交互步骤（非首跑、EULA 已过）时，建窗后将主窗口隐藏到托盘，从
+   * 托盘菜单唤回。判定见 services/silentStart.ts；托盘挂载失败不得隐藏（用户
+   * 将失去唯一唤回入口）。
+   */
+  autostart_hidden: boolean
   auto_proxy: boolean
   custom_args: string
   use_optimize_args: boolean
@@ -118,6 +125,7 @@ const DEFAULT_CONFIG: LauncherConfig = {
   stcheckupdate: false,
   tray: false,
   autostart: false,
+  autostart_hidden: false,
   auto_proxy: false,
   custom_args: '',
   use_optimize_args: false,

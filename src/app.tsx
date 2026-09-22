@@ -28,18 +28,17 @@
  */
 import { useEffect } from 'react'
 import { render } from '@gpuix/react'
-import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { getConfigStore } from './services/configStore'
 import type { ConfigStore } from './services/configStore'
 import { createMirrorPingProbe, ensureMirrorSelection } from './services/mirrors'
 import { installCrashGuard } from './services/crashGuard'
 import { logError } from './services/errorLog'
 import { stopAllProcessesSync } from './services/processManager'
-import { fetchAgreementDocument } from './services/agreement'
+import { eulaDialogRequired, fetchAgreementDocument } from './services/agreement'
 import { checkForUpdates, fetchChangelog, normalizeVersion } from './services/updater'
 import { applyWindowIcon } from './services/windowIcon'
-import { initWindowControl } from './services/windowControl'
+import { hideMainWindow, initWindowControl } from './services/windowControl'
+import { shouldHideAtStartup } from './services/silentStart'
 import { APP_VERSION } from './version'
 import { layout } from './theme'
 import { ThemeProvider } from './ui/theme'
@@ -116,20 +115,9 @@ function StartupFlow() {
       uiStateActions.openDialog({ kind: 'welcome' })
     }
 
-    // 2. 未同意协议 或 协议版本变化 → EULA（缓存日期 vs 已同意版本）
-    const accepted = config.get<boolean>('agreement_accepted', false)
-    const acceptedVersion = config.get<string>('agreement_version', '')
-    let cachedDate = ''
-    try {
-      const cachePath = join(process.cwd(), 'agreement_cache.json')
-      if (existsSync(cachePath)) {
-        const cache = JSON.parse(readFileSync(cachePath, 'utf8')) as { date?: unknown }
-        if (typeof cache.date === 'string') cachedDate = cache.date
-      }
-    } catch {
-      // 缓存损坏按无缓存处理
-    }
-    if (!accepted || acceptedVersion !== cachedDate) {
+    // 2. 未同意协议 或 协议版本变化 → EULA（判定收敛在 agreement.eulaDialogRequired，
+    //    与静默启动的"本轮无交互"门共用同一口径；缓存日期 vs 已同意版本）
+    if (eulaDialogRequired(config)) {
       uiStateActions.openDialog({ kind: 'eula' })
     } else if (process.env.STL_SKIP_AGREEMENT_RECHECK !== '1') {
       // 缓存门通过也要后台核对远端协议版本（Bug#4：原实现只在弹窗时刷新缓存，
@@ -138,7 +126,7 @@ function StartupFlow() {
       void (async () => {
         try {
           const remote = await fetchAgreementDocument()
-          if (remote && remote.date !== acceptedVersion) {
+          if (remote && remote.date !== config.get<string>('agreement_version', '')) {
             uiStateActions.openDialog({ kind: 'eula' })
           }
         } catch (err) {
@@ -169,9 +157,14 @@ function StartupFlow() {
       })()
     }
 
-    // 4. 自动启动酒馆（D1 新语义：主窗口正常显示）
+    // 4. 自动启动酒馆（D1 新语义：主窗口正常显示；autostart_hidden 静默模式
+    //    只隐藏窗口，启动链路不变）
     //    先等镜像选优落定：首次安装的 clone 要跑在选定镜像上（无选定则瞬间返回）
-    if (config.get<boolean>('autostart', false)) {
+    //    STL_SKIP_AUTOSTART=1 供取证脚本/E2E 种子禁用（防临时目录里真跑安装链路）
+    if (
+      config.get<boolean>('autostart', false) &&
+      process.env.STL_SKIP_AUTOSTART !== '1'
+    ) {
       void mirrorReady.then(() => useStState.getState().startSt())
     }
   }, [])
@@ -246,6 +239,19 @@ void initWindowControl(WINDOW_OPTIONS.title)
 // 系统托盘（config.tray，默认关；← features/tray/tray.py，2026-09-22 恢复）。
 // 开启后关闭按钮分流为"隐藏到托盘"（AppShell.requestClose），托盘菜单可唤回/
 // 起停酒馆/退出。初始化失败仅记日志（initTray 内部 catch），应用照常运行。
+// 静默启动（autostart_hidden）：托盘挂载成功且本轮无交互步骤时随即将主窗口
+// 隐藏到托盘——挂载失败绝不隐藏（藏死无唤回入口）；与 initWindowControl 并行
+// 竞态下句柄极小概率未定位（hideMainWindow 返 false），小重试兜底，重试耗尽
+// 保持窗口可见（fail-safe：静默失败优于藏死）。窗口隐藏态的布局测量已由
+// mainWindowQueryState 冻结门检保护（SmartScroll/ProgressBar，2026-09-22 回归）。
 if (getConfigStore().get<boolean>('tray', false)) {
-  void applyTrayEnabled(true)
+  void (async () => {
+    const mounted = await applyTrayEnabled(true)
+    if (!mounted || !shouldHideAtStartup(getConfigStore())) return
+    for (let attempt = 0; attempt < 10; attempt++) {
+      if (hideMainWindow()) return
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    logError('[startup] 静默启动隐藏窗口失败：窗口控制句柄未就绪，保持窗口可见')
+  })()
 }

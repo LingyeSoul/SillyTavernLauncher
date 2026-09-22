@@ -101,6 +101,8 @@ const TEXTS = {
   sectionLauncher: '启动器',
   autostart: '启用自动启动',
   autostartDesc: '启动启动器后自动启动酒馆（主窗口正常显示）',
+  autostartHidden: '自动启动时隐藏窗口',
+  autostartHiddenDesc: '静默启动：主窗口隐藏到托盘、从托盘菜单唤回（需先启用自动启动与系统托盘）',
   tray: '启用系统托盘',
   trayDesc: '关闭按钮将隐藏窗口到托盘、酒馆保持运行；从托盘菜单唤回或退出',
   reduceMotion: '减少动效',
@@ -205,15 +207,25 @@ export function SettingsView() {
 
   const st = getStConfig()
 
-  /** 开关行：高 40（无描述）/48（有描述），标签左 Switch 右（共享 SwitchRow，常规档） */
+  /** 开关行：高 40（无描述）/48（有描述），标签左 Switch 右（共享 SwitchRow，常规档）；
+   *  disabled：前置条件未满足的开关（静默启动依赖自动启动+托盘） */
   const switchRow = (
     key: string,
     label: string,
     desc: string | undefined,
     on: boolean,
     onChange: (v: boolean) => void,
+    disabled = false,
   ): ReactElement => (
-    <SwitchRow key={key} label={label} desc={desc} on={on} onChange={onChange} testId={`setting-${key}`} />
+    <SwitchRow
+      key={key}
+      label={label}
+      desc={desc}
+      on={on}
+      onChange={onChange}
+      testId={`setting-${key}`}
+      disabled={disabled}
+    />
   )
 
   /** ← listen_changed：开启时创建白名单，失败回滚 + 错误对话框 */
@@ -584,8 +596,20 @@ export function SettingsView() {
           <Card>
             <SectionTitle title={TEXTS.sectionLauncher} />
             {switchRow('autostart', TEXTS.autostart, TEXTS.autostartDesc, settings.autostart, (v) => settings.update({ autostart: v }))}
+            {switchRow(
+              'autostart_hidden',
+              TEXTS.autostartHidden,
+              TEXTS.autostartHiddenDesc,
+              settings.autostartHidden,
+              (v) => settings.update({ autostartHidden: v }),
+              // 静默启动依赖另两键（启动判定也三键齐查，disabled 只挡 UI 误配）
+              !settings.autostart || !settings.tray,
+            )}
             {switchRow('tray', TEXTS.tray, TEXTS.trayDesc, settings.tray, (v) => {
-              settings.update({ tray: v })
+              // 关托盘时连带关静默启动：托盘是隐藏窗口的唯一唤回入口，留着
+              // "静默开、托盘关"的组合会让下次启动与用户预期不符（启动判定
+              // 会 fail-safe 不隐藏，但设置项亮着即是谎言）
+              settings.update(v ? { tray: v } : { tray: v, autostartHidden: false })
               void applyTrayEnabled(v)
             })}
             {switchRow('reduce_motion', TEXTS.reduceMotion, TEXTS.reduceMotionDesc, !motionEnabled, (v) => setMotionEnabled(!v))}

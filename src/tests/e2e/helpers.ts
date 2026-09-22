@@ -119,6 +119,7 @@ function seedConfig(theme: 'dark' | 'light' = 'dark'): Record<string, unknown> {
     stcheckupdate: false,
     tray: false,
     autostart: false,
+    autostart_hidden: false,
     auto_proxy: false,
     custom_args: '',
     use_optimize_args: false,

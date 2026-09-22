@@ -12,6 +12,7 @@ import { atomicWriteFileSync } from './atomicFs'
 import { errMsg, logError } from './errorLog'
 import { fetchWithTlsFallback, type CaProvider, type FetchLikeX } from './httpClient'
 import { htmlToMarkdown, type FetchLike } from './updater'
+import type { ConfigStore } from './configStore'
 
 export const AGREEMENT_URL = 'https://sillytavern.lingyesoul.top/agreement'
 export const AGREEMENT_CACHE_FILE = 'agreement_cache.json'
@@ -59,6 +60,17 @@ export function contentFingerprint(content: string): string {
     hash = Math.imul(hash, 0x01000193) >>> 0
   }
   return `content-${hash.toString(16).padStart(8, '0')}`
+}
+
+/**
+ * 启动期是否需要弹 EULA：未同意，或已同意版本与本地缓存版本不一致
+ * （缓存损坏/缺失按无缓存处理 → 弹）。原为 app.tsx StartupFlow 的内联判定，
+ * 2026-09-22 提升为共享口径——静默启动（services/silentStart）的"本轮无
+ * 交互"门与弹窗判定必须读同一段代码，两处各写一份必然漂移。
+ */
+export function eulaDialogRequired(config: ConfigStore): boolean {
+  if (!config.get<boolean>('agreement_accepted', false)) return true
+  return config.get<string>('agreement_version', '') !== (loadAgreementCache()?.date ?? '')
 }
 
 /** vp-doc 区块提取 + Markdown 转换（← fetcher 的提取链，复用 updater 的转换器） */

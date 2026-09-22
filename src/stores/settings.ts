@@ -36,6 +36,8 @@ export interface SettingsSnapshot {
   checkupdate: boolean
   stcheckupdate: boolean
   autostart: boolean
+  /** 自动启动时静默隐藏主窗口到托盘（生效需 autostart + tray 同开，见 services/silentStart.ts） */
+  autostartHidden: boolean
   /** 系统托盘（2026-09-22 恢复：托盘菜单 + 关闭到托盘，见 services/tray.ts） */
   tray: boolean
   // —— GitHub 镜像（2026-09-21 镜像增强：官方源/加速镜像二选一 + 独立镜像源设置）——
@@ -108,6 +110,7 @@ export function readSettings(): SettingsSnapshot {
     checkupdate: S.get<boolean>('checkupdate', true),
     stcheckupdate: S.get<boolean>('stcheckupdate', true),
     autostart: S.get<boolean>('autostart', false),
+    autostartHidden: S.get<boolean>('autostart_hidden', false),
     tray: S.get<boolean>('tray', false),
     mirrorEnabled: S.get<boolean>('github.enabled', false),
     mirrorHost: S.get<string>('github.mirror', ''),
@@ -202,6 +205,7 @@ export const useSettings = create<SettingsState>((set) => ({
       checkupdate: 'checkupdate',
       stcheckupdate: 'stcheckupdate',
       autostart: 'autostart',
+      autostartHidden: 'autostart_hidden',
       tray: 'tray',
       // 镜像四字段走专用动作（含 gitconfig/remote 联动），不经 update 直写
       mirrorEnabled: null,

@@ -74,6 +74,9 @@ describe('ConfigStore（← config_manager.py）', () => {
     expect(store.get('custom_args')).toBe('')
     // tray 字段保留可读但已 @deprecated（D1）
     expect(store.get('tray')).toBe(false)
+    // 静默启动（2026-09-22）：autostart + autostart_hidden + tray 三键组合生效
+    expect(store.get('autostart')).toBe(false)
+    expect(store.get('autostart_hidden')).toBe(false)
   })
 
   it('文件不存在时返回默认配置且不落盘（← load_config）', async () => {

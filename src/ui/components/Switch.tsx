@@ -84,6 +84,8 @@ export interface SwitchRowProps {
   testId?: string
   /** 紧凑档：对话框内 34/44；默认常规档：设置页 40/48 */
   compact?: boolean
+  /** 禁用态：前置条件未满足（如静默启动需先开自动启动与托盘），点击不触发切换 */
+  disabled?: boolean
 }
 
 /** 开关行：标签（可选描述）左 + Switch 右。SettingsView.switchRow 与
@@ -97,6 +99,7 @@ export function SwitchRow({
   onChange,
   testId,
   compact = false,
+  disabled = false,
 }: SwitchRowProps) {
   const t = useTheme()
   return (
@@ -123,7 +126,7 @@ export function SwitchRow({
           </text>
         )}
       </div>
-      <Switch on={on} onChange={onChange} testId={testId} />
+      <Switch on={on} onChange={onChange} testId={testId} disabled={disabled} />
     </div>
   )
 }
