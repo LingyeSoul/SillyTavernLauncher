@@ -3,13 +3,23 @@ name: CI
 on:
   push:
     branches: [main, dev]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
+
+# 同一 ref 的新推送取消旧运行（省额度；tag 重推时中止旧上传，防陈旧产物混入 Release）
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   test:
     name: Typecheck & Unit Tests (Windows)
     runs-on: windows-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: src
@@ -28,3 +38,126 @@ jobs:
 
       - name: Unit tests
         run: bunx vitest run --project unit
+
+  build:
+    name: Build onefile artifact (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    needs: test
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # --skip-tests：门禁已在上游 test 作业执行（needs 链），免双跑
+      # --skip-smoke：CI 无交互桌面/GPU；图标嵌入与 PE 子系统验证仍全量执行
+      - name: Build onefile exe
+        run: bun scripts/build-onefile.ts --skip-tests --skip-smoke
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SillyTavernLauncher-win-x64
+          path: dist/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Release (tag)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      # 完整历史 + 全部标签：生成"上一版本 → 本版本"提交日志需要
+      - name: Checkout code (full history)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: SillyTavernLauncher-win-x64
+          path: dist
+
+      - name: Generate release title & notes
+        id: notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+
+          # 版本一致性门禁：tag 必须与 src/version.ts 同步（防打错 tag 发错版）
+          APP_VERSION=$(sed -n "s/^export const APP_VERSION = '\(v[^']*\)'.*$/\1/p" src/version.ts)
+          if [ -z "$APP_VERSION" ] || [ "$APP_VERSION" != "$TAG" ]; then
+            echo "::error::tag(${TAG}) 与 src/version.ts(${APP_VERSION:-未解析到}) 不一致——先同步版本号再打 tag"
+            exit 1
+          fi
+
+          # 上一个 tag（无前序 tag 时回落为全部历史提交）
+          PREV_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+
+          {
+            echo "## 更新内容"
+            echo
+            if [ -n "$PREV_TAG" ]; then
+              echo "\`${PREV_TAG} → ${TAG}\` 的变更提交："
+              echo
+              git log --pretty=format:'- %s (%h)' "${PREV_TAG}..${TAG}"
+              echo
+              echo
+              echo "**完整对比**：[${PREV_TAG}...${TAG}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${TAG})"
+            else
+              echo "首个发布 tag，包含全部历史提交："
+              echo
+              git log --pretty=format:'- %s (%h)' "${TAG}"
+            fi
+            echo
+            echo
+            echo "## 产物校验"
+            echo
+            echo "产物由 CI 自动构建（bun build --compile 单文件，内置 Bun 运行时，Windows x64）。"
+            echo
+            echo "| 文件 | SHA256 |"
+            echo "| --- | --- |"
+            for f in dist/*.exe; do
+              HASH=$(sha256sum "$f" | cut -d' ' -f1)
+              echo "| \`$(basename "$f")\` | \`${HASH}\` |"
+            done
+          } > release-notes.md
+
+          echo "title=SillyTavernLauncher ${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ steps.notes.outputs.title }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+
+          # 版本号含预发布段（-beta.3 / -rc.1 等）自动标记 prerelease，不抢 latest
+          PRE_FLAGS=()
+          if [[ "$TAG" == *-* ]]; then
+            PRE_FLAGS+=(--prerelease)
+          fi
+
+          # 幂等：作业重跑时 Release 可能已存在——覆盖上传产物并刷新标题/日志
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.exe --clobber -R "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --title "$TITLE" --notes-file release-notes.md "${PRE_FLAGS[@]}" -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/*.exe --title "$TITLE" --notes-file release-notes.md "${PRE_FLAGS[@]}" -R "$GITHUB_REPOSITORY"
+          fi
