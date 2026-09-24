@@ -22,7 +22,7 @@ import type { MirrorProbe } from '../services/mirrors'
 
 /** 窗口化生效的元素上限：窗口 24 行 ≈ 267 元素；回退为全量挂载则 ≥ 500 */
 const WINDOWED_ELEMENT_LIMIT = 320
-/** 测速链路提交上限：55 站合流到 10 次/秒（注入探针秒回 → 进度 1 次 + 收尾 1 次） */
+/** 测速链路提交上限：54 站合流到 10 次/秒（注入探针秒回 → 进度 1 次 + 收尾 1 次） */
 const SPEED_TEST_COMMIT_LIMIT = 6
 /** 测速链路 setStyle 上限：逐行 memo 后只有被测站那几行重发样式（修复前 21505） */
 const SPEED_TEST_STYLE_LIMIT = 1000
@@ -130,7 +130,7 @@ afterAll(() => {
 })
 
 describe('镜像源对话框性能门禁①：列表窗口化', () => {
-  it('56 站只挂视口附近的行；官方源行与首个镜像行在树（E2E 交互契约）', async () => {
+  it('55 站只挂视口附近的行；官方源行与首个镜像行在树（E2E 交互契约）', async () => {
     const { MIRROR_SOURCES } = await import('../services/mirrors')
     const { getConfigStore } = await import('../services/configStore')
     const { readSettings, useSettings } = await import('../stores/settings')
@@ -233,7 +233,7 @@ describe('镜像源对话框性能门禁①：列表窗口化', () => {
 })
 
 describe('镜像源对话框性能门禁②：测速链路提交合流', () => {
-  it('55 站秒回：提交 ≤ 上限、样式重发远低于全量（修复前 55 提交 / 21505 setStyle）', async () => {
+  it('54 站秒回：提交 ≤ 上限、样式重发远低于全量（修复前 55 提交 / 21505 setStyle）', async () => {
     const { getConfigStore } = await import('../services/configStore')
     const { readSettings, useSettings } = await import('../stores/settings')
     // 关自动选优/加速：测速完只汇报，不触发 gitconfig/remote 同步（测的是 UI 链路）

@@ -111,10 +111,10 @@ describe('镜像注册表', () => {
     }
   })
 
-  it('用户实测名单收录齐全（fast 13 站 + medium 41 站）且报告值合理', () => {
+  it('用户实测名单收录齐全（fast 12 站 + medium 41 站）且报告值合理', () => {
     const fast = MIRROR_SOURCES.filter((source) => source.tier === 'fast')
     const medium = MIRROR_SOURCES.filter((source) => source.tier === 'medium')
-    expect(fast).toHaveLength(13)
+    expect(fast).toHaveLength(12)
     expect(medium).toHaveLength(41)
     for (const source of [...fast, ...medium]) {
       expect(source.reportedMs, `${source.host} 缺报告延迟`).toBeDefined()

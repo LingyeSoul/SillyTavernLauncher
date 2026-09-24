@@ -307,7 +307,7 @@ function opsDelta(before: OpStats, after: OpStats): string {
  * （正序时排序结果恰等于注册表序，测不出位移成本）。
  */
 async function measureSpeedStorm(): Promise<void> {
-  console.log('\n=== D. 测速风暴（渐进写入 55 站结果）===')
+  console.log(`\n=== D. 测速风暴（渐进写入 ${HOSTS.length} 站结果）===`)
   for (const round of [1, 2]) {
     const testRoot = createTestRoot({ width: 800, height: 644 })
     const renderer = testRoot.renderer

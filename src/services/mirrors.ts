@@ -43,7 +43,6 @@ export const MIRROR_SOURCES: readonly MirrorSource[] = [
   { host: 'gh.ddlc.top', reportedMs: 500, tier: 'fast' },
   { host: 'github-proxy.lixxing.top', reportedMs: 508, tier: 'fast' },
   { host: 'ghp.keleyaa.com', reportedMs: 509, tier: 'fast' },
-  { host: 'xiaomo-station.top', reportedMs: 513, tier: 'fast' },
   { host: 'github.boringhex.top', reportedMs: 513, tier: 'fast' },
   { host: 'gh.1k.ink', reportedMs: 514, tier: 'fast' },
   { host: 'git.669966.xyz', reportedMs: 519, tier: 'fast' },
@@ -253,7 +252,7 @@ export function mirrorProbeUrl(host: string): string {
 /** 单站测速超时（用户实测延迟集中在 0.5–1.1s，3s 足够容纳慢站与一次换证书重试） */
 export const MIRROR_PROBE_TIMEOUT_MS = 3000
 
-/** 全量测速并发（55 站：并发 8 时最坏十几秒，通常数秒内出全部结果） */
+/** 全量测速并发（54 站：并发 8 时最坏十几秒，通常数秒内出全部结果） */
 export const MIRROR_TEST_CONCURRENCY = 8
 
 /** ping 发包数（两包取最小值，兼顾抖动与耗时） */
@@ -474,7 +473,7 @@ export async function speedTestMirrors(
 /** 自动选优/切换的候选批次大小（并行探测数；一批全灭才试下一批） */
 export const MIRROR_CANDIDATE_BATCH = 6
 
-/** 自动选优最多试几批（6×3=18 站；全灭则判定无可用镜像，避免无谓打满 55 站） */
+/** 自动选优最多试几批（6×3=18 站；全灭则判定无可用镜像，避免无谓打满 54 站） */
 export const MIRROR_AUTO_BATCH_LIMIT = 3
 
 /** 已选定镜像的结果保鲜期：期内启动不再重测（12h） */
