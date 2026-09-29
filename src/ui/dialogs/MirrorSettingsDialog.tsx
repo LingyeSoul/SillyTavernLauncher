@@ -41,9 +41,18 @@
  * 至多一行高亮由数据结构保证，与事件到达顺序无关；leave 带 host 守卫，迟到的 leave
  * 不会清掉后来者。取证见 scripts/repro-mirror-dup-highlight.ts，回归见
  * tests/mirrorDialogPerf.test.tsx 门禁④。
+ *
+ * ── 右缘自绘滚动条（2026-09-29，components/ScrollBar 同款）──
+ * 列表右缘挂 ScrollBar 兄弟列（12px 常驻预留，行宽相应扣减——门禁②与 E2E 的
+ * "行宽填满容器"断言口径改为容器内宽 − SCROLLBAR_TRACK_W）；thumb 由
+ * onVisibleRange 事件驱动，拖拽/轨道点击/滚轮经 scrollToItem 行进。锚点与终端
+ * 不同：对话框打开在顶部，无区间事件前锚 0（终端是尾部锚定）。
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useGpuixRequired } from '@gpuix/react'
+import type { PublicInstance } from '@gpuix/react'
 import { errMsg, logError } from '../../services/errorLog'
+import { mainWindowQueryState } from '../../services/windowControl'
 import {
   MIRROR_SOURCES,
   OFFICIAL_MIRROR,
@@ -62,6 +71,7 @@ import { Button } from '../components/Button'
 import { Chip } from '../components/Chip'
 import { FieldHint } from '../components/FieldHint'
 import { Modal, useModalClose } from '../components/Modal'
+import { ScrollBar } from '../components/ScrollBar'
 import { SwitchRow } from '../components/Switch'
 import { ICONS } from '../components/icons'
 
@@ -120,11 +130,16 @@ function latencyColor(ms: number, t: ReturnType<typeof useTheme>): string {
 export function MirrorSettingsDialog() {
   const t = useTheme()
   const settings = useSettings()
+  const renderer = useGpuixRequired()
   const [testing, setTesting] = useState(false)
   const [done, setDone] = useState(0)
   const [live, setLive] = useState<Record<string, number | null>>({})
   /** 列表渲染窗口起始行（virtual-list itemCount/windowStart 协议的应用侧推窗态） */
   const [windowStart, setWindowStart] = useState(0)
+  /** onVisibleRange 最近一次区间（滚动条 thumb 驱动；缺字段事件不更新，同推窗口径） */
+  const [visibleRange, setVisibleRange] = useState<{ start: number; end: number } | null>(null)
+  /** 列表挂载锚（scrollToItem 走逻辑行号，scrollToRow 的行进目标） */
+  const listRef = useRef<PublicInstance | null>(null)
   /** 未合流的测速进度（host → 延迟；null = 不可用）与已完成站数 */
   const pendingRef = useRef<Record<string, number | null>>({})
   const doneRef = useRef(0)
@@ -183,6 +198,14 @@ export function MirrorSettingsDialog() {
   const windowStartClamped = Math.min(windowStart, maxWindowStart)
   const visibleRows = rowSpecs.slice(windowStartClamped, windowStartClamped + WINDOW_ROWS)
 
+  // 滚动条锚点推导：无区间事件时可视行数按布局估算（(300−2 边框)/40 ≈ 7 行），
+  // 首行锚 0（对话框打开在顶部，区别于终端的尾部锚定，见文件头）
+  const estVisibleRows = Math.max(1, Math.round((LIST_VIEWPORT_HEIGHT - 2) / ROW_ESTIMATED_HEIGHT))
+  const scrollVisibleRows = visibleRange
+    ? Math.max(1, visibleRange.end - visibleRange.start)
+    : estVisibleRows
+  const scrollStartRow = visibleRange ? visibleRange.start : 0
+
   /**
    * 可见区间 → 推窗（virtual-list itemCount/windowStart 协议）。
    * 缺区间信息的 payload（首次布局等）不推窗：`endIndex ?? total` 会把"无信息"
@@ -193,12 +216,36 @@ export function MirrorSettingsDialog() {
     const start = e.startIndex
     const end = e.endIndex
     if (start === undefined && end === undefined) return
+    if (start !== undefined && end !== undefined) {
+      // 同值不换引用：区间事件可能在门禁③的空转窗口内重复抵达，不得产生提交
+      setVisibleRange((prev) =>
+        prev !== null && prev.start === start && prev.end === end ? prev : { start, end },
+      )
+    }
     const next =
       (end ?? total) >= total
         ? Math.max(0, total - WINDOW_ROWS)
         : Math.max(0, Math.min((start ?? 0) - WINDOW_OVERSCAN, total - WINDOW_ROWS))
     setWindowStart((prev) => (prev === next ? prev : next))
   }
+
+  /** 滚动条行进出口：scrollToItem 走逻辑行号（窗口化协议下 native 自解锚，
+   *  mirrorDialogPerf 深滚用例已实证）；renderer 调用一律冻结门检 + try/catch
+   *  （AGENTS.md 铁律，隐藏/最小化时原生侧不回应 bounds/scroll 查询） */
+  const scrollToRow = useCallback(
+    (row: number): void => {
+      const el = listRef.current
+      if (!el || mainWindowQueryState() === 'frozen') return
+      const total = rowSpecs.length
+      if (total <= 0) return
+      try {
+        renderer.scrollToItem?.(el.id, Math.min(Math.max(row, 0), total - 1), 0)
+      } catch (err) {
+        logError(`[mirrorSettings] 滚动条行进失败: ${errMsg(err)}`)
+      }
+    },
+    [renderer, rowSpecs.length],
+  )
 
   /** 未合流进度 → 一次提交（setLive/setDone 在同一提交内，React 自动批处理） */
   const flushProgress = useCallback((): void => {
@@ -331,7 +378,8 @@ export function MirrorSettingsDialog() {
         <div
           style={{
             display: 'flex',
-            flexDirection: 'column',
+            flexDirection: 'row',
+            height: LIST_VIEWPORT_HEIGHT,
             borderWidth: 1,
             borderColor: t.border.subtle,
             borderRadius: t.radius.md,
@@ -339,15 +387,17 @@ export function MirrorSettingsDialog() {
           }}>
           {/* 窗口化列表：只挂 [windowStart, windowStart+WINDOW_ROWS) 的行切片，
               滚动时经 onVisibleRange 推窗（推窗状态在应用侧，见文件头说明）。
-              56 行全挂实测 509 原生元素 / 68ms 单帧，窗口化后 228 元素 / 2.5ms */}
+              56 行全挂实测 509 原生元素 / 68ms 单帧，窗口化后 228 元素 / 2.5ms。
+              行布局：右缘滚动条轨道为兄弟列（12px 常驻预留，见文件头滚动条节） */}
           <virtual-list
+            ref={listRef}
             alignment="top"
             itemCount={rowSpecs.length}
             windowStart={windowStartClamped}
             estimatedItemHeight={ROW_ESTIMATED_HEIGHT}
             onVisibleRange={handleVisibleRange}
             testId="mirror-list"
-            style={{ height: LIST_VIEWPORT_HEIGHT, minHeight: 0 }}>
+            style={{ flexGrow: 1, minWidth: 0 }}>
             {visibleRows.map((spec) => {
               if (spec.official) {
                 return (
@@ -407,6 +457,18 @@ export function MirrorSettingsDialog() {
               )
             })}
           </virtual-list>
+          {/* estimatedTrackH = 300 − 2×1px 边框（content-box，实测口径与门禁③的
+              零提交契约一致：估算与实测全等时测量态不产生提交） */}
+          <ScrollBar
+            testId="mirror-scrollbar"
+            itemCount={rowSpecs.length}
+            visibleRows={scrollVisibleRows}
+            startRow={scrollStartRow}
+            rowHeight={ROW_ESTIMATED_HEIGHT}
+            overflow={rowSpecs.length > scrollVisibleRows}
+            onScrollToRow={scrollToRow}
+            estimatedTrackH={LIST_VIEWPORT_HEIGHT - 2}
+          />
         </div>
       </div>
     </Modal>

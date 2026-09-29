@@ -157,21 +157,36 @@ describe('镜像源对话框性能门禁①：列表窗口化', () => {
       renderer.findByTestId(`mirror-row-${farHost}`),
       '末位镜像行不应在树（证明只挂了窗口切片）',
     ).toBeUndefined()
+
+    // 右缘自绘滚动条（2026-09-29）：轨道 + thumb 在树（55 行恒溢出）
+    const track = renderer.findByTestId('mirror-scrollbar')
+    expect(track, '滚动条轨道必须在树').toBeDefined()
+    expect(renderer.findByTestId('mirror-scrollbar-thumb'), '溢出时 thumb 必须在树').toBeDefined()
+    const trackBounds = renderer.getElementBounds(track!.id)
+    expect(trackBounds, '轨道 bounds 可测').not.toBeNull()
+    const thumbBounds = renderer.getElementBounds(renderer.findByTestId('mirror-scrollbar-thumb')!.id)
+    expect(thumbBounds, 'thumb bounds 可测').not.toBeNull()
+    expect(
+      thumbBounds!.height,
+      `thumb 高 ${thumbBounds!.height} 应在 [最小 24, 轨道高) 区间`,
+    ).toBeGreaterThanOrEqual(24)
+    expect(thumbBounds!.height).toBeLessThan(trackBounds!.height)
   }, 60_000)
 
   it('行盒几何：所有行同宽且填满列表内宽（virtual-list 子项不会自动拉伸）', async () => {
     await mountDialog()
 
     // 行 → 列表 → 容器：容器的 bounds 可测（virtual-list 自身 getElementBounds 返回
-    // null）。容器 bounds 即列表可用内宽（实测行宽与容器 bounds 全等，如 564/564），
-    // 行宽应与之相等
+    // null）。容器 bounds 即列表+滚动条轨道的总内宽（2026-09-29 起轨道是列表兄弟列，
+    // 12px 常驻预留），行宽应 = 容器内宽 − SCROLLBAR_TRACK_W
+    const { SCROLLBAR_TRACK_W } = await import('../ui/components/ScrollBar')
     const list = renderer.findByTestId('mirror-list')!
     const listElement = renderer.getElement(list.id)!
     const container = listElement.parentId === null ? null : renderer.getElement(listElement.parentId)
     expect(container, '列表外层容器应在树中').toBeDefined()
     const containerBounds = renderer.getElementBounds(container!.id)
     expect(containerBounds, '容器 bounds 可测').not.toBeNull()
-    const expected = Math.round(containerBounds!.width)
+    const expected = Math.round(containerBounds!.width) - SCROLLBAR_TRACK_W
 
     const { MIRROR_SOURCES } = await import('../services/mirrors')
     const widths: number[] = []
@@ -229,6 +244,29 @@ describe('镜像源对话框性能门禁①：列表窗口化', () => {
       renderer.getRetainedElementCount(),
       '推窗后元素数仍应保持窗口量级（不是全量挂载）',
     ).toBeLessThan(WINDOWED_ELEMENT_LIMIT)
+  }, 60_000)
+
+  it('滚动条接线：轨道上的滚轮推进列表锚行（onScrollToRow → scrollToItem）', async () => {
+    const { getConfigStore } = await import('../services/configStore')
+    const { readSettings, useSettings } = await import('../stores/settings')
+    getConfigStore().set('github.speedtest', { results: {}, failed: [], tested_at: '' })
+    useSettings.setState(readSettings())
+    await mountDialog()
+
+    const list = renderer.findByTestId('mirror-list')!
+    const track = renderer.findByTestId('mirror-scrollbar')!
+    expect(track, '滚动条轨道必须在树').toBeDefined()
+    const tb = renderer.getElementBounds(track.id)
+    expect(tb, '轨道 bounds 可测').not.toBeNull()
+
+    // 轨道 pointerEvents:'auto' 吃掉的滚轮，经 onScroll 换行还给列表
+    //（滚轮只达命中元素不冒泡，虚拟列表是兄弟节点收不到——见 ScrollBar 文件头）
+    const before = renderer.getListScrollTop(list.id)?.[0] ?? 0
+    renderer.nativeSimulateScrollWheel(tb!.x + tb!.width / 2, tb!.y + tb!.height / 2, 0, -120)
+    await settle()
+    const after = renderer.getListScrollTop(list.id)?.[0] ?? 0
+    console.log(`[mirror-gate] 轨道滚轮：列表锚 ${before} → ${after}`)
+    expect(after, '轨道滚轮应推进列表锚行（滚动条 ↔ 列表接线）').toBeGreaterThan(before)
   }, 60_000)
 })
 

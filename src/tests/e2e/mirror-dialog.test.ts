@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { join } from 'node:path'
 import { launchE2E, sleep, expectShotExists, SHOTS_DIR } from './helpers'
 import type { E2ESession } from './helpers'
+import { SCROLLBAR_TRACK_W } from '../../ui/components/ScrollBar'
 
 /** 种子测速结果：固定延迟值 → 行序与文案确定（快/中/慢三档各覆盖若干站） */
 const SEED_RESULTS: Record<string, number> = {
@@ -113,9 +114,10 @@ describe('镜像源对话框：已测速态几何与悬停', () => {
     // 同一浮层内行间相对比较：绕开 anchored 子树 bounds 偏移的测量伪影
     expect(new Set(widths).size, `各行宽度不一致：${widths.join('/')}（漏 width:'100%'）`).toBe(1)
 
-    // 行宽应覆盖列表容器宽度（内容宽排布时实测 219–445，容器 564）
+    // 行宽应覆盖列表内宽（内容宽排布时实测 219–445，容器 564）；右缘滚动条
+    // 轨道是列表兄弟列（12px 常驻预留，2026-09-29），行宽口径 = 容器宽 − 轨道宽
     const container = await listContainer(session)
-    const containerWidth = Math.round(container.bounds!.width)
+    const containerWidth = Math.round(container.bounds!.width) - SCROLLBAR_TRACK_W
     expect(
       widths[0]!,
       `行宽 ${widths[0]} 应填满列表容器 ${containerWidth}（内容宽排布会明显偏窄）`,
