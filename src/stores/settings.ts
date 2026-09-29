@@ -226,6 +226,20 @@ export const useSettings = create<SettingsState>((set) => ({
       if (value === undefined || configKey === null) continue
       S.set(configKey, value)
     }
+    // auto_proxy 关闭 → 撤回 requestProxy.enabled 托管残留：该键唯一的界面写入来源
+    // 是启动时自动检测，开关关闭后检测不再运行，不清会让（可能已死的）代理地址
+    // 永久滞留 config.yaml，ST 出站请求全部 ECONNREFUSED（2026-09-29）
+    if (patch.autoProxy === false) {
+      try {
+        const st = getStConfig()
+        if (st.proxyEnabled) {
+          st.proxyEnabled = false
+          if (!st.save()) logError('[settings] 关闭自动代理时清理 requestProxy 失败: config.yaml 写入失败')
+        }
+      } catch (err) {
+        logError(`[settings] 关闭自动代理时清理 requestProxy 异常: ${errMsg(err)}`)
+      }
+    }
     if (saveLauncherConfig()) uiStateActions.pushToast('success', '设置已保存')
     set(readSettings())
   },

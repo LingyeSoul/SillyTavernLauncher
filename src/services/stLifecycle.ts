@@ -27,10 +27,14 @@
  * - auto_proxy 代理检测对齐 urllib.getproxies：环境变量
  *   （HTTPS_PROXY/HTTP_PROXY/ALL_PROXY）优先，无环境变量时回退读
  *   Windows 注册表系统代理（reg query ProxyEnable/ProxyServer）。
+ *   检测到候选后必须过 TCP 可达性门检（probeProxyReachable）——注册表
+ *   残留的死代理（代理软件退出未清理）直接烘焙进 config.yaml 会让 ST
+ *   全部出站请求 ECONNREFUSED（2026-09-29 新用户 127.0.0.1:10808 实锤）。
  * DEVIATION: "SillyTavern 正在运行" 判断从 terminal.is_running 标志改为
  *   processManager 活动进程计数（等价状态源）。
  */
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import net from 'node:net'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { getConfigStore, type ConfigStore, type EnvMode } from './configStore'
@@ -478,6 +482,67 @@ export function normalizeProxyServer(value: string): string {
   return candidate
 }
 
+/** 代理 URL 缺显式端口时的协议默认端口（socks 系列统一 1080，对齐惯例） */
+const PROXY_DEFAULT_PORTS: Record<string, number> = {
+  'http:': 80,
+  'https:': 443,
+  'socks:': 1080,
+  'socks4:': 1080,
+  'socks5:': 1080,
+}
+
+export interface ProxyEndpoint {
+  host: string
+  port: number
+}
+
+/**
+ * 代理 URL → {host, port}；协议无默认端口且未写端口 / 主机名缺失 / 端口越界 → null。
+ * 解析失败即视为不可探测（调用方按不可达处理）。
+ */
+export function extractProxyEndpoint(url: string): ProxyEndpoint | null {
+  const trimmed = url.trim()
+  if (!trimmed) return null
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return null
+  }
+  const host = parsed.hostname
+  if (!host) return null
+  const port = parsed.port !== '' ? Number(parsed.port) : PROXY_DEFAULT_PORTS[parsed.protocol]
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return null
+  return { host, port }
+}
+
+/** 代理可达性探测超时（毫秒）：本机代理拒绝连接是即时的，超时只兜防火墙丢包场景 */
+export const PROXY_PROBE_TIMEOUT_MS = 1000
+
+/**
+ * 代理可达性探测（TCP 层）：只验证 host:port 有进程在听，不校验代理协议——
+ * ST 经代理出站的失败模式（ECONNREFUSED）正是端口无监听。ping 不可替代：
+ * 127.0.0.1 ping 恒通但端口可以没人听。node:net 直连（非子进程，不经 runtime）。
+ */
+export function probeProxyReachable(
+  url: string,
+  timeoutMs: number = PROXY_PROBE_TIMEOUT_MS,
+): Promise<boolean> {
+  const endpoint = extractProxyEndpoint(url)
+  if (!endpoint) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: endpoint.host, port: endpoint.port })
+    const settle = (ok: boolean): void => {
+      socket.removeAllListeners()
+      socket.destroy()
+      resolve(ok)
+    }
+    socket.setTimeout(timeoutMs, () => settle(false))
+    socket.once('connect', () => settle(true))
+    socket.once('error', () => settle(false))
+  })
+}
+
 export interface StProxyConfig {
   proxyEnabled: boolean
   proxyUrl: string
@@ -500,6 +565,11 @@ export interface StLifecycleDeps {
   stConfig?: StProxyConfig
   /** 注册表系统代理读取（← getproxies_registry）；测试注入以隔离真实注册表 */
   readRegistryProxy?: () => string
+  /**
+   * 代理可达性探测（TCP 连接）；测试注入以隔离真实网络。
+   * 默认 probeProxyReachable——注册表/环境变量声明有代理 ≠ 代理在运行。
+   */
+  probeProxyReachable?: (url: string) => Promise<boolean>
   getActiveProcessesCount?: () => number
   /** ST 服务进程是否在运行（← Python is_running 显式标志语义；默认按 kind='st-server' 检查） */
   hasStServerProcess?: () => boolean
@@ -938,6 +1008,16 @@ export class StLifecycle {
       stCfg.proxyEnabled = false
       stCfg.save()
       this.log('未检测到有效的系统代理，已自动关闭请求代理')
+      return
+    }
+    // 可达性门检（2026-09-29 新用户 ECONNREFUSED 127.0.0.1:10808 实锤）：
+    // 代理软件退出后注册表系统代理常残留（ProxyEnable 仍 =1），把死地址烘焙进
+    // config.yaml 会让 ST 全部出站请求 ECONNREFUSED——探测失败 fail-safe 直连。
+    const probe = this.deps.probeProxyReachable ?? probeProxyReachable
+    if (!(await probe(proxyUrl))) {
+      stCfg.proxyEnabled = false
+      stCfg.save()
+      this.log(`检测到系统代理 ${proxyUrl} 但无法连接（代理软件可能未运行），已忽略，酒馆将直连`)
       return
     }
     stCfg.proxyEnabled = true

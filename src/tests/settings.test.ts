@@ -12,13 +12,32 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConfigStore, SystemEnvProbes } from '../services/configStore'
 
+// stConfig 全局单例替换为内存假对象（避免 settings store 测试读写真实 cwd 的
+// SillyTavern/config.yaml——仓库根并无该目录，真跑会污染仓库）
+const stConfigMock = vi.hoisted(() => ({
+  instance: null as { proxyEnabled: boolean; proxyUrl: string; save: () => boolean } | null,
+}))
+vi.mock('../services/stConfig', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/stConfig')>()),
+  getStConfig: () => {
+    if (!stConfigMock.instance) {
+      stConfigMock.instance = { proxyEnabled: false, proxyUrl: '', save: () => true }
+    }
+    return stConfigMock.instance
+  },
+}))
+
 type EnvModeLiteral = 'portable' | 'system' | 'embedded'
 
 interface SettingsModule {
   useSettings: {
     getState: () => {
       envMode: EnvModeLiteral
-      update: (patch: { envMode?: EnvModeLiteral }) => void
+      update: (patch: {
+        envMode?: EnvModeLiteral
+        autoProxy?: boolean
+        customArgs?: string
+      }) => void
       reload: () => void
     }
   }
@@ -196,5 +215,50 @@ describe('detectEnvType 三级探测（D5，首启 checkAndSetEnvType）', () =>
     // 注入达标探测也不应被消费：若误走首启探测会覆盖成 system，保持 embedded 才证明未触发
     const store = new ConfigStore(join(tempDir, 'config.json'), tempDir, OK_PROBES)
     expect(store.get<EnvModeLiteral>('env_mode', 'portable')).toBe('embedded')
+  })
+})
+
+describe('auto_proxy 关闭 → requestProxy 托管残留清理（2026-09-29 ECONNREFUSED 根因收口）', () => {
+  beforeEach(() => {
+    stConfigMock.instance = null
+  })
+
+  it('update({autoProxy:false}) 清掉 stConfig.proxyEnabled（该键唯一界面来源是自动检测）', async () => {
+    // 场景回放：auto_proxy 开启时自动检测把（后来死掉的）代理烘焙进 config.yaml
+    stConfigMock.instance = { proxyEnabled: true, proxyUrl: 'http://127.0.0.1:10808', save: () => true }
+    const { useSettings, config } = await freshModules(tempDir)
+    config.set('auto_proxy', true)
+    config.save()
+
+    useSettings.getState().update({ autoProxy: false })
+
+    // 托管键撤回：enable 关闭，URL 保留（与"未检测到代理"分支同口径）
+    expect(stConfigMock.instance?.proxyEnabled).toBe(false)
+    expect(stConfigMock.instance?.proxyUrl).toBe('http://127.0.0.1:10808')
+    expect(config.get<boolean>('auto_proxy', true)).toBe(false)
+  })
+
+  it('更新其他字段 / 开启 autoProxy 不触碰 requestProxy', async () => {
+    stConfigMock.instance = { proxyEnabled: true, proxyUrl: 'http://10.0.0.2:8888', save: () => true }
+    const { useSettings } = await freshModules(tempDir)
+    useSettings.getState().update({ customArgs: '--foo' })
+    expect(stConfigMock.instance?.proxyEnabled).toBe(true)
+    useSettings.getState().update({ autoProxy: true })
+    expect(stConfigMock.instance?.proxyEnabled).toBe(true)
+  })
+
+  it('残留已是关闭态 → 不发起 config.yaml 写入（幂等，无副作用）', async () => {
+    let saveCalls = 0
+    stConfigMock.instance = {
+      proxyEnabled: false,
+      proxyUrl: '',
+      save: () => {
+        saveCalls += 1
+        return true
+      },
+    }
+    const { useSettings } = await freshModules(tempDir)
+    useSettings.getState().update({ autoProxy: false })
+    expect(saveCalls).toBe(0)
   })
 })

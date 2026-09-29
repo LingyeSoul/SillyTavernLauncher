@@ -22,8 +22,10 @@ import {
   buildNpmInstallCommandNoOmit,
   buildStStartCommand,
   checkStatusFromPorcelain,
+  extractProxyEndpoint,
   normalizeProxyServer,
   parseGitConfigIni,
+  probeProxyReachable,
   readGitConfigText,
   readWindowsRegistryProxy,
   resolveToolchain,
@@ -389,7 +391,10 @@ describe('autoDetectProxy（auto_proxy 开启时）', () => {
     setupSt({ nodeModules: true })
     const harness = makeExecHarness(() => 0)
     const config = makeConfig({ auto_proxy: true })
-    const lifecycle = makeLifecycle({ config, deps: harness.deps })
+    const lifecycle = makeLifecycle({
+      config,
+      deps: { ...harness.deps, probeProxyReachable: async () => true },
+    })
     process.env.HTTPS_PROXY = 'http://127.0.0.1:7890'
 
     await lifecycle.startSt()
@@ -418,7 +423,11 @@ describe('autoDetectProxy（auto_proxy 开启时）', () => {
     const config = makeConfig({ auto_proxy: true })
     const lifecycle = makeLifecycle({
       config,
-      deps: { ...harness.deps, readRegistryProxy: () => 'http://10.0.0.2:8888' },
+      deps: {
+        ...harness.deps,
+        readRegistryProxy: () => 'http://10.0.0.2:8888',
+        probeProxyReachable: async () => true,
+      },
     })
 
     await lifecycle.startSt()
@@ -426,6 +435,33 @@ describe('autoDetectProxy（auto_proxy 开启时）', () => {
     expect(stConfigMock.instance?.proxyEnabled).toBe(true)
     expect(stConfigMock.instance?.proxyUrl).toBe('http://10.0.0.2:8888')
     expect(logs.some((message) => message.includes('自动设置代理: http://10.0.0.2:8888'))).toBe(true)
+  })
+
+  // 2026-09-29 新用户 ECONNREFUSED 127.0.0.1:10808 根因：代理软件退出后注册表
+  // 系统代理残留，检测到死地址直接烘焙进 config.yaml → ST 全部出站请求被打死
+  it('检测到代理但不可达 → 不写入，fail-safe 直连并记录日志', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const config = makeConfig({ auto_proxy: true })
+    const probedUrls: string[] = []
+    const lifecycle = makeLifecycle({
+      config,
+      deps: {
+        ...harness.deps,
+        readRegistryProxy: () => 'http://127.0.0.1:10808',
+        probeProxyReachable: async (url) => {
+          probedUrls.push(url)
+          return false
+        },
+      },
+    })
+
+    await lifecycle.startSt()
+
+    // 探测收到的正是检测到的候选地址（残留的注册表值）
+    expect(probedUrls).toEqual(['http://127.0.0.1:10808'])
+    expect(stConfigMock.instance?.proxyEnabled).toBe(false)
+    expect(logs.some((message) => message.includes('无法连接') && message.includes('10808'))).toBe(true)
   })
 })
 
@@ -473,6 +509,46 @@ describe('normalizeProxyServer / readWindowsRegistryProxy（← getproxies_regis
       ).toBe('')
     },
   )
+})
+
+describe('extractProxyEndpoint / probeProxyReachable（可达性门检）', () => {
+  it('常见协议解析：显式端口直取，缺省端口按协议补', () => {
+    expect(extractProxyEndpoint('http://127.0.0.1:10808')).toEqual({ host: '127.0.0.1', port: 10808 })
+    expect(extractProxyEndpoint('socks5://127.0.0.1')).toEqual({ host: '127.0.0.1', port: 1080 })
+    expect(extractProxyEndpoint('http://proxy.local')).toEqual({ host: 'proxy.local', port: 80 })
+    expect(extractProxyEndpoint('https://proxy.local:8443')).toEqual({ host: 'proxy.local', port: 8443 })
+  })
+
+  it('非法输入 → null（探测按不可达处理）', () => {
+    expect(extractProxyEndpoint('')).toBeNull()
+    expect(extractProxyEndpoint('not a url')).toBeNull()
+    // 无默认端口的协议且未写端口 → 无法探测
+    expect(extractProxyEndpoint('gopher://proxy.local')).toBeNull()
+  })
+
+  it('probeProxyReachable：URL 解析失败直接 false，不发起连接', async () => {
+    expect(await probeProxyReachable('not a url')).toBe(false)
+    expect(await probeProxyReachable('')).toBe(false)
+  })
+
+  it('probeProxyReachable：本机无监听端口 → false（ECONNREFUSED 即时返回）', async () => {
+    // 临时 TCP server 探活的反面：绑一个空闲端口（listen 后关闭）再探测必拒绝。
+    // 选 IANA 保留的丢弃端口 9（discard）——本机几乎不可能有服务在听。
+    expect(await probeProxyReachable('http://127.0.0.1:9', 500)).toBe(false)
+  })
+
+  it('probeProxyReachable：真实监听端口 → true', async () => {
+    const { createServer } = await import('node:http')
+    const server = createServer()
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (address === null || typeof address === 'string') throw new Error('未取得监听端口')
+    try {
+      expect(await probeProxyReachable(`http://127.0.0.1:${address.port}`, 1000)).toBe(true)
+    } finally {
+      server.close()
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
