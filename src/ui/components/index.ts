@@ -15,6 +15,15 @@ export { IconButton, type IconButtonProps } from './IconButton'
 export { Modal, type ModalProps } from './Modal'
 export { EmptyState, type EmptyStateProps } from './EmptyState'
 export { ProgressBar, type ProgressBarProps } from './ProgressBar'
+export {
+  ScrollBar,
+  type ScrollBarProps,
+  SCROLLBAR_TRACK_W,
+  thumbGeometry,
+  thumbTopFor,
+  rowForThumbTop,
+  wheelToRows,
+} from './ScrollBar'
 export { SkeletonBlock, SkeletonCards } from './Skeleton'
 export { ToastHost } from './Toast'
 export { Tooltip, TooltipProvider } from './Tooltip'

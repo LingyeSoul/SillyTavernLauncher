@@ -13,17 +13,23 @@
  *   跟随（新行入库前滑）由本视图推动——gpuix 文档明确 itemCount 增长不会
  *   自动扩窗，不推窗新行永远不挂载。
  * - 底部 5 按钮接 stLifecycle（安装/启动/停止/更新/清空，各带 tooltip 350ms）。
+ * - 右缘自绘滚动条（2026-09-29，components/ScrollBar）：轨道为列表兄弟列
+ *   （12px 常驻预留），thumb 由 onVisibleRange 事件驱动、拖拽经 scrollToItem
+ *   行进；日志卡因此改行布局（无日志时保持列布局喂 EmptyState）。
  * - 中文文案集中于顶部常量对象（i18n 缝）。
  */
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { motion, useWindowSize } from '@gpuix/react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { motion, useGpuixRequired, useWindowSize } from '@gpuix/react'
+import type { PublicInstance } from '@gpuix/react'
 import type { EventPayload } from '@gpuix/native'
 import { EASE_OUT_QUAD, dur, layout } from '../../theme'
 import { useMotion, useTheme } from '../theme'
 import { Button } from '../components/Button'
 import { EmptyState } from '../components/EmptyState'
+import { ScrollBar, SCROLLBAR_TRACK_W } from '../components/ScrollBar'
 import { Tooltip } from '../components/Tooltip'
 import type { IconName } from '../components/icons'
+import { mainWindowQueryState } from '../../services/windowControl'
 import {
   classifyLogLevel,
   useTerminalLogs,
@@ -70,9 +76,23 @@ const TEXTS = {
 const DIVIDER_PX = 1
 const CARD_BORDER_PX = 2
 const LIST_PADDING_X_PX = 16
+/** 底部按钮行高（按钮 34 垂直居中于 50 高容器），布局预算与滚动条轨道高推导共用 */
+const BUTTON_ROW_H = 50
+/**
+ * 滚动条轨道高的布局推导（窗口定尺寸 800×644）：
+ * 内容区 644 − 视图 padding 24 − 卡片 gap 12 − 按钮行 50 − 卡片边框 2 = 556。
+ * 实测 bounds 落地前的初值（ScrollBar 内部自愈修正）。
+ */
+const TRACK_H_ESTIMATE =
+  layout.windowH - 2 * layout.padTerminal - layout.padTerminal - BUTTON_ROW_H - CARD_BORDER_PX
 
 function terminalTextWidthPx(windowWidth: number): number {
-  return windowWidth - layout.sidebarW - DIVIDER_PX - 2 * layout.padTerminal - CARD_BORDER_PX - LIST_PADDING_X_PX
+  // SCROLLBAR_TRACK_W：有日志时轨道列常驻（宽度稳定优先于"恰好装满"，
+  // 防溢出临界点上折行列数抖动），文本可用宽相应扣减
+  return (
+    windowWidth - layout.sidebarW - DIVIDER_PX - 2 * layout.padTerminal - CARD_BORDER_PX - LIST_PADDING_X_PX -
+    SCROLLBAR_TRACK_W
+  )
 }
 
 /** 单行渲染：引擎预解析段 = 相邻 <text>；无色行按日志级别兜底着色。
@@ -151,6 +171,10 @@ export function TerminalView() {
   const [windowStart, setWindowStart] = useState(() => Math.max(0, lineCount - WINDOW_ROWS))
   /** 用户是否处于尾部（可见区间覆盖末行）；尾部时新行入库窗口前滑 */
   const atTailRef = useRef(true)
+  /** onVisibleRange 最近一次区间（滚动条 thumb 驱动；缺字段事件不更新，推窗"不动窗口"口径） */
+  const [visibleRange, setVisibleRange] = useState<{ start: number; end: number } | null>(null)
+  /** 尾部跟随的 UI 镜像（与 atTailRef 同点位写；滚动条尾部锚定用） */
+  const [tailPinned, setTailPinned] = useState(true)
   /** 入场动画截止线：id 大于它的行才播动画（历史行/滑回行不播）。
    *  useRef 初值即挂载时存量最大 id：打开视图时历史行不播入场动画 */
   const lastSeenIdRef = useRef<number>(useTerminalLogs.getState().getLastId())
@@ -167,11 +191,16 @@ export function TerminalView() {
 
   const handleVisibleRange = (e: EventPayload): void => {
     const len = useTerminalLogs.getState().lines.length
+    if (e.startIndex !== undefined && e.endIndex !== undefined) {
+      setVisibleRange({ start: e.startIndex, end: e.endIndex })
+    }
     if ((e.endIndex ?? len) >= len) {
       atTailRef.current = true
+      setTailPinned(true)
       setWindowStart(Math.max(0, len - WINDOW_ROWS))
     } else {
       atTailRef.current = false
+      setTailPinned(false)
       setWindowStart(Math.max(0, Math.min((e.startIndex ?? 0) - WINDOW_OVERSCAN, len - WINDOW_ROWS)))
     }
   }
@@ -179,9 +208,31 @@ export function TerminalView() {
   /** 清空同时复位窗口与尾部状态：防止缓冲清空后窗口停留在越界位置 */
   const handleClear = (): void => {
     atTailRef.current = true
+    setTailPinned(true)
+    setVisibleRange(null)
     setWindowStart(0)
     clear()
   }
+
+  // 滚动条行进出口：scrollToItem 走逻辑行号（窗口化协议下 native 侧自行解锚，
+  // mirrorDialogPerf 深滚用例已实证）；renderer 调用一律冻结门检 + try/catch
+  //（AGENTS.md 铁律）。行数取 getState 现值——拖拽中有新行入库时渲染期闭包已过期
+  const renderer = useGpuixRequired()
+  const listRef = useRef<PublicInstance | null>(null)
+  const scrollToRow = useCallback(
+    (row: number): void => {
+      const el = listRef.current
+      if (!el || mainWindowQueryState() === 'frozen') return
+      const len = useTerminalLogs.getState().lines.length
+      if (len <= 0) return
+      try {
+        renderer.scrollToItem?.(el.id, Math.min(Math.max(row, 0), len - 1), 0)
+      } catch (err) {
+        logError(`[terminal] 滚动条行进失败: ${errMsg(err)}`)
+      }
+    },
+    [renderer],
+  )
   // 字号联动 virtual-list 估算高度（与 LogRow 行高同源：terminalRowHeight）
   const fontSize = useSettings((s) => s.terminalFontSize)
   const fontFamilySetting = useSettings((s) => s.terminalFontFamily)
@@ -206,6 +257,13 @@ export function TerminalView() {
   const openDialog = useUiState((s) => s.openDialog)
 
   const hasLogs = lineCount > 0
+  // 滚动条锚点推导：尾部跟随时 visibleRange 事件不随行入库连发，锚点须由行数
+  // 现算（否则 thumb 随新行漂向上）；非尾部用最近事件区间。可视行数无事件时
+  // 按布局估算（≈556/行高）
+  const estVisibleRows = Math.max(1, Math.round(TRACK_H_ESTIMATE / estimatedRowHeight))
+  const visibleRows = visibleRange ? Math.max(1, visibleRange.end - visibleRange.start) : estVisibleRows
+  const startRow = tailPinned || !visibleRange ? Math.max(0, lineCount - visibleRows) : visibleRange.start
+  const logOverflow = lineCount > visibleRows
   const windowLines = useTerminalLogs.getState().getRange(windowStart, windowStart + WINDOW_ROWS)
 
   /** ← Flet install_sillytavern：ST 未安装时先过年龄确认对话框 */
@@ -296,14 +354,15 @@ export function TerminalView() {
         padding: layout.padTerminal,
         gap: layout.padTerminal,
       }}>
-      {/* 日志卡：bg-deep 外框 + 1px subtle + radius 6 */}
+      {/* 日志卡：bg-deep 外框 + 1px subtle + radius 6。有日志时行布局
+          （virtual-list + 右缘滚动条轨道兄弟列）；无日志保持列布局喂 EmptyState */}
       <div
         testId="terminal-log-card"
         style={{
           flexGrow: 1,
           minHeight: 0,
           display: 'flex',
-          flexDirection: 'column',
+          flexDirection: hasLogs ? 'row' : 'column',
           backgroundColor: t.bg.deep,
           borderWidth: 1,
           borderColor: t.border.subtle,
@@ -311,18 +370,39 @@ export function TerminalView() {
           overflow: 'hidden',
         }}>
         {hasLogs ? (
-          <virtual-list
-            alignment="top"
-            followTail
-            itemCount={lineCount}
-            windowStart={windowStart}
-            estimatedItemHeight={estimatedRowHeight}
-            onVisibleRange={handleVisibleRange}
-            style={{ flexGrow: 1, minHeight: 0, paddingLeft: 8, paddingRight: 8, paddingTop: 4, paddingBottom: 4 }}>
-            {windowLines.map((line) => (
-              <LogRow key={line.id} line={line} animate={line.animate && line.id > animateCutoff} />
-            ))}
-          </virtual-list>
+          <>
+            <virtual-list
+              ref={listRef}
+              testId="terminal-log-list"
+              alignment="top"
+              followTail
+              itemCount={lineCount}
+              windowStart={windowStart}
+              estimatedItemHeight={estimatedRowHeight}
+              onVisibleRange={handleVisibleRange}
+              style={{
+                flexGrow: 1,
+                minWidth: 0,
+                paddingLeft: 8,
+                paddingRight: 8,
+                paddingTop: 4,
+                paddingBottom: 4,
+              }}>
+              {windowLines.map((line) => (
+                <LogRow key={line.id} line={line} animate={line.animate && line.id > animateCutoff} />
+              ))}
+            </virtual-list>
+            <ScrollBar
+              testId="terminal-scrollbar"
+              itemCount={lineCount}
+              visibleRows={visibleRows}
+              startRow={startRow}
+              rowHeight={estimatedRowHeight}
+              overflow={logOverflow}
+              onScrollToRow={scrollToRow}
+              estimatedTrackH={TRACK_H_ESTIMATE}
+            />
+          </>
         ) : (
           <EmptyState
             icon="terminal"
@@ -335,7 +415,7 @@ export function TerminalView() {
       {/* 按钮行：高 50，按钮 34 垂直居中，5 按钮等宽 96 gap 8 水平居中 */}
       <div
         style={{
-          height: 50,
+          height: BUTTON_ROW_H,
           display: 'flex',
           flexDirection: 'row',
           alignItems: 'center',
