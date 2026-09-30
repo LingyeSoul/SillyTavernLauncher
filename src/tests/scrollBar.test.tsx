@@ -17,6 +17,7 @@ import { createTestRoot } from '@gpuix/react/testing'
 import type { TestRoot } from '@gpuix/react/testing'
 import {
   SCROLLBAR_MIN_THUMB_H,
+  SCROLLBAR_TRACK_W,
   rowForThumbTop,
   thumbGeometry,
   thumbTopFor,
@@ -240,5 +241,48 @@ describe('ScrollBar 集成（TerminalView 真实管线）', () => {
     app.useTerminalLogs.getState().clear()
     await waitForRenders(() => renderer().findByTestId('terminal-scrollbar') === undefined)
     expect(renderer().findByTestId('terminal-log-list')).toBeUndefined()
+  }, 60_000)
+
+  it('拖拽滚动条零选区 + 命中区几何（2026-09-30 拖拽误选修复回归锁）', async () => {
+    // 上一用例清空后轨道已卸载：重新灌日志让日志卡回到列表形态
+    app.useTerminalLogs.getState().appendBatch(
+      Array.from({ length: 400 }, (_, i) => ({ text: `sel-test-${i}` })),
+    )
+    renderer().flush()
+    await waitForRenders(() => renderer().findByTestId('terminal-scrollbar') !== undefined)
+
+    // —— 命中区几何：轨道 16px / thumb 6px（可见化加宽，见 ScrollBar 文件头） ——
+    const track = renderer().findByTestId('terminal-scrollbar')!
+    const thumb = renderer().findByTestId('terminal-scrollbar-thumb')!
+    const tb = renderer().getElementBounds(track.id)!
+    expect(tb.width, '轨道宽 = SCROLLBAR_TRACK_W（命中区即轨道盒）').toBe(SCROLLBAR_TRACK_W)
+    expect(renderer().getElementBounds(thumb.id)!.width, 'thumb 视觉宽 6px').toBe(6)
+
+    // —— 零选区契约（用户报障形态）：thumb 命中区中心按下（无跳转路径——原生
+    //    选择锚点在 mouseDown 即武装，真窗探针 P5 实证此形态拖动扫过可选文本
+    //    即成选区）→ 分步拖动左漂扫过日志行，全程不得残留选区。修复 =
+    //    ScrollBar 拖拽会话逐 move clearSelection（dragSelect 原生助手不经
+    //    dispatchNativeEvents 派发 JS 事件，清选区 handler 不会跑——必须用
+    //    nativeSimulate* + dispatch 显式驱动，同上方拖拽用例） ——
+    const mb = renderer().getElementBounds(thumb.id)!
+    const grabX = mb.x + mb.width / 2
+    const grabY = mb.y + mb.height / 2
+    renderer().clearSelection()
+    renderer().nativeSimulateMouseDown(grabX, grabY)
+    for (let i = 1; i <= 6; i++) {
+      renderer().nativeSimulateMouseMove(grabX - i * 25, grabY - i * 8, 0)
+      renderer().flush()
+      renderer().dispatchNativeEvents()
+    }
+    renderer().nativeSimulateMouseUp(grabX - 150, grabY - 48)
+    renderer().flush()
+    renderer().dispatchNativeEvents()
+    await settle()
+    expect(renderer().getSelectedText(), 'thumb 按下扫过日志行：全程不得产生选区').toBeNull()
+
+    // DEVIATION: 不在 offscreen 台架断言"文本按下拖动可选中"对照——virtual-list
+    // 内的文本按下扫选在本台架恒 null（探针 C1 新鲜状态亦然，scripts/probe-control-select.ts），
+    // 真窗却正常（e2e 探针 P0 选中 seed-log-377..379）：offscreen/live 在 virtual-list
+    // 选择注册上的又一分歧（同 vr 事件前科）。复制特性的对照锁放 e2e 链路 4。
   }, 60_000)
 })

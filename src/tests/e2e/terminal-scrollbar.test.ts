@@ -2,15 +2,22 @@
  * E2E：终端滚动条契约（2026-09-30 thumb 卡死缺陷取证 + 回归锁）。
  *
  * 根因（真窗探针 scroll-probe.log 实证）：live 渲染器对程序化 scrollToItem
- * 不发 onVisibleRange 事件（拖拽全程 0 条，释后 2.3s 迟来一条陈旧区间），
+ * 不发 onVisibleRange 事件（拖拽全程 0 条，释后 2.3s 才迟来一条陈旧区间），
  * offscreen 台架却即时连发——单测全绿、真窗 thumb 卡死。原生用户滚轮（直滚
  * 列表）事件正常。修复后锚点单一真源 = getListScrollTop 原生读回（TerminalView
  * 锚点数据流注释）。
  *
- * 三条链路断言（缺一即回归）：
+ * 四条链路断言（缺一即回归）：
  * 1. 拖拽 thumb → 日志行进且 thumb 全程跟随（中程采样，不得卡死）；
  * 2. 深拖到头 → 推窗生效，首行挂载可见（程序化滚动路径的窗口推进）；
  * 3. 列表本体原生滚轮 → vr 事件 + 读回校正，thumb 随行。
+ * 4. 拖拽全程零文本选区（2026-09-30 拖拽误选修复）：原生选择锚点在
+ *    mouseDown 即武装——thumb 命中区按下（无跳转路径）+ 拖动扫过可选文本
+ *    即成选区（真窗探针 P5 复现，"拖动滚动条日志被选中"报障根因）；thumb
+ *    外按下会因 scrollToItem 跳转意外抑制选择（P6），故链路 1 的 0.8 轨高
+ *    按法测不到本缺陷，必须 thumb 区内按。修复 = ScrollBar 拖拽会话逐 move
+ *    clearSelection + 轨道可见化加宽（16px 常显底色，防脱靶按下直击文本行）。
+ *    对照腿：日志行上按下拖动必须可选（复制特性不得被误杀，探针 P0）。
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
@@ -98,6 +105,35 @@ describe('终端滚动条（真窗口）', () => {
       thumbB2.y - thumbB1.y,
       `原生滚轮下滚后 thumb 应下移（贴顶 y=${thumbB1.y} → y=${thumbB2.y}）`,
     ).toBeGreaterThan(10)
+
+    // —— 链路 4：thumb 区按下拖拽全程零选区（修复锁）——
+    const selectedText = async (): Promise<string | null> =>
+      (await app.call('getSelectedText', {})).text
+    await app.call('clearSelection', {})
+    const grab2X = thumbB2.x + thumbB2.width / 2
+    const grab2Y = thumbB2.y + thumbB2.height / 2
+    await app.mouse.down({ x: grab2X, y: grab2Y })
+    for (let i = 1; i <= 6; i++) {
+      // 左漂扫过日志行：修复前原生锚点把扫过区间变成选区（探针 P5 形态）
+      await app.mouse.move({ x: grab2X - i * 25, y: grab2Y - i * 6 }, { pressedButton: 0 })
+      await sleep(40)
+    }
+    await app.mouse.up({ x: grab2X - 150, y: grab2Y - 36 })
+    await sleep(250)
+    expect(await selectedText(), 'thumb 拖拽扫过日志行：全程不得产生选区').toBeNull()
+
+    // —— 链路 4 对照腿：日志行上按下拖动必须可选（复制特性不得被误杀） ——
+    await app.call('clearSelection', {})
+    const rowY = trackB.y + 120
+    await app.mouse.down({ x: trackB.x - 60, y: rowY })
+    for (let i = 1; i <= 5; i++) {
+      await app.mouse.move({ x: trackB.x - 60, y: rowY - i * 10 }, { pressedButton: 0 })
+      await sleep(30)
+    }
+    await app.mouse.up({ x: trackB.x - 60, y: rowY - 50 })
+    await sleep(200)
+    expect(await selectedText(), '文本按下拖动：选择机制必须在（复制特性）').toContain('seed-log-')
+    await app.call('clearSelection', {})
 
     dumpProbeTail(session)
   }, 120_000)

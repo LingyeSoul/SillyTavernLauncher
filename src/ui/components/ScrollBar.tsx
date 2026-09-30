@@ -15,6 +15,15 @@
  *   纯视觉 pointerEvents:'none'，根本不需要自己的处理器）；按下点在 thumb
  *   外时先跳转到点击处居中再进入拖拽（现代滚动条语义）；释放发生在轨道外
  *   收不到 mouseUp，由后续 mouseMove 的 pressedButton≠0 自愈终止拖拽；
+ * - 命中区设计（2026-09-30 拖拽误选修复，同日按用户决策改隐藏式）：GPUIX
+ *   原生文本选择只由**按下点**决定（真窗探针 P0–P6 实证：选择锚点在
+ *   mouseDown 即武装，thumb 命中区按下无跳转 + 拖动扫过可选文本 = 成选区；
+ *   脱靶按下直击文本行同样扫选）。日志文本可选中是复制特性不能禁 → 防误选
+ *   分两层：① 拖拽会话逐 move clearSelection（clearSelectionDuringDrag，
+ *   本组件内）；② 命中区加宽 16px（原 12px）。DEVIATION: 曾按"轨道常显
+ *   极淡底色 + hover 加深"做可见化，用户嫌丑改为**隐藏式**（轨道透明透出
+ *   宿主背景、thumb 常显 + hover 变色为唯一反馈）——脱靶防护由此收窄到
+ *   16px 宽度一层，美观优先系用户拍板；
  * - 滚轮转发：轨道必须 pointerEvents:'auto' 才收得到 mouseDown，代价是吃掉
  *   滚轮（GPUIX 滚轮只达命中元素、不冒泡，virtual-list 是兄弟节点收不到）
  *   → onScroll 把 delta 换算成行数经 onScrollToRow 转发回列表：
@@ -30,10 +39,14 @@ import { useTheme } from '../theme'
 import { errMsg, logError } from '../../services/errorLog'
 import { mainWindowQueryState } from '../../services/windowControl'
 
-/** 轨道宽（日志卡右缘常驻预留列；virtual-list 兄弟节点） */
-export const SCROLLBAR_TRACK_W = 12
-/** thumb 视觉宽（命中区为整条轨道，thumb 纯视觉） */
-export const SCROLLBAR_THUMB_W = 4
+/** 轨道宽（日志卡右缘常驻预留列；virtual-list 兄弟节点）。命中区即轨道盒——
+ *  加宽到 16（原 12）是为压低"瞄准 thumb 脱靶落在文本行上触发原生扫选"的
+ *  暴露面（2026-09-30 误选修复，见文件头"命中区可见化"）；行宽口径（容器
+ *  内宽 − 本常量）随之自动传播，勿在宿主侧再散写 */
+export const SCROLLBAR_TRACK_W = 16
+/** thumb 视觉宽（命中区为整条轨道，thumb 纯视觉；6px 居中于 16px 轨道，
+ *  提高瞄准观感） */
+export const SCROLLBAR_THUMB_W = 6
 /** thumb 最小高：行数极大时避免缩成不可抓取的细线 */
 export const SCROLLBAR_MIN_THUMB_H = 24
 
@@ -160,9 +173,25 @@ export function ScrollBar({
   const geo = thumbGeometry(trackH, itemCount, visibleRows)
   const thumbTop = thumbTopFor(startRow, itemCount, visibleRows, geo)
 
+  /** 拖拽会话清选区（2026-09-30 误选修复核心）：原生选择锚点在 mouseDown 即
+   *  武装——按下点在轨道上也一样（真窗探针 P5 实证：thumb 区按下无跳转 +
+   *  拖动扫过可选文本 = 成选区；scrollToItem 跳转路径会意外抑制它，探针 P6）。
+   *  GPUIX 无"按下手势声明/抢占"API，唯一正牌出口 = 每次拖拽 move 清一次选区
+   *  （拖拽中本就逐帧重绘，clearSelection 附带的 repaint 请求零额外成本） */
+  const clearSelectionDuringDrag = (): void => {
+    try {
+      // 门面类型上为可选方法（同 getElementBounds?. 范式；缺席 = 该渲染器无选择实现）
+      renderer.clearSelection?.()
+    } catch (err) {
+      logError(`[ScrollBar] 拖拽清选区失败: ${errMsg(err)}`)
+    }
+  }
+
   const endDrag = (): void => {
     if (dragRef.current) dragRef.current = null
     setDragging(false)
+    // 释后终态兜底（末次 move 与 up 之间原生侧不再新增选区，双保险）
+    clearSelectionDuringDrag()
   }
 
   const handleMouseDown = (e: EventPayload): void => {
@@ -205,6 +234,8 @@ export function ScrollBar({
     }
     const yLocal = (e.y ?? 0) - drag.boundsY
     onScrollToRow(rowForThumbTop(yLocal - drag.grabOffset, itemCount, visibleRows, geo))
+    // 扫过可选文本不得成选区（按下即武装的原生锚点，见 clearSelectionDuringDrag）
+    clearSelectionDuringDrag()
   }
 
   /** 滚轮转发：轨道 pointerEvents:'auto' 吃掉的滚轮，换算行数还给列表 */
