@@ -207,15 +207,34 @@ describe('ScrollBar 集成（TerminalView 真实管线）', () => {
     await settle()
     expect(anchorOf(), '轨道滚轮应推进列表锚行').toBeGreaterThan(anchorHead)
 
-    // —— 拖拽 thumb：从当前位置（头部）拖到轨道底部 → 锚行到尾部 ——
+    // —— 拖拽 thumb：从当前位置（头部）分步拖到轨道底部，逐步断言 thumb 跟随 ——
+    // （2026-09-30 契约补缺：原用例单次大位移 move 且只断言列表锚行，从未断言
+    //  拖拽过程中 thumb 位置——真窗"thumb 卡死"缺陷正是从这个缺口漏网的）
     const thumbAtHead = renderer().getElementBounds(renderer().findByTestId('terminal-scrollbar-thumb')!.id)!
     const grabX = thumbAtHead.x + thumbAtHead.width / 2
     const grabY = thumbAtHead.y + thumbAtHead.height / 2
     renderer().nativeSimulateMouseDown(grabX, grabY)
-    renderer().nativeSimulateMouseMove(grabX, tb.y + tb.height - 30, 0)
+    const dragSteps = 6
+    let midThumbY = Number.NaN
+    for (let i = 1; i <= dragSteps; i++) {
+      const y = grabY + ((tb.y + tb.height - 30 - grabY) * i) / dragSteps
+      renderer().nativeSimulateMouseMove(grabX, y, 0)
+      renderer().flush()
+      renderer().dispatchNativeEvents()
+      if (i === dragSteps / 2) {
+        const mid = renderer().getElementBounds(renderer().findByTestId('terminal-scrollbar-thumb')!.id)
+        midThumbY = mid?.y ?? Number.NaN
+      }
+    }
     renderer().nativeSimulateMouseUp(grabX, tb.y + tb.height - 30)
     await waitForRenders(() => anchorOf() > 300)
     expect(renderer().findByText('scroll-test-399'), '拖到尾部后末行应已挂载可见').toBeDefined()
+    // 拖拽中程 thumb 必须已离开头部区（跟随行进，不得卡死）：起点 thumb 顶 ≈ 轨道顶，
+    // 半程时 thumb 顶应已下移超过轨道高的 1/4
+    expect(
+      midThumbY - thumbAtHead.y,
+      `拖拽中程 thumb 应跟随下移（起点 y=${thumbAtHead.y}，中程 y=${midThumbY}）`,
+    ).toBeGreaterThan(tb.height / 4)
 
     // —— 清空：轨道随日志卡空态卸载 ——
     app.useTerminalLogs.getState().clear()

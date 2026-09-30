@@ -204,6 +204,16 @@ process.on('exit', () => {
   }
 })
 
+// E2E/取证播种（STL_SEED_TERMINAL_LINES=N）：一次性灌 N 行终端日志。滚动条
+// 拖拽/深滚等用例需要溢出日志量，真实启动链路慢且不可控，种子路径零副作用
+//（同 STL_SKIP_AUTOSTART 口径：仅测试取证消费，正常启动不设此变量）
+const seedTerminalLines = Number(process.env.STL_SEED_TERMINAL_LINES ?? 0)
+if (Number.isFinite(seedTerminalLines) && seedTerminalLines > 0) {
+  useTerminalLogs
+    .getState()
+    .appendBatch(Array.from({ length: seedTerminalLines }, (_, i) => ({ text: `seed-log-${i}` })))
+}
+
 const WINDOW_OPTIONS = {
   title: 'SillyTavernLauncher',
   width: 800,

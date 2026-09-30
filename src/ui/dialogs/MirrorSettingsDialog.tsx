@@ -44,9 +44,10 @@
  *
  * ── 右缘自绘滚动条（2026-09-29，components/ScrollBar 同款）──
  * 列表右缘挂 ScrollBar 兄弟列（12px 常驻预留，行宽相应扣减——门禁②与 E2E 的
- * "行宽填满容器"断言口径改为容器内宽 − SCROLLBAR_TRACK_W）；thumb 由
- * onVisibleRange 事件驱动，拖拽/轨道点击/滚轮经 scrollToItem 行进。锚点与终端
- * 不同：对话框打开在顶部，无区间事件前锚 0（终端是尾部锚定）。
+ * "行宽填满容器"断言口径改为容器内宽 − SCROLLBAR_TRACK_W）；拖拽/轨道点击/
+ * 滚轮经 scrollToItem 行进。thumb 锚点双源合一（2026-09-30 同终端重构，见
+ * readNativeAnchor 注释）：vr 事件 + 滚动指令后的原生读回。锚点与终端不同：
+ * 对话框打开在顶部，无区间事件前锚 0（终端是尾部锚定）。
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useGpuixRequired } from '@gpuix/react'
@@ -207,44 +208,78 @@ export function MirrorSettingsDialog() {
   const scrollStartRow = visibleRange ? visibleRange.start : 0
 
   /**
-   * 可见区间 → 推窗（virtual-list itemCount/windowStart 协议）。
-   * 缺区间信息的 payload（首次布局等）不推窗：`endIndex ?? total` 会把"无信息"
-   * 当"已到尾部"，窗口跳到列表尾——打开对话框就看着最末几行（实测踩过）。
+   * 可视锚点统一应用（thumb 驱动 + 推窗，virtual-list itemCount/windowStart
+   * 协议）：vr 事件与滚动指令读回共用出口。同值不换引用——区间事件可能在
+   * 门禁③的空转窗口内重复抵达，不得产生提交。
+   */
+  const applyVisibleAnchor = useCallback(
+    (start: number, end: number): void => {
+      const total = rowSpecs.length
+      const s = Math.max(0, Math.min(start, Math.max(0, total - 1)))
+      setVisibleRange((prev) =>
+        prev !== null && prev.start === s && prev.end === end ? prev : { start: s, end },
+      )
+      const next =
+        end >= total
+          ? Math.max(0, total - WINDOW_ROWS)
+          : Math.max(0, Math.min(s - WINDOW_OVERSCAN, total - WINDOW_ROWS))
+      setWindowStart((prev) => (prev === next ? prev : next))
+    },
+    [rowSpecs.length],
+  )
+
+  /** 原生锚点读回（2026-09-30 真窗探针实证，同 TerminalView 重构）：live 渲染器
+   *  对程序化 scrollToItem 不发 vr 事件、迟发者载荷陈旧——锚点单一真源 = 读回 */
+  const readNativeAnchor = useCallback((): number | null => {
+    const el = listRef.current
+    if (!el || mainWindowQueryState() === 'frozen') return null
+    try {
+      const anchor = renderer.getListScrollTop?.(el.id)
+      if (anchor && Number.isFinite(anchor[0]) && anchor[0] >= 0) return anchor[0]
+    } catch (err) {
+      logError(`[mirrorSettings] 读回列表锚点失败: ${errMsg(err)}`)
+    }
+    return null
+  }, [renderer])
+
+  /**
+   * 可见区间 → 推窗。缺区间信息的 payload（首次布局等）不处理：`endIndex ??
+   * total` 会把"无信息"当"已到尾部"，窗口跳到列表尾——打开对话框就看着最末
+   * 几行（实测踩过）。锚点以原生读回校正（vr 载荷在 live 下可陈旧）。
    */
   const handleVisibleRange = (e: { startIndex?: number; endIndex?: number }): void => {
-    const total = rowSpecs.length
-    const start = e.startIndex
-    const end = e.endIndex
-    if (start === undefined && end === undefined) return
-    if (start !== undefined && end !== undefined) {
-      // 同值不换引用：区间事件可能在门禁③的空转窗口内重复抵达，不得产生提交
-      setVisibleRange((prev) =>
-        prev !== null && prev.start === start && prev.end === end ? prev : { start, end },
-      )
-    }
-    const next =
-      (end ?? total) >= total
-        ? Math.max(0, total - WINDOW_ROWS)
-        : Math.max(0, Math.min((start ?? 0) - WINDOW_OVERSCAN, total - WINDOW_ROWS))
-    setWindowStart((prev) => (prev === next ? prev : next))
+    if (e.startIndex === undefined && e.endIndex === undefined) return
+    const native = readNativeAnchor()
+    const start = native !== null ? native : (e.startIndex ?? 0)
+    const end =
+      e.endIndex ??
+      (visibleRange ? start + Math.max(1, visibleRange.end - visibleRange.start) : rowSpecs.length)
+    applyVisibleAnchor(start, end)
   }
 
   /** 滚动条行进出口：scrollToItem 走逻辑行号（窗口化协议下 native 自解锚，
    *  mirrorDialogPerf 深滚用例已实证）；renderer 调用一律冻结门检 + try/catch
-   *  （AGENTS.md 铁律，隐藏/最小化时原生侧不回应 bounds/scroll 查询） */
+   *  （AGENTS.md 铁律，隐藏/最小化时原生侧不回应 bounds/scroll 查询）。
+   *  行进后读回原生锚点立即应用：live 渲染器对程序化滚动不发 vr 事件（见
+   *  readNativeAnchor 注释），thumb/推窗由指令侧自驱动 */
   const scrollToRow = useCallback(
     (row: number): void => {
       const el = listRef.current
       if (!el || mainWindowQueryState() === 'frozen') return
       const total = rowSpecs.length
       if (total <= 0) return
+      const clamped = Math.min(Math.max(row, 0), total - 1)
       try {
-        renderer.scrollToItem?.(el.id, Math.min(Math.max(row, 0), total - 1), 0)
+        renderer.scrollToItem?.(el.id, clamped, 0)
       } catch (err) {
         logError(`[mirrorSettings] 滚动条行进失败: ${errMsg(err)}`)
+        return
       }
+      const native = readNativeAnchor()
+      const start = native !== null ? Math.min(native, total - 1) : clamped
+      applyVisibleAnchor(start, start + scrollVisibleRows)
     },
-    [renderer, rowSpecs.length],
+    [renderer, rowSpecs.length, readNativeAnchor, applyVisibleAnchor, scrollVisibleRows],
   )
 
   /** 未合流进度 → 一次提交（setLive/setDone 在同一提交内，React 自动批处理） */

@@ -5,8 +5,12 @@
  * 协议：onVisibleRange(startIndex/endIndex) 事件 + scrollToItem(逻辑行号)。
  * 本组件组合成"事件驱动指示 + 拖拽行进"：
  * - 几何：thumb 高 = 轨道高 × 可视行数/总行数（下限 24px），位置 = 首可见行
- *   占最大可滚行数的比例 × 剩余行程——全部纯函数（导出供测试），热路径
- *   （滚动/拖拽中）零 renderer 查询，全部由 onVisibleRange 事件驱动；
+ *   占最大可滚行数的比例 × 剩余行程——全部纯函数（导出供测试）。本组件热路径
+ *   零 renderer 查询；但 thumb 锚点（startRow prop）**宿主侧不得只依赖
+ *   onVisibleRange 事件**——live 渲染器对程序化 scrollToItem 不发该事件
+ *   （2026-09-30 真窗探针实证，offscreen 台架却即时连发），宿主必须在滚动
+ *   指令后经 getListScrollTop 读回原生锚点自驱动（范式见 TerminalView
+ *   applyVisibleAnchor / readNativeAnchor）；
  * - 拖拽：轨道是唯一监听宿主（祖先监听吞子元素 click 的教训反向利用：thumb
  *   纯视觉 pointerEvents:'none'，根本不需要自己的处理器）；按下点在 thumb
  *   外时先跳转到点击处居中再进入拖拽（现代滚动条语义）；释放发生在轨道外
@@ -88,7 +92,7 @@ export interface ScrollBarProps {
   itemCount: number
   /** 当前可视行数（onVisibleRange end−start；估算兜底由宿主传入） */
   visibleRows: number
-  /** 当前首可见行（onVisibleRange startIndex；尾部跟随时宿主传尾部锚） */
+  /** 当前首可见行（vr 事件区间或宿主 getListScrollTop 读回，见文件头锚点注释） */
   startRow: number
   /** 估算行高（滚轮像素→行换算） */
   rowHeight: number

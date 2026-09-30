@@ -14,8 +14,10 @@
  *   自动扩窗，不推窗新行永远不挂载。
  * - 底部 5 按钮接 stLifecycle（安装/启动/停止/更新/清空，各带 tooltip 350ms）。
  * - 右缘自绘滚动条（2026-09-29，components/ScrollBar）：轨道为列表兄弟列
- *   （12px 常驻预留），thumb 由 onVisibleRange 事件驱动、拖拽经 scrollToItem
- *   行进；日志卡因此改行布局（无日志时保持列布局喂 EmptyState）。
+ *   （12px 常驻预留），拖拽经 scrollToItem 行进。thumb 锚点双源合一（2026-09-30
+ *   真窗探针重构）：vr 事件（原生滚轮）+ 滚动指令后的 getListScrollTop 原生
+ *   读回（live 渲染器对程序化滚动不发 vr 事件，见组件内锚点数据流注释）。
+ *   日志卡因此改行布局（无日志时保持列布局喂 EmptyState）。
  * - 中文文案集中于顶部常量对象（i18n 缝）。
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -42,6 +44,7 @@ import { terminalRowHeight, useSettings } from '../../stores/settings'
 import { useUiState } from '../../stores/uiState'
 import { getConfigStore } from '../../services/configStore'
 import { errMsg, logError } from '../../services/errorLog'
+import { probeScroll } from '../../services/devProbe'
 
 /** 渲染窗口行数：可视区约 25 行（550px/22px），120 行 ≈ 5 屏余量 */
 const WINDOW_ROWS = 120
@@ -173,6 +176,9 @@ export function TerminalView() {
   const atTailRef = useRef(true)
   /** onVisibleRange 最近一次区间（滚动条 thumb 驱动；缺字段事件不更新，推窗"不动窗口"口径） */
   const [visibleRange, setVisibleRange] = useState<{ start: number; end: number } | null>(null)
+  /** 最近已知可视行数（scrollToRow 读回路径合成 end 用）：applyVisibleAnchor
+   *  同步实测值；初值按默认行高 22 估算（ScrollBar.wheelToRows 同款口径） */
+  const visibleRowsRef = useRef(Math.max(1, Math.round(TRACK_H_ESTIMATE / 22)))
   /** 尾部跟随的 UI 镜像（与 atTailRef 同点位写；滚动条尾部锚定用） */
   const [tailPinned, setTailPinned] = useState(true)
   /** 入场动画截止线：id 大于它的行才播动画（历史行/滑回行不播）。
@@ -189,20 +195,62 @@ export function TerminalView() {
     setWindowStart(Math.max(0, useTerminalLogs.getState().lines.length - WINDOW_ROWS))
   }, [version])
 
-  const handleVisibleRange = (e: EventPayload): void => {
+  // 滚动条行进出口的挂载锚与渲染器（锚点数据流与 scrollToRow 共用）
+  const renderer = useGpuixRequired()
+  const listRef = useRef<PublicInstance | null>(null)
+
+  // —— 滚动锚点数据流（2026-09-30 真窗探针实证重构）——
+  // live 渲染器对程序化 scrollToItem 不发 onVisibleRange 事件（拖拽全程 0 条，
+  // 释后 2.3s 才迟来一条陈旧区间）；offscreen 台架却即时连发——单测全绿、真窗
+  // thumb 卡死的根因。原生用户滚轮（直滚列表）事件正常。故锚点单一真源改为
+  // getListScrollTop 原生读回（live 同步可用且精确，探针锚点逐 move 校验）：
+  // 滚动指令（拖拽/轨道点击/滚轮转发）后主动读回应用；vr 事件到达时读回校正
+  // 载荷（陈旧事件不得回写旧锚点）。
+
+  /** 可视锚点统一应用（滚动条 thumb 驱动 + 尾部判定 + 推窗）；vr 事件与滚动
+   *  指令读回共用出口。useState 稳定 + 全 module 常量 → useCallback 空依赖 */
+  const applyVisibleAnchor = useCallback((start: number, end: number): void => {
     const len = useTerminalLogs.getState().lines.length
-    if (e.startIndex !== undefined && e.endIndex !== undefined) {
-      setVisibleRange({ start: e.startIndex, end: e.endIndex })
-    }
-    if ((e.endIndex ?? len) >= len) {
+    const s = Math.max(0, Math.min(start, Math.max(0, len - 1)))
+    visibleRowsRef.current = Math.max(1, end - s)
+    // 同值不换引用：vr 空转窗口内重复抵达不产生提交（mirror 同款契约）
+    setVisibleRange((prev) => (prev !== null && prev.start === s && prev.end === end ? prev : { start: s, end }))
+    if (end >= len) {
       atTailRef.current = true
       setTailPinned(true)
       setWindowStart(Math.max(0, len - WINDOW_ROWS))
     } else {
       atTailRef.current = false
       setTailPinned(false)
-      setWindowStart(Math.max(0, Math.min((e.startIndex ?? 0) - WINDOW_OVERSCAN, len - WINDOW_ROWS)))
+      setWindowStart(Math.max(0, Math.min(s - WINDOW_OVERSCAN, len - WINDOW_ROWS)))
     }
+  }, [])
+
+  /** 原生锚点读回：[itemIndex, offsetPx, viewportH]，itemIndex==len 为 gpui
+   *  at-end 哨兵（钳到 len-1，尾部分支按 end>=len 收）。读回失败返回 null */
+  const readNativeAnchor = useCallback((): number | null => {
+    const el = listRef.current
+    if (!el || mainWindowQueryState() === 'frozen') return null
+    try {
+      const anchor = renderer.getListScrollTop?.(el.id)
+      if (anchor && Number.isFinite(anchor[0]) && anchor[0] >= 0) return anchor[0]
+    } catch (err) {
+      logError(`[terminal] 读回列表锚点失败: ${errMsg(err)}`)
+    }
+    return null
+  }, [renderer])
+
+  const handleVisibleRange = (e: EventPayload): void => {
+    if (e.startIndex === undefined && e.endIndex === undefined) return
+    const len = useTerminalLogs.getState().lines.length
+    // 锚点以读回为准（vr 载荷可陈旧）；可视行数优先取事件区间实测（唯一实测源）
+    const native = readNativeAnchor()
+    probeScroll(`vr len=${len} start=${e.startIndex} end=${e.endIndex} readback=${native}`)
+    const start = native !== null ? native : (e.startIndex ?? 0)
+    const end =
+      e.endIndex ??
+      (visibleRange ? start + Math.max(1, visibleRange.end - visibleRange.start) : len)
+    applyVisibleAnchor(start, end)
   }
 
   /** 清空同时复位窗口与尾部状态：防止缓冲清空后窗口停留在越界位置 */
@@ -216,22 +264,29 @@ export function TerminalView() {
 
   // 滚动条行进出口：scrollToItem 走逻辑行号（窗口化协议下 native 侧自行解锚，
   // mirrorDialogPerf 深滚用例已实证）；renderer 调用一律冻结门检 + try/catch
-  //（AGENTS.md 铁律）。行数取 getState 现值——拖拽中有新行入库时渲染期闭包已过期
-  const renderer = useGpuixRequired()
-  const listRef = useRef<PublicInstance | null>(null)
+  //（AGENTS.md 铁律）。行数取 getState 现值——拖拽中有新行入库时渲染期闭包已过期。
+  // 行进后读回原生锚点立即应用：live 渲染器对程序化滚动不发 vr 事件（见上方
+  // 锚点数据流注释），thumb/推窗必须由指令侧自驱动
   const scrollToRow = useCallback(
     (row: number): void => {
       const el = listRef.current
       if (!el || mainWindowQueryState() === 'frozen') return
       const len = useTerminalLogs.getState().lines.length
       if (len <= 0) return
+      const clamped = Math.min(Math.max(row, 0), len - 1)
       try {
-        renderer.scrollToItem?.(el.id, Math.min(Math.max(row, 0), len - 1), 0)
+        renderer.scrollToItem?.(el.id, clamped, 0)
       } catch (err) {
         logError(`[terminal] 滚动条行进失败: ${errMsg(err)}`)
+        return
       }
+      // 读回失败兜底指令行号（探针实证 live 读回 == 指令行，逐 move 校验）
+      const native = readNativeAnchor()
+      probeScroll(`scrollTo row=${clamped} readback=${native}`)
+      const start = native !== null ? Math.min(native, len - 1) : clamped
+      applyVisibleAnchor(start, start + Math.max(1, visibleRowsRef.current))
     },
-    [renderer],
+    [renderer, readNativeAnchor, applyVisibleAnchor],
   )
   // 字号联动 virtual-list 估算高度（与 LogRow 行高同源：terminalRowHeight）
   const fontSize = useSettings((s) => s.terminalFontSize)
