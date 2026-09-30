@@ -7,12 +7,28 @@
  *   （旧版无覆盖，本次补上）与 classifyLogLevel。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { computeCols, createTerminalEngine, MIN_COLS, type EngineRow } from '../services/terminalEngine'
+import {
+  createTerminalEngine,
+  MIN_COLS,
+  narrowAdvancePx,
+  wideAdvancePx,
+  wrapBudgetPx,
+  type EngineRow,
+  type WrapGeometry,
+} from '../services/terminalEngine'
 import {
   __resetTerminalLogsForTests,
   classifyLogLevel,
   useTerminalLogs,
 } from '../stores/terminalLogs'
+
+/** 12px Consolas 的窄/宽字符 advance（像素折行预算设计用） */
+const NARROW = 6.6
+const WIDE = 12
+/** 折 N 个窄字符/行的几何（预算 = N×advance + 安全余量 4） */
+const geoNarrow = (n: number): WrapGeometry => ({ availablePx: n * NARROW + 4, fontSize: 12, fontFamily: 'Consolas' })
+/** 折 N 个宽字符（CJK）/行的几何 */
+const geoWide = (n: number): WrapGeometry => ({ availablePx: n * WIDE + 4, fontSize: 12, fontFamily: 'Consolas' })
 
 /**
  * 写入并等待引擎发射：期望 expectedRows 行（引擎行数只增不减，
@@ -103,20 +119,58 @@ describe('terminalEngine（← parse_ansi_text 迁移 + 扩充）', () => {
     expect(rows[0]?.text).toBe('46%')
   })
 
-  it('超长行按 cols=1000 折行为多个视觉行', async () => {
-    const rows = await runEngine([{ text: 'a'.repeat(1500) }], 2)
-    expect(rows[0]?.text).toHaveLength(1000)
-    expect(rows[1]?.text).toHaveLength(500)
+  it('超长行按默认几何（573px@12px Consolas → 86 字符/行）像素折行', async () => {
+    const rows = await runEngine([{ text: 'a'.repeat(1500) }], 18)
+    expect(rows[0]?.text).toHaveLength(86)
+    expect(rows[16]?.text).toHaveLength(86)
+    expect(rows[17]?.text).toHaveLength(38)
   })
 
-  it('setCols 收窄后新行按新列数折行，既有行不重排', async () => {
+  it('CJK 行按 1em advance 折行（2026-09-30 报障回归锁：列模型 2×窄 advance 高估 ~10%）', async () => {
+    const batches: EngineRow[][] = []
+    const engine = createTerminalEngine((rows) => batches.push(rows))
+    engine.setWrapGeometry(geoWide(24))
+    engine.writeLine('酒'.repeat(30))
+    await vi.waitFor(() => {
+      expect(batches.flat().length).toBe(2)
+    })
+    expect(batches.flat().map((r) => r.text)).toEqual(['酒'.repeat(24), '酒'.repeat(6)])
+  })
+
+  it('混合行窄/宽 advance 分别累计（预算内尽量装满）', async () => {
+    const batches: EngineRow[][] = []
+    const engine = createTerminalEngine((rows) => batches.push(rows))
+    // 预算 288：10 CJK（120px）后还能装 25 个 ASCII（165px），第 26 个（171.6）下移
+    engine.setWrapGeometry(geoWide(24))
+    engine.writeLine('酒'.repeat(10) + 'a'.repeat(30))
+    await vi.waitFor(() => {
+      expect(batches.flat().length).toBe(2)
+    })
+    const rows = batches.flat()
+    expect(rows[0]?.text).toBe('酒'.repeat(10) + 'a'.repeat(25))
+    expect(rows[1]?.text).toBe('a'.repeat(5))
+  })
+
+  it('宽字符放不进剩余空隙时整体下移（不半裁）', async () => {
+    const batches: EngineRow[][] = []
+    const engine = createTerminalEngine((rows) => batches.push(rows))
+    // 预算 132：20 个 ASCII 后剩 0px，尾随 CJK 整体下移
+    engine.setWrapGeometry(geoNarrow(20))
+    engine.writeLine('a'.repeat(20) + '酒')
+    await vi.waitFor(() => {
+      expect(batches.flat().length).toBe(2)
+    })
+    expect(batches.flat().map((r) => r.text)).toEqual(['a'.repeat(20), '酒'])
+  })
+
+  it('setWrapGeometry 收窄后新行按新预算折行，既有行不重排', async () => {
     const batches: EngineRow[][] = []
     const engine = createTerminalEngine((rows) => batches.push(rows))
     engine.writeLine('a'.repeat(50))
     await vi.waitFor(() => {
       expect(batches.flat().length).toBe(1)
     })
-    engine.setCols(20)
+    engine.setWrapGeometry(geoNarrow(20))
     engine.writeLine('b'.repeat(50))
     await vi.waitFor(() => {
       expect(batches.flat().length).toBe(4)
@@ -126,10 +180,10 @@ describe('terminalEngine（← parse_ansi_text 迁移 + 扩充）', () => {
     expect(rows.slice(1).map((r) => r.text)).toEqual(['b'.repeat(20), 'b'.repeat(20), 'b'.repeat(10)])
   })
 
-  it('setCols 放宽后新行按更宽折行', async () => {
+  it('setWrapGeometry 放宽后新行按更宽预算折行', async () => {
     const batches: EngineRow[][] = []
     const engine = createTerminalEngine((rows) => batches.push(rows))
-    engine.setCols(80)
+    engine.setWrapGeometry(geoNarrow(80))
     engine.writeLine('c'.repeat(150))
     await vi.waitFor(() => {
       expect(batches.flat().length).toBe(2)
@@ -139,10 +193,10 @@ describe('terminalEngine（← parse_ansi_text 迁移 + 扩充）', () => {
     expect(rows[1]?.text).toHaveLength(70)
   })
 
-  it('setCols 低于下限按 MIN_COLS 钳制', async () => {
+  it('setWrapGeometry 极窄视口按 MIN_COLS 列宽下限钳制', async () => {
     const batches: EngineRow[][] = []
     const engine = createTerminalEngine((rows) => batches.push(rows))
-    engine.setCols(5)
+    engine.setWrapGeometry({ availablePx: 30, fontSize: 12, fontFamily: 'Consolas' })
     engine.writeLine('d'.repeat(45))
     await vi.waitFor(() => {
       expect(batches.flat().length).toBe(3)
@@ -199,8 +253,8 @@ describe('terminalLogs store（引擎接线）', () => {
     expect(useTerminalLogs.getState().lines[0]?.text).toBe('after')
   })
 
-  it('setCols 透传引擎：收窄后 append 的长行按新列数入库', async () => {
-    useTerminalLogs.getState().setCols(20)
+  it('setWrapGeometry 透传引擎：收窄后 append 的长行按新预算入库', async () => {
+    useTerminalLogs.getState().setWrapGeometry({ availablePx: 20 * 6.6 + 4, fontSize: 12, fontFamily: 'Consolas' })
     useTerminalLogs.getState().appendLine('e'.repeat(50))
     await vi.waitFor(() => {
       expect(useTerminalLogs.getState().lines).toHaveLength(3)
@@ -229,32 +283,39 @@ describe('terminalLogs store（引擎接线）', () => {
   })
 })
 
-describe('computeCols（视口像素宽 → 折行列数）', () => {
-  // 默认布局：800 窗宽 − 168 侧栏 − 1 分隔线 − 2×12 主区 padding − 2×1 卡片边框 − 2×8 列表 padding = 589px
+describe('折行 advance 模型与预算（像素折行纯函数）', () => {
+  // 默认布局：800 窗宽推导 589px（无滚动条预留口径的旧值，验算减法本身）
   const DEFAULT_PX = 589
 
-  it('默认布局 12px Consolas → 88 列', () => {
-    expect(computeCols(DEFAULT_PX, 12, 'Consolas')).toBe(88)
-  })
-
-  it('字体族大小写不敏感，且取逗号列表首项', () => {
-    expect(computeCols(DEFAULT_PX, 12, 'consolas')).toBe(88)
-    expect(computeCols(DEFAULT_PX, 12, 'Cascadia Mono, Consolas')).toBe(computeCols(DEFAULT_PX, 12, 'cascadia mono'))
+  it('窄字符 advance：字体表命中 0.55em，大小写/逗号列表首项不敏感', () => {
+    expect(narrowAdvancePx(12, 'Consolas')).toBeCloseTo(6.6, 10)
+    expect(narrowAdvancePx(12, 'consolas')).toBeCloseTo(6.6, 10)
+    expect(narrowAdvancePx(12, 'Cascadia Mono, Consolas')).toBeCloseTo(narrowAdvancePx(12, 'cascadia mono'), 10)
   })
 
   it('未收录字体按 0.6em 保守回退（宁可早折行也不溢出）', () => {
-    expect(computeCols(DEFAULT_PX, 12, 'Some Unknown Mono')).toBe(81)
+    expect(narrowAdvancePx(12, 'Some Unknown Mono')).toBeCloseTo(7.2, 10)
   })
 
-  it('字号增大列数减少', () => {
-    expect(computeCols(DEFAULT_PX, 24, 'Consolas')).toBe(44)
+  it('宽字符（CJK/全角）advance 恒 1.0em，与字体无关', () => {
+    expect(wideAdvancePx(12)).toBe(12)
+    expect(wideAdvancePx(24)).toBe(24)
   })
 
-  it('极端窄窗/非法输入钳制到 MIN_COLS', () => {
-    expect(computeCols(30, 12, 'Consolas')).toBe(MIN_COLS)
-    expect(computeCols(0, 12, 'Consolas')).toBe(MIN_COLS)
-    expect(computeCols(NaN, 12, 'Consolas')).toBe(MIN_COLS)
-    expect(computeCols(DEFAULT_PX, 0, 'Consolas')).toBe(MIN_COLS)
+  it('字号增大 advance 等比放大', () => {
+    expect(narrowAdvancePx(24, 'Consolas')).toBeCloseTo(13.2, 10)
+  })
+
+  it('wrapBudgetPx = 可用宽 − 安全余量 4', () => {
+    expect(wrapBudgetPx({ availablePx: DEFAULT_PX, fontSize: 12, fontFamily: 'Consolas' })).toBeCloseTo(585, 10)
+  })
+
+  it('极端窄窗/非法输入钳制到 MIN_COLS 窄字符宽下限', () => {
+    const floor = MIN_COLS * 6.6
+    expect(wrapBudgetPx({ availablePx: 30, fontSize: 12, fontFamily: 'Consolas' })).toBeCloseTo(floor, 10)
+    expect(wrapBudgetPx({ availablePx: 0, fontSize: 12, fontFamily: 'Consolas' })).toBeCloseTo(floor, 10)
+    expect(wrapBudgetPx({ availablePx: NaN, fontSize: 12, fontFamily: 'Consolas' })).toBeCloseTo(floor, 10)
+    expect(wrapBudgetPx({ availablePx: DEFAULT_PX, fontSize: 0, fontFamily: 'Consolas' })).toBeCloseTo(floor, 10)
   })
 })
 

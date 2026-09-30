@@ -2,14 +2,27 @@
  * 终端引擎：@xterm/headless 无头终端驱动的 ANSI 解析与视觉行提取（方案 B）。
  *
  * - 职责：把"一行日志文本"写入无头 xterm 终端，借其完整 VT/ANSI 状态机
- *   （16/256/真彩色、粗体、下划线、行中 \r 覆写、长行折行）解析后，
- *   从 buffer 提取"视觉行 + 颜色段"交回调用方渲染。
+ *   （16/256/真彩色、粗体、下划线、行中 \r 覆写）解析后，从 buffer 提取
+ *   "视觉行 + 颜色段"交回调用方渲染。折行**不**用 xterm 的整数列模型，
+ *   见下方"像素折行"说明。
  * - 渲染仍由 GPUIX 完成（virtual-list + <text> 段）。本模块零 DOM 依赖，
  *   与 GPUIX 无 DOM / 无 webview / canvas 未实现的宿主约束天然兼容——
  *   xterm.js 的浏览器渲染器（DOM/Canvas2D/WebGL）在本项目不可用，故只用其引擎。
  * - ← stores/terminalLogs.ts parse_ansi_text 的替代：手写 SGR 正则解析退役；
  *   非 SGR CSI 的输入侧消毒正则保留迁移（防游标移动/擦除序列把光标搬离
  *   增量提取窗口，导致静默丢行——与旧版"剔除乱码序列"语义一致）。
+ *
+ * 像素折行（2026-09-30 重构，修"折行末字符距右边界过大"报障）：
+ * - 旧模型按 xterm 整数列折行（CJK=2 列 × ASCII advance 当预算），真窗实测
+ *   （scripts/probe-wrap-width.ts）CJK 字形实际 advance ≈ 1.0em = 11.95px@12px，
+ *   而列预算按 2×6.6=13.2px 计——纯中文折行段每行白送 ~53px，末字符距右边界
+ *   66px（ASCII 14px）。列格模型与 GPUIX 字形流排布结构性失配，修表救不了。
+ * - 新模型：xterm 固定 1000 宽列（长逻辑行不再被列模型折断），提取时按
+ *   isWrapped 归并出完整逻辑行，再按**像素预算**逐字符累计折行：
+ *   xterm width-1 字符按字体 advance 表（MONO_ADVANCE_EM）估算，width-2
+ *   （CJK/全角）按 1.0em 估算（各常见 CJK 字形/回退字体 advance 实测 ≈1em 整）。
+ *   ASCII 估算 6.6 vs 实测 6.581、CJK 12.0 vs 11.953——两端误差 <0.5%，
+ *   折行段可填满至"安全余量 + 末字符粒度"以内。
  *
  * 增量提取原理（DEVIATION: 计划稿为 prevCursorAbs 手动计数；实现改用
  * registerMarker——marker 的 line 坐标在 scrollback 裁剪时由 xterm 自动平移，
@@ -41,34 +54,56 @@ export interface EngineRow {
   tag?: unknown
 }
 
+/** 折行几何：文本区可用像素宽 + 当前字体（字号/字体族），advance 由引擎自查表 */
+export interface WrapGeometry {
+  availablePx: number
+  fontSize: number
+  fontFamily: string
+}
+
 export interface TerminalEngine {
-  /** 写入一行（引擎自行补 \n）；空行与纯 CSI 行跳过（对齐 readStreamLines 的 if(text)） */
+  /** 写入一行（引擎自行补 \n；空行与纯 CSI 行跳过（对齐 readStreamLines 的 if(text)） */
   writeLine(text: string, tag?: unknown): void
   /** 丢弃终端与全部未决写入（清空日志用） */
   reset(): void
   /**
-   * 视口折行列数校准（窗口宽 / 字号 / 字体变化时由视图层重算写入）。
-   * xterm 按"列"折行（CJK 占 2 列），一列像素宽 = 当前字体 ASCII advance 宽。
-   * 泵串行化保证 resize 只落在两次 write 解析回调之间，marker 不跨 resize
-   * 存活，增量提取窗口不受影响；在途 write 仅以新几何折行，不损坏提取。
+   * 视口折行几何校准（窗口宽 / 字号 / 字体变化时由视图层重算写入）。
+   * xterm 恒为 1000 宽列（不参与折行，见文件头"像素折行"），本调用只更新
+   * 提取侧的像素预算；泵串行化保证几何变更只落在两次 write 解析回调之间，
+   * 在途 write 仅以新几何折行，不损坏提取。
    */
-  setCols(cols: number): void
+  setWrapGeometry(geo: WrapGeometry): void
 }
 
 /**
- * 初始折行列数：TerminalView 挂载前的占位（启动期日志），
- * 挂载后按实际窗宽/字号/字体经 setCols 校准为视口宽。
+ * xterm 固定列数：取足够宽使常规日志行不被列模型折断（超长行仍会被折断，
+ * 提取时按 isWrapped 归并回完整逻辑行再像素折行，语义不受影响）。
  */
-const COLS = 1000
+const TERM_COLS = 1000
 const ROWS = 10
 /** 只需容纳在途 write 的 marker 行（提取即时发生，与展示回滚无关），2000 余量充足 */
 const SCROLLBACK = 2000
-/** 折行列数下限：防极小字号/极窄窗退化为逐字折行 */
+/** 折行列数下限（列口径保留）：防极小视口退化为逐字折行 */
 export const MIN_COLS = 20
-/** 视口宽度安全余量（px）：吸收字体 advance 估算误差，防末列被裁剪 */
+/** 视口宽度安全余量（px）：吸收 advance 表估算误差与 DPI 分数布局噪声，防末列被裁剪 */
 const WRAP_SAFETY_PX = 4
 /** 未收录字体的 advance 保守回退（按偏宽估算，宁可早折行也不溢出裁剪） */
 const ADVANCE_EM_FALLBACK = 0.6
+/**
+ * 宽字符（xterm width-2：CJK/全角/emoji）advance 估算：按 1.0em。真窗实测
+ * （probe-wrap-width，2026-09-30）Consolas 缺字回退（雅黑/宋体类）CJK 字形
+ * advance = 11.95px@12px ≈ 0.996em，Sarasa/黑体类等宽 CJK 字体亦为 1em 整；
+ * 按 1.0em 估算偏宽 ≤0.5%，折行宁早勿裁（裁剪比留白伤害大）。
+ */
+const WIDE_ADVANCE_EM = 1.0
+
+/**
+ * 默认折行几何：标准窗（800 宽）布局推导的占位，覆盖 TerminalView 挂载前
+ * 到达的启动日志；挂载后由视图按实际窗宽/字号/字体经 setWrapGeometry 校准。
+ * 推导：800 − 168 侧栏 − 1 分隔线 − 2×12 视图 padding − 2×1 卡片边框 −
+ * 2×8 列表 padding − 16 滚动条轨道 = 573（与 TerminalView.terminalTextWidthPx 同源）。
+ */
+const DEFAULT_WRAP_GEO: WrapGeometry = { availablePx: 573, fontSize: 12, fontFamily: 'Consolas' }
 
 /** 常见等宽字体 ASCII 字符 advance 宽（em 占比；Consolas 0.55、Cascadia 0.586 为实测/官方值） */
 const MONO_ADVANCE_EM: Readonly<Record<string, number>> = {
@@ -92,14 +127,27 @@ function advanceEmOf(fontFamily: string): number {
   return MONO_ADVANCE_EM[first] ?? ADVANCE_EM_FALLBACK
 }
 
+/** 窄字符（xterm width-1）像素 advance */
+export function narrowAdvancePx(fontSize: number, fontFamily: string): number {
+  return fontSize * advanceEmOf(fontFamily)
+}
+
+/** 宽字符（xterm width-2，CJK/全角）像素 advance */
+export function wideAdvancePx(fontSize: number): number {
+  return fontSize * WIDE_ADVANCE_EM
+}
+
 /**
- * 日志区可用像素宽 → 引擎折行列数。
- * 纯函数便于单测；输入异常时返回下限保底。
+ * 折行像素预算（纯函数便于单测）：可用宽 − 安全余量，下限 MIN_COLS 个窄字符宽
+ * （防极窄视口逐字折行）。输入异常时返回下限保底。
  */
-export function computeCols(availablePx: number, fontSize: number, fontFamily: string): number {
-  const cellPx = fontSize * advanceEmOf(fontFamily)
-  if (!(availablePx > 0) || !(cellPx > 0)) return MIN_COLS
-  return Math.max(MIN_COLS, Math.floor((availablePx - WRAP_SAFETY_PX) / cellPx))
+export function wrapBudgetPx(geo: WrapGeometry): number {
+  const narrow = narrowAdvancePx(geo.fontSize, geo.fontFamily)
+  if (!(geo.availablePx > 0) || !(narrow > 0)) {
+    // 输入异常（零宽/零字号）：退回默认几何的 MIN_COLS 下限预算
+    return MIN_COLS * narrowAdvancePx(DEFAULT_WRAP_GEO.fontSize, DEFAULT_WRAP_GEO.fontFamily)
+  }
+  return Math.max(geo.availablePx - WRAP_SAFETY_PX, MIN_COLS * narrow)
 }
 
 /**
@@ -149,12 +197,21 @@ function paletteIndexToHex(index: number): string | undefined {
   return undefined
 }
 
-/** 单个视觉行 → 纯文本 + 颜色段（相邻同属性 cell 归并；尾部空白裁剪） */
-function extractRow(term: Terminal, y: number): EngineRow {
+/** 单个 cell 的提取快照（文本 + 颜色/属性 + xterm 宽度类） */
+interface EngineCell {
+  chars: string
+  color?: string
+  bold: boolean
+  underline: boolean
+  /** xterm 宽度类：1=窄（按字体 advance 表）、2=宽（CJK/全角，按 1em）、0=零宽（组合附标，advance 0） */
+  width: number
+}
+
+/** 一个 buffer 行 → cells 快照（跳过空 cell；颜色/旗标解析同旧 extractRow） */
+function cellsOfLine(term: Terminal, y: number): EngineCell[] {
   const line = term.buffer.active.getLine(y)
-  if (!line) return { text: '', segs: [] }
-  const segs: EngineSeg[] = []
-  let text = ''
+  if (!line) return []
+  const cells: EngineCell[] = []
   let cell = line.getCell(0)
   for (let x = 0; x < line.length && cell !== undefined; x++) {
     if (cell.getWidth() > 0) {
@@ -165,25 +222,66 @@ function extractRow(term: Terminal, y: number): EngineRow {
           : cell.isFgPalette()
             ? paletteIndexToHex(cell.getFgColor())
             : rgbToHex(cell.getFgColor())
-        const bold = cell.isBold() !== 0
-        const underline = cell.isUnderline() !== 0
-        const last = segs[segs.length - 1]
-        if (
-          last !== undefined &&
-          (last.color ?? null) === (color ?? null) &&
-          (last.weight !== undefined) === bold &&
-          !!last.underline === underline
-        ) {
-          last.text += chars
-        } else {
-          segs.push({ text: chars, color, weight: bold ? 500 : undefined, underline: underline || undefined })
-        }
-        text += chars
+        cells.push({
+          chars,
+          color,
+          bold: cell.isBold() !== 0,
+          underline: cell.isUnderline() !== 0,
+          width: cell.getWidth(),
+        })
       }
     }
     cell = line.getCell(x + 1, cell)
   }
-  // 尾部空白裁剪（对齐行式日志的 rstrip 语义；段内空格保留）
+  return cells
+}
+
+/** 像素折行：按 advance 模型逐字符累计，超出预算即断行；宽字符放不进剩余
+ *  空隙时整体移到下一行（不半裁），零宽字符恒随前字符同 row。预算比较带
+ *  epsilon——advance 表值 × 字号的 IEEE 累加尘埃（20×6.6=132.00000000000003）
+ *  不得移动折行点 */
+function wrapCells(cells: EngineCell[], geo: WrapGeometry): EngineCell[][] {
+  const budget = wrapBudgetPx(geo)
+  const narrow = narrowAdvancePx(geo.fontSize, geo.fontFamily)
+  const wide = wideAdvancePx(geo.fontSize)
+  const rows: EngineCell[][] = [[]]
+  let used = 0
+  for (const cell of cells) {
+    const adv = cell.width === 2 ? wide : cell.width === 1 ? narrow : 0
+    const cur = rows[rows.length - 1]!
+    if (cur.length > 0 && used + adv - budget > 1e-6) {
+      rows.push([])
+      used = 0
+    }
+    rows[rows.length - 1]!.push(cell)
+    used += adv
+  }
+  return rows
+}
+
+/** 一行 cells → 纯文本 + 颜色段（相邻同属性归并；尾部空白裁剪，对齐行式日志的 rstrip 语义） */
+function rowFromCells(cells: EngineCell[]): { text: string; segs: EngineSeg[] } {
+  const segs: EngineSeg[] = []
+  let text = ''
+  for (const cell of cells) {
+    const last = segs[segs.length - 1]
+    if (
+      last !== undefined &&
+      (last.color ?? null) === (cell.color ?? null) &&
+      (last.weight !== undefined) === cell.bold &&
+      !!last.underline === cell.underline
+    ) {
+      last.text += cell.chars
+    } else {
+      segs.push({
+        text: cell.chars,
+        color: cell.color,
+        weight: cell.bold ? 500 : undefined,
+        underline: cell.underline || undefined,
+      })
+    }
+    text += cell.chars
+  }
   while (segs.length > 0) {
     const last = segs[segs.length - 1]
     if (last === undefined) break
@@ -200,8 +298,8 @@ function extractRow(term: Terminal, y: number): EngineRow {
 
 export function createTerminalEngine(emit: (rows: EngineRow[]) => void): TerminalEngine {
   let gen = 0
-  /** 当前折行列数（setCols 校准；createTerm 读取，reset 后保持） */
-  let cols = COLS
+  /** 当前折行几何（setWrapGeometry 校准；createTerm 不读它，提取侧像素折行用） */
+  let wrapGeo = DEFAULT_WRAP_GEO
   let term = createTerm()
   /** 待写队列 + 泵状态：写入串行化，保证 marker 恒注册在真实起始行 */
   let queue: Array<{ text: string; tag?: unknown }> = []
@@ -217,7 +315,7 @@ export function createTerminalEngine(emit: (rows: EngineRow[]) => void): Termina
 
   function createTerm(): Terminal {
     return new Terminal({
-      cols,
+      cols: TERM_COLS,
       rows: ROWS,
       scrollback: SCROLLBACK,
       // buffer / markers 属实验性 API，读取缓冲必需（6.0 类型声明标注）
@@ -250,9 +348,22 @@ export function createTerminalEngine(emit: (rows: EngineRow[]) => void): Termina
             marker !== undefined && !marker.isDisposed && marker.line >= 0
               ? marker.line
               : Math.max(0, cursorAbs - 1) // 兜底：marker 失效时只取最后一行（极端 flood 下的降级）
-          const rows: EngineRow[] = []
+          // 按行首归并出完整逻辑行：xterm 1000 宽列下常规日志行不被列模型折断，
+          // 超长行折断的续行（isWrapped）拼回同一逻辑行，再统一走像素折行
+          const logical: EngineCell[][] = []
           for (let y = from; y < cursorAbs; y++) {
-            rows.push({ ...extractRow(term, y), tag: first.tag })
+            const cells = cellsOfLine(term, y)
+            if (buf.getLine(y)?.isWrapped && logical.length > 0) {
+              logical[logical.length - 1]!.push(...cells)
+            } else {
+              logical.push(cells)
+            }
+          }
+          const rows: EngineRow[] = []
+          for (const cells of logical) {
+            for (const rowCells of wrapCells(cells, wrapGeo)) {
+              rows.push({ ...rowFromCells(rowCells), tag: first.tag })
+            }
           }
           if (rows.length > 0) emit(rows)
         }
@@ -292,12 +403,11 @@ export function createTerminalEngine(emit: (rows: EngineRow[]) => void): Termina
     term = createTerm()
   }
 
-  function setCols(next: number): void {
-    const clamped = Math.max(MIN_COLS, Math.floor(next))
-    if (clamped === cols) return
-    cols = clamped
-    term.resize(clamped, ROWS)
+  function setWrapGeometry(next: WrapGeometry): void {
+    // xterm 恒为 1000 宽列，几何只影响提取侧像素折行（见文件头）；数值合法
+    // 性在 wrapBudgetPx 收口，此处直接持有现值
+    wrapGeo = next
   }
 
-  return { writeLine, reset, setCols }
+  return { writeLine, reset, setWrapGeometry }
 }

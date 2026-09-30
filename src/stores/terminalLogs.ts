@@ -23,6 +23,7 @@ import {
   createTerminalEngine,
   type EngineRow,
   type EngineSeg,
+  type WrapGeometry,
 } from '../services/terminalEngine'
 
 export type { EngineSeg }
@@ -67,8 +68,8 @@ interface TerminalLogsState {
   floodMode: boolean
   appendLine: (text: string, stream?: 'stdout' | 'stderr') => void
   appendBatch: (items: Array<{ text: string; stream?: 'stdout' | 'stderr' }>) => void
-  /** 视口折行列数校准（窗口宽/字号/字体变化；透传引擎 setCols） */
-  setCols: (cols: number) => void
+  /** 视口折行几何校准（窗口宽/字号/字体变化；透传引擎 setWrapGeometry 像素折行） */
+  setWrapGeometry: (geo: WrapGeometry) => void
   clear: () => void
   /** 窗口切片读取（O(窗口)；start 含、end 不含，越界自动收窄） */
   getRange: (start: number, end: number) => TerminalLine[]
@@ -137,8 +138,8 @@ export const useTerminalLogs = create<TerminalLogsState>(() => ({
     engine.writeLine(text, stream)
   },
 
-  setCols: (cols) => {
-    engine.setCols(cols)
+  setWrapGeometry: (geo) => {
+    engine.setWrapGeometry(geo)
   },
 
   clear: () => {

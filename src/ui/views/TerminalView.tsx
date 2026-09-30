@@ -38,7 +38,6 @@ import {
   type EngineSeg,
   type TerminalLine,
 } from '../../stores/terminalLogs'
-import { computeCols } from '../../services/terminalEngine'
 import { useStState, isDirBusy } from '../../stores/stState'
 import { terminalRowHeight, useSettings } from '../../stores/settings'
 import { useUiState } from '../../stores/uiState'
@@ -73,8 +72,8 @@ const TEXTS = {
 /**
  * 日志区单行的可用文本宽（像素）：窗宽 − 侧栏 − 分隔线 − 主区/卡片/列表 padding 与边框。
  * 与 AppShell（sidebarW + 1px 分隔线）、本视图（padTerminal×2、卡片 borderWidth×2）、
- * virtual-list（paddingLeft/Right 8×2）的布局常量同源；估算误差由 computeCols 的
- * 安全余量与 LogRow 的 overflow hidden 双重兜底。
+ * virtual-list（paddingLeft/Right 8×2）的布局常量同源；估算误差由引擎像素折行的
+ * 安全余量（wrapBudgetPx）与 LogRow 的 overflow hidden 双重兜底。
  */
 const DIVIDER_PX = 1
 const CARD_BORDER_PX = 2
@@ -138,8 +137,8 @@ const LogRow = memo(function LogRow({ line, animate }: { line: TerminalLine; ani
   ))
 
   // 段必须落在 display:flex + flexDirection:'row' 容器内才会合并一行
-  // （纯 div 中相邻 <text> 纵向堆叠，实测结论）；overflow hidden 吸收折行列数
-  // 校准误差（估算 advance 偏窄时末列亦不撑开 virtual-list 内容宽）
+  // （纯 div 中相邻 <text> 纵向堆叠，实测结论）；overflow hidden 吸收像素折行
+  // advance 模型误差（估算偏窄时末列亦不撑开 virtual-list 内容宽）
   const rowStyle = {
     display: 'flex',
     flexDirection: 'row',
@@ -293,11 +292,15 @@ export function TerminalView() {
   const fontFamilySetting = useSettings((s) => s.terminalFontFamily)
   const fontFamily = fontFamilySetting || t.font.mono
   const estimatedRowHeight = terminalRowHeight(fontSize)
-  // 视口折行校准：窗宽/字号/字体任一变 → 重算列数写入引擎（窗口当前固定 800，
-  // 校准主要为字号与自定义字体服务；引擎初始 1000 列仅为挂载前占位）
+  // 视口折行校准：窗宽/字号/字体任一变 → 重算几何写入引擎（窗口当前固定 800，
+  // 校准主要为字号与自定义字体服务；引擎默认几何即标准窗推导，覆盖挂载前日志）
   const { width: windowWidth } = useWindowSize()
   useEffect(() => {
-    useTerminalLogs.getState().setCols(computeCols(terminalTextWidthPx(windowWidth), fontSize, fontFamily))
+    useTerminalLogs.getState().setWrapGeometry({
+      availablePx: terminalTextWidthPx(windowWidth),
+      fontSize,
+      fontFamily,
+    })
   }, [windowWidth, fontSize, fontFamily])
   const running = useStState((s) => s.running)
   const installed = useStState((s) => s.installed)
@@ -426,27 +429,36 @@ export function TerminalView() {
         }}>
         {hasLogs ? (
           <>
-            <virtual-list
-              ref={listRef}
-              testId="terminal-log-list"
-              alignment="top"
-              followTail
-              itemCount={lineCount}
-              windowStart={windowStart}
-              estimatedItemHeight={estimatedRowHeight}
-              onVisibleRange={handleVisibleRange}
+            {/* 列表内缩 wrapper：virtual-list 自身的 paddingLeft/Right 不内缩子项
+                （2026-09-30 真窗探针实证：行盒 x=列表左缘，16px 死样式全变右侧
+                死区），内缩改由本 wrapper 真实生效——左缘呼吸恢复，右缘文本可用
+                宽与 terminalTextWidthPx 的 LIST_PADDING_X_PX=16 口径物理对齐 */}
+            <div
               style={{
                 flexGrow: 1,
                 minWidth: 0,
+                display: 'flex',
+                flexDirection: 'column',
                 paddingLeft: 8,
                 paddingRight: 8,
                 paddingTop: 4,
                 paddingBottom: 4,
               }}>
-              {windowLines.map((line) => (
-                <LogRow key={line.id} line={line} animate={line.animate && line.id > animateCutoff} />
-              ))}
-            </virtual-list>
+              <virtual-list
+                ref={listRef}
+                testId="terminal-log-list"
+                alignment="top"
+                followTail
+                itemCount={lineCount}
+                windowStart={windowStart}
+                estimatedItemHeight={estimatedRowHeight}
+                onVisibleRange={handleVisibleRange}
+                style={{ flexGrow: 1, minWidth: 0 }}>
+                {windowLines.map((line) => (
+                  <LogRow key={line.id} line={line} animate={line.animate && line.id > animateCutoff} />
+                ))}
+              </virtual-list>
+            </div>
             <ScrollBar
               testId="terminal-scrollbar"
               itemCount={lineCount}

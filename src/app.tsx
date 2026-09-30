@@ -214,6 +214,21 @@ if (Number.isFinite(seedTerminalLines) && seedTerminalLines > 0) {
     .appendBatch(Array.from({ length: seedTerminalLines }, (_, i) => ({ text: `seed-log-${i}` })))
 }
 
+// 折行宽度取证（STL_SEED_WRAP_LINES=1）：灌已知内容的长行（纯 ASCII/纯 CJK/
+// 混合），scripts/probe-wrap-width.ts 消费——量"折行末字符 ↔ 右侧视觉边界"的
+// 实际间距与真实字符 advance。必须延迟到 TerminalView 挂载后的 setWrapGeometry
+// 校准落定再灌（引擎默认几何是标准窗推导的占位，早灌的行按占位几何折行、
+// 入库后不再重排）
+if (process.env.STL_SEED_WRAP_LINES === '1') {
+  setTimeout(() => {
+    useTerminalLogs.getState().appendBatch([
+      { text: `WRAPA0-${'0123456789'.repeat(30)}` },
+      { text: `WRAPC0-${'酒馆启动日志中文折行边界测试'.repeat(14)}` },
+      { text: `WRAPM0-${'安装依赖 installing dependencies '.repeat(8)}` },
+    ])
+  }, 1500)
+}
+
 const WINDOW_OPTIONS = {
   title: 'SillyTavernLauncher',
   width: 800,
