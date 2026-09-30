@@ -4,7 +4,7 @@
  */
 import type * as os from 'node:os'
 import { describe, expect, it } from 'vitest'
-import { isLocalAddress, NetworkManager } from '../services/network'
+import { isLocalAddress, NetworkManager, normalizeAdapterName } from '../services/network'
 
 interface FakeIpv4 {
   address: string
@@ -25,6 +25,15 @@ function iface(address: string, internal = false): FakeIpv4 {
     cidr: `${address}/24`,
   }
 }
+
+/**
+ * Bun 1.4.2 Windows 实测的 '以太网 2' 单字节码点直拼形态。
+ * 按码点程序化构造：第 9 字节 0x91 是 C1 控制字符（不可见），
+ * 手工复制字面量必丢字节，导致样本失真。
+ */
+const BUN_MOJIBAKE_ETH2 = String.fromCodePoint(
+  0xe4, 0xbb, 0xa5, 0xe5, 0xa4, 0xaa, 0xe7, 0xbd, 0x91, 0x20, 0x32,
+)
 
 /** IPv6 条目：验证采集时被排除 */
 function ipv6(address: string): os.NetworkInterfaceInfoIPv6 {
@@ -62,6 +71,31 @@ describe('适配器分类（← _classify_adapter）', () => {
 
   it('未知名称 → other/25', () => {
     expect(manager.classifyAdapter('Random Loopback Thing')).toEqual({ type: 'other', priority: 25 })
+  })
+
+  it('中文 Windows 默认网卡名 → physical/10（以太网/本地连接/无线网络）', () => {
+    for (const name of ['以太网 2', '本地连接', '无线网络连接']) {
+      expect(manager.classifyAdapter(name)).toEqual({ type: 'physical', priority: 10 })
+    }
+  })
+})
+
+describe('normalizeAdapterName（Bun Windows 网卡名乱码复原）', () => {
+  it('Bun 实测乱码样本：码点即 UTF-8 字节 → 复原为中文', () => {
+    expect(normalizeAdapterName(BUN_MOJIBAKE_ETH2)).toBe('以太网 2')
+  })
+
+  it('已是正确 Unicode 的中文名（Node 宿主 / Bun 修复后）→ 原样返回', () => {
+    expect(normalizeAdapterName('以太网 2')).toBe('以太网 2')
+  })
+
+  it('纯 ASCII 名 → 原样返回（字节两态一致）', () => {
+    expect(normalizeAdapterName('VMware Network Adapter VMnet1')).toBe('VMware Network Adapter VMnet1')
+  })
+
+  it('真实单字节码页名（非法 UTF-8 序列）→ 原样返回，不误伤', () => {
+    // 'é'(0xe9) 后跟 's'(0x73) 不构成合法 UTF-8 连续字节
+    expect(normalizeAdapterName('Réseau 5')).toBe('Réseau 5')
   })
 })
 
@@ -120,6 +154,31 @@ describe('getLocalIp（← get_local_ip）', () => {
       log: () => undefined,
     })
     await expect(manager.getLocalIp()).resolves.toBe('192.168.1.23')
+  })
+
+  it('乱码中文网卡名：复原后正确分类 physical 并以中文名记日志', async () => {
+    const logs: Array<[string, string]> = []
+    const manager = new NetworkManager({
+      getInterfaces: () => ({
+        [BUN_MOJIBAKE_ETH2]: [iface('192.168.255.213')],
+      }),
+      log: (message, level) => logs.push([message, level]),
+    })
+    await expect(manager.getLocalIp()).resolves.toBe('192.168.255.213')
+    expect(logs).toEqual([['通过网卡信息获取物理网卡IP: 192.168.255.213 (以太网 2)', 'success']])
+  })
+
+  it('乱码物理网卡优先于 VPN 网卡（中文名分类修复的排序价值）', async () => {
+    const manager = new NetworkManager({
+      // 物理网卡给更差的 172 段（IP 段优先级 3 < VPN 10 段的 2）：
+      // 唯有适配器分类正确（physical/10 < vpn/20）物理才会胜出
+      getInterfaces: () => ({
+        'OpenVPN TAP-Windows Adapter': [iface('10.8.0.6')],
+        [BUN_MOJIBAKE_ETH2]: [iface('172.20.0.5')],
+      }),
+      log: () => undefined,
+    })
+    await expect(manager.getLocalIp()).resolves.toBe('172.20.0.5')
   })
 
   it('只有 VM 网卡时返回 VM 网卡 IP', async () => {

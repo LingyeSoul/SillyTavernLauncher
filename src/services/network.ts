@@ -5,6 +5,10 @@
  * 现改为 os.networkInterfaces()（迁移设计计划 §3 顺带改进项，消除编码隐患）。
  * 适配器分类关键词、优先级数值、IP 段优先级、UDP 8.8.8.8 回退、300s 缓存
  * 语义全部保留。接口从同步改为 async（UDP 回退天然异步）。
+ * 二次修补（2026-09-30）：Bun（≤1.4.2，Windows）的 os.networkInterfaces()
+ * 把 UTF-8 网卡名按单字节码点直拼（"以太网 2" → "ä»¥å¤ªç½ 2"），
+ * 采集入口经 normalizeAdapterName 复原——详细契约见该函数注释。
+ * 物理关键词补中文名（以太网/本地连接/无线网络），其余关键词与 network.py 逐一对应。
  */
 import * as dgram from 'node:dgram'
 import * as os from 'node:os'
@@ -57,7 +61,43 @@ const PHYSICAL_KEYWORDS = [
   'ethernet', 'realtek', 'intel', 'broadcom', 'nvidia',
   'wi-fi', 'wireless', '802.11', 'wlan', 'wifi', 'qualcomm',
   'atheros', 'killer', 'controller',
+  // 中文 Windows 默认网卡名（network.py 关键词之外补充）：
+  // 缺失会把最常见的物理网卡判成 other/25，优先级反低于 vpn/20，
+  // 与 VPN 并存时选错出口 IP
+  '以太网', '本地连接', '无线网络',
 ]
+
+/**
+ * 复原 Bun（≤1.4.2，Windows）os.networkInterfaces() 的网卡名乱码。
+ * 实测 Bun 把 UTF-8 FriendlyName 的原始字节逐个当码点拼成字符串
+ * （"以太网 2" 的码点即 e4 bb a5 e5 a4 aa e7 bd 91 20 32，呈现为
+ * "ä»¥å¤ªç½ 2"）；Node 宿主返回正确 Unicode。
+ *
+ * 判定契约（宁可放过不可误伤）：
+ * - 含任何 > U+00FF 码点 → 已是正确 Unicode（如正常中文），原样返回；
+ * - 纯 ASCII → 两种编码下字节一致，原样返回；
+ * - 全部码点 ≤ U+00FF 且含非 ASCII → 视码点为字节序列，按严格 UTF-8
+ *   重解：成功则返回复原名（覆盖 "VMware/Loopback" 等 ASCII 名与
+ *   乱码中文名两态）；失败（真实单字节码页名，如法语 "Réseau"）原样返回。
+ *   真实 Latin-1 名恰构成合法 UTF-8 的概率需多高位字节精确排布，实测网卡
+ *   名场景不存在；Bun 修复后本函数自动退化为直通。
+ */
+export function normalizeAdapterName(raw: string): string {
+  let hasNonAscii = false
+  const bytes = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; i++) {
+    const cp = raw.charCodeAt(i)
+    if (cp > 0xff) return raw
+    if (cp > 0x7f) hasNonAscii = true
+    bytes[i] = cp
+  }
+  if (!hasNonAscii) return raw
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch {
+    return raw
+  }
+}
 
 export class NetworkManager {
   private cachedLocalIp: string | null = null
@@ -125,8 +165,9 @@ export class NetworkManager {
   /** ← _parse_adapter_ips 的 os.networkInterfaces 版本 */
   private collectAdapterIps(interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>): AdapterInfo[] {
     const adapters: AdapterInfo[] = []
-    for (const [name, infos] of Object.entries(interfaces)) {
+    for (const [rawName, infos] of Object.entries(interfaces)) {
       if (!infos) continue
+      const name = normalizeAdapterName(rawName)
       const { type, priority } = this.classifyAdapter(name)
       for (const info of infos) {
         // Node ≥18 的 family 为字符串 'IPv4'/'IPv6'
