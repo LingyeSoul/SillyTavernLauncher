@@ -18,6 +18,7 @@ import { UpdateAvailableDialog } from './UpdateAvailableDialog'
 import { ErrorDialog } from './ErrorDialog'
 import { ExitConfirmDialog } from './ExitConfirmDialog'
 import { EnvModeEmbeddedDialog } from './EnvModeEmbeddedDialog'
+import { EnvInstallDialog } from './EnvInstallDialog'
 import { SyncFirstRunDialog } from './SyncFirstRunDialog'
 import { VersionSwitchDialog } from './VersionSwitchDialog'
 import { GitInstallDialog, ZipInstallDialog } from './InstallDialogs'
@@ -57,6 +58,15 @@ function DialogSlot({ dialog }: { dialog: DialogDescriptor }) {
       return <ExitConfirmDialog onConfirm={dialog.onConfirm} />
     case 'envModeEmbeddedConfirm':
       return <EnvModeEmbeddedDialog onConfirm={dialog.onConfirm} />
+    case 'envInstall':
+      return (
+        <EnvInstallDialog
+          gitMissing={dialog.gitMissing}
+          gitMessage={dialog.gitMessage}
+          nodeMissing={dialog.nodeMissing}
+          nodeMessage={dialog.nodeMessage}
+        />
+      )
     case 'syncFirstRun':
       return <SyncFirstRunDialog onConfirm={dialog.onConfirm} />
     case 'versionSwitch':

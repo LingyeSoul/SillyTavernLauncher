@@ -15,9 +15,11 @@
  */
 import { useState } from 'react'
 import type { ReactElement } from 'react'
+import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { EnvMode } from '../../services/configStore'
 import { checkEnv, resolvePortableEnv, probeSystemGit, probeSystemNode } from '../../services/env'
+import type { GitProbe, NodeProbe } from '../../services/env'
 import { embeddedRuntimeVersion } from '../../services/embeddedRuntime'
 import { validateCustomArgs } from '../../services/processManager'
 import { launchCommandLine } from '../../services/platform'
@@ -301,21 +303,54 @@ export function SettingsView() {
     setFontDraft(validation.value)
   }
 
-  /** 环境模式切换（设计 §5.2 / D4）：切至 embedded 先弹兼容性风险确认——
-   *  确认才落盘；取消不动 settings，Select 由 settings 状态驱动自动回显原值 */
-  const handleEnvModeChange = (v: string): void => {
-    if (v === 'embedded' && settings.envMode !== 'embedded') {
-      uiStateActions.openDialog({
-        kind: 'envModeEmbeddedConfirm',
-        onConfirm: () => settings.update({ envMode: 'embedded' }),
-      })
-      return
-    }
-    settings.update({ envMode: v as EnvMode })
+/**
+ * 系统模式探测失败后的引导（2026-10-05）：
+ * - env/ 已有完整内置环境（exe 级判定，防半截 env 骗过只查目录的 checkEnv）→
+ *   提示可切换（重复下载属无效供给）；
+ * - 否则弹「安装内置运行环境」对话框：下载 Git/Node 到 env/，成功后自动切 portable。
+ */
+function offerEnvInstall(git: GitProbe, node: NodeProbe): void {
+  const paths = resolvePortableEnv(join(process.cwd(), 'env'))
+  const portableReady =
+    checkEnv(paths) && existsSync(paths.gitExe) && existsSync(paths.nodeExe) && existsSync(paths.npmCmd)
+  if (portableReady) {
+    uiStateActions.pushToast(
+      'warning',
+      '系统环境检查未通过，但内置 env/ 环境可用，可切换到「内置懒人包环境（env/）」',
+    )
+    return
   }
+  uiStateActions.openDialog({
+    kind: 'envInstall',
+    gitMissing: !git.ok,
+    gitMessage: git.message,
+    nodeMissing: !node.ok,
+    nodeMessage: node.message,
+  })
+}
+
+/** 环境模式切换（设计 §5.2 / D4）：切至 embedded 先弹兼容性风险确认——
+ *  确认才落盘；取消不动 settings，Select 由 settings 状态驱动自动回显原值。
+ *  切至 system 即探测：缺 Git/Node 引导下载到 env/（2026-10-05） */
+const handleEnvModeChange = (v: string): void => {
+  if (v === 'embedded' && settings.envMode !== 'embedded') {
+    uiStateActions.openDialog({
+      kind: 'envModeEmbeddedConfirm',
+      onConfirm: () => settings.update({ envMode: 'embedded' }),
+    })
+    return
+  }
+  settings.update({ envMode: v as EnvMode })
+  if (v === 'system') {
+    const git = probeSystemGit()
+    const node = probeSystemNode()
+    if (!git.ok || !node.ok) offerEnvInstall(git, node)
+  }
+}
 
   /** ← in_env_check / sys_env_check：内置环境体检；system 模式改走系统探测；
-   *  embedded 分支（设计 §5.4）：exe 自身即运行时，恒通过——仅报就绪，不做探测 */
+   *  embedded 分支（设计 §5.4）：exe 自身即运行时，恒通过——仅报就绪，不做探测；
+   *  system 缺 Git/Node 时不再只报错 toast，改弹安装引导对话框（2026-10-05） */
   const handleCheckEnv = (): void => {
     if (settings.envMode === 'system') {
       const git = probeSystemGit()
@@ -323,10 +358,7 @@ export function SettingsView() {
       if (git.ok && node.ok) {
         uiStateActions.pushToast('success', `系统环境检查通过 Git：${git.gitDir} NodeJS：${node.nodeDir}`)
       } else {
-        const missing: string[] = []
-        if (!git.ok) missing.push(`Git（${git.message}）`)
-        if (!node.ok) missing.push(`Node.js 18+（${node.message}）`)
-        uiStateActions.pushToast('error', `系统环境检查未通过: ${missing.join(', ')}`)
+        offerEnvInstall(git, node)
       }
       return
     }

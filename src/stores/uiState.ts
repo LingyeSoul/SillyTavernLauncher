@@ -45,6 +45,17 @@ export type DialogDescriptor =
   | { kind: 'exitConfirm'; onConfirm: () => void }
   /** 切换到 embedded 环境模式的兼容性风险确认（设计 D4；取消则不落盘回显原值） */
   | { kind: 'envModeEmbeddedConfirm'; onConfirm: () => void }
+  /**
+   * 系统模式缺 Git/Node 时的一键下载安装到 env/（2026-10-05）：
+   * plan 为探测结果快照（缺什么、探测失败原因），安装成功后对话框侧切 env_mode='portable'
+   */
+  | {
+      kind: 'envInstall'
+      gitMissing: boolean
+      gitMessage: string
+      nodeMissing: boolean
+      nodeMessage: string
+    }
   /** 首启同步服务器警告（30s 倒计时，确认关闭后才启动服务器） */
   | { kind: 'syncFirstRun'; onConfirm: () => void }
   | {
