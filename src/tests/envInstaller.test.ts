@@ -32,6 +32,18 @@ function enc(s: string): Uint8Array {
   return new TextEncoder().encode(s)
 }
 
+/**
+ * 夹具 zip 固定 mtime：fflate 默认给每个 entry 嵌 Date.now()（DOS 时间 2 秒粒度），
+ * describe 加载期与用例执行期两次 zipSync 跨过 2 秒边界即字节漂移 → SHA256 失配
+ * （CI 慢机器实测 4 用例连灭）。所有 zipSync 必须经本函数，保证字节级确定性。
+ */
+const ZIP_MTIME = new Date(Date.UTC(2026, 0, 1))
+
+/** 返回注解须收窄到 ArrayBuffer：裸 Uint8Array（= ArrayBufferLike）会撑爆 Response 的 BodyInit */
+function zipFixture(entries: Record<string, Uint8Array>): Uint8Array<ArrayBuffer> {
+  return zipSync(entries, { mtime: ZIP_MTIME })
+}
+
 const GIT_ZIP_NAME = `MinGit-${ENV_INSTALL_GIT_VERSION}-64-bit.zip`
 const NODE_ZIP_NAME = `node-v${ENV_INSTALL_NODE_VERSION}-win-x64.zip`
 const NODE_PREFIX = `node-v${ENV_INSTALL_NODE_VERSION}-win-x64`
@@ -57,7 +69,7 @@ function sha256hex(data: Uint8Array): string {
 
 /** 构造带 Content-Length 的 zip Response（downloadToFile 走真实流式读取路径） */
 function zipResponse(entries: Record<string, Uint8Array>): Response {
-  const buf = zipSync(entries)
+  const buf = zipFixture(entries)
   return new Response(buf, { status: 200, headers: { 'Content-Length': String(buf.length) } })
 }
 
@@ -153,7 +165,7 @@ describe('extractZipToDir', () => {
   /** 写盘→读盘闭环，与生产路径一致（downloadToFile 落盘后才解压） */
   const writeZip = (entries: Record<string, Uint8Array>): string => {
     const zipPath = join(tempDir, 'fixture.zip')
-    writeFileSync(zipPath, zipSync(entries))
+    writeFileSync(zipPath, zipFixture(entries))
     return zipPath
   }
 
@@ -198,7 +210,7 @@ describe('extractZipToDir', () => {
 // ---------------------------------------------------------------------------
 
 describe('installEnvComponents', () => {
-  const nodeBuf = zipSync(NODE_ZIP_ENTRIES)
+  const nodeBuf = zipFixture(NODE_ZIP_ENTRIES)
   const nodeShasumsText = `${sha256hex(nodeBuf)}  ${NODE_ZIP_NAME}\n`
 
   /** 标准替身：Git/Node zip 与 SHASUMS 全部可服务；记录请求序到 log */
