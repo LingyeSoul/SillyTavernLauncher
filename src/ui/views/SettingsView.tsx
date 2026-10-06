@@ -96,7 +96,9 @@ const TEXTS = {
   // 更新（酒馆 tab：酒馆更新检查；启动器 tab：启动器更新检查）
   sectionUpdate: '更新',
   stcheckupdate: '自动检查酒馆更新',
-  stcheckupdateDesc: '开启后在每次启动酒馆时先进行更新操作再启动酒馆',
+  stcheckupdateDesc: '开启后在每次启动酒馆时先检查更新再启动酒馆',
+  stAskBeforeUpdate: '检测到更新时先询问',
+  stAskBeforeUpdateDesc: '开启后启动酒馆检测到新版本时先弹窗确认，由你选择更新或跳过；关闭则自动更新后再启动（静默启动时不询问，保持自动更新）',
   // 启动器设置页
   checkupdate: '自动检查启动器更新',
   checkupdateDesc: '开启后在每次启动启动器时会自动检查更新并提示(启动器并不会自动安装更新，请手动下载并更新)',
@@ -611,6 +613,15 @@ const handleEnvModeChange = (v: string): void => {
           <Card>
             <SectionTitle title={TEXTS.sectionUpdate} />
             {switchRow('stcheckupdate', TEXTS.stcheckupdate, TEXTS.stcheckupdateDesc, settings.stcheckupdate, (v) => settings.update({ stcheckupdate: v }))}
+            {/* 询问模式依赖 stcheckupdate 先开（disabled 只挡 UI 误配；静默启动免询问见 stState） */}
+            {switchRow(
+              'st_ask_before_update',
+              TEXTS.stAskBeforeUpdate,
+              TEXTS.stAskBeforeUpdateDesc,
+              settings.stAskBeforeUpdate,
+              (v) => settings.update({ stAskBeforeUpdate: v }),
+              !settings.stcheckupdate,
+            )}
           </Card>
         </div>
       )}

@@ -10,10 +10,13 @@
 import { join } from 'node:path'
 import { create } from 'zustand'
 import { StLifecycle } from '../services/stLifecycle'
+import type { StUpdateCheckResult } from '../services/stLifecycle'
 import { checkStInstalled } from '../services/env'
 import { errMsg, logError } from '../services/errorLog'
 import { hasActiveProcess } from '../services/processManager'
 import { getConfigStore, type EnvMode } from '../services/configStore'
+import type { BoolMessage } from '../services/types'
+import { shouldHideAtStartup } from '../services/silentStart'
 import { useTerminalLogs } from './terminalLogs'
 import { uiStateActions } from './uiState'
 
@@ -42,6 +45,40 @@ export function isDirBusy(busy: StBusyState): boolean {
 
 function appendLog(message: string): void {
   useTerminalLogs.getState().appendLine(message)
+}
+
+/**
+ * 询问模式启动编排（st_ask_before_update，2026-10-06）：先纯检查更新，检出
+ * 新版本时经 confirm 通道问用户——true = 更新并启动 / false = 跳过更新直接启动。
+ * 抽成独立函数并参数化 lifecycle/confirm 供单测注入替身；store 内真实 confirm
+ * 通道 = stUpdateConfirm 对话框（强选择模态，必须二选一，Promise 不悬空）。
+ * 其余检查结果（up-to-date / check-failed / no-git / not-installed）与
+ * checkAndStartSt 语义一致：除 not-installed 报错外一律直接启动。
+ */
+export async function startStWithUpdateConfirm(
+  lc: Pick<StLifecycle, 'checkForStUpdate' | 'updateSt' | 'startSt'>,
+  confirm: () => Promise<boolean>,
+): Promise<BoolMessage> {
+  const check: StUpdateCheckResult = await lc.checkForStUpdate()
+  if (check.status === 'needs-update') {
+    // checkForStUpdate 的 message 是"检测到新版本，正在更新..."——询问模式下
+    // 用户尚未选择，"正在更新"是谎话，换成中性行
+    appendLog('检测到新版本，等待选择是否更新...')
+    return (await confirm()) ? lc.updateSt({ withAutoStart: true }) : lc.startSt()
+  }
+  appendLog(check.message)
+  if (check.status === 'not-installed') return { ok: false, message: check.message }
+  return lc.startSt()
+}
+
+/** 经 stUpdateConfirm 对话框问用户是否更新（resolve：true=更新 / false=跳过） */
+function confirmStUpdateViaDialog(): Promise<boolean> {
+  return new Promise((resolve) => {
+    uiStateActions.openDialog({
+      kind: 'stUpdateConfirm',
+      onConfirm: (update) => resolve(update),
+    })
+  })
 }
 
 /** 单例：日志回调直接写 terminalLogs */
@@ -144,10 +181,17 @@ export const useStState = create<StStateState>((set, get) => ({
     try {
       const config = getConfigStore()
       const lc = getStLifecycle()
-      // ← Flet：stcheckupdate 开 → check_and_start（先检查更新），否则直接启动
-      const result = config.get<boolean>('stcheckupdate', true)
-        ? await lc.checkAndStartSt()
-        : await lc.startSt()
+      // ← Flet：stcheckupdate 开 → 先检查更新，否则直接启动。
+      // st_ask_before_update 再切一刀：检出更新先问用户（更新/跳过）——静默启动
+      // 除外（主窗口已藏到托盘，对话框无人应答只会卡死启动链路，仍走自动更新）
+      let result: BoolMessage
+      if (!config.get<boolean>('stcheckupdate', true)) {
+        result = await lc.startSt()
+      } else if (config.get<boolean>('st_ask_before_update', true) && !shouldHideAtStartup(config)) {
+        result = await startStWithUpdateConfirm(lc, confirmStUpdateViaDialog)
+      } else {
+        result = await lc.checkAndStartSt()
+      }
       if (!result.ok) {
         // 已在运行/未安装/依赖缺失等业务失败：日志已有，toast 提醒
         uiStateActions.pushToast('warning', result.message)

@@ -72,6 +72,13 @@ export interface LauncherConfig {
   checkupdate: boolean
   stcheckupdate: boolean
   /**
+   * 酒馆更新前询问（2026-10-06）：stcheckupdate 开启时检出新版本，先弹确认
+   * 对话框由用户选择「更新并启动 / 跳过更新直接启动」，而非静默自动更新。
+   * 静默启动（autostart_hidden 三键齐开，见 services/silentStart.ts）不受此键
+   * 影响——无人应答的对话框只会卡死启动链路，仍走自动更新。
+   */
+  st_ask_before_update: boolean
+  /**
    * 系统托盘（2026-09-22 恢复启用：托盘菜单 + 关闭到托盘，实现见 services/tray.ts）。
    * D1 期间曾标 deprecated（彼时 GPUIX 无托盘 API 且关窗不可拦截）；O12 自绘标题栏
    * 后可见关闭入口可拦截，恢复条件成立。
@@ -123,6 +130,9 @@ const DEFAULT_CONFIG: LauncherConfig = {
   log: false,
   checkupdate: false,
   stcheckupdate: false,
+  // 默认开启：更新动到用户的目录树与依赖，先征得同意（旧配置缺键时 get 的
+  // fallback 同值，存量用户升级后同样进入询问模式）
+  st_ask_before_update: true,
   tray: false,
   autostart: false,
   autostart_hidden: false,

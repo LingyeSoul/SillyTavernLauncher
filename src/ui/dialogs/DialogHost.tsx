@@ -17,6 +17,7 @@ import { AgeConfirmDialog } from './AgeConfirmDialog'
 import { UpdateAvailableDialog } from './UpdateAvailableDialog'
 import { ErrorDialog } from './ErrorDialog'
 import { ExitConfirmDialog } from './ExitConfirmDialog'
+import { StUpdateConfirmDialog } from './StUpdateConfirmDialog'
 import { EnvModeEmbeddedDialog } from './EnvModeEmbeddedDialog'
 import { EnvInstallDialog } from './EnvInstallDialog'
 import { SyncFirstRunDialog } from './SyncFirstRunDialog'
@@ -56,6 +57,8 @@ function DialogSlot({ dialog }: { dialog: DialogDescriptor }) {
       return <ErrorDialog title={dialog.title} message={dialog.message} detail={dialog.detail} />
     case 'exitConfirm':
       return <ExitConfirmDialog onConfirm={dialog.onConfirm} />
+    case 'stUpdateConfirm':
+      return <StUpdateConfirmDialog onConfirm={dialog.onConfirm} />
     case 'envModeEmbeddedConfirm':
       return <EnvModeEmbeddedDialog onConfirm={dialog.onConfirm} />
     case 'envInstall':

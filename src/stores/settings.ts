@@ -35,6 +35,8 @@ export interface SettingsSnapshot {
   useOptimizeArgs: boolean
   checkupdate: boolean
   stcheckupdate: boolean
+  /** 酒馆检出更新后先询问用户（stcheckupdate 开启时生效；关闭则静默自动更新） */
+  stAskBeforeUpdate: boolean
   autostart: boolean
   /** 自动启动时静默隐藏主窗口到托盘（生效需 autostart + tray 同开，见 services/silentStart.ts） */
   autostartHidden: boolean
@@ -109,6 +111,7 @@ export function readSettings(): SettingsSnapshot {
     useOptimizeArgs: S.get<boolean>('use_optimize_args', false),
     checkupdate: S.get<boolean>('checkupdate', true),
     stcheckupdate: S.get<boolean>('stcheckupdate', true),
+    stAskBeforeUpdate: S.get<boolean>('st_ask_before_update', true),
     autostart: S.get<boolean>('autostart', false),
     autostartHidden: S.get<boolean>('autostart_hidden', false),
     tray: S.get<boolean>('tray', false),
@@ -204,6 +207,7 @@ export const useSettings = create<SettingsState>((set) => ({
       useOptimizeArgs: 'use_optimize_args',
       checkupdate: 'checkupdate',
       stcheckupdate: 'stcheckupdate',
+      stAskBeforeUpdate: 'st_ask_before_update',
       autostart: 'autostart',
       autostartHidden: 'autostart_hidden',
       tray: 'tray',

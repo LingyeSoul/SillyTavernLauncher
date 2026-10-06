@@ -224,6 +224,10 @@ describe('设置页分 tab（smoke）', () => {
     expect(renderer.findByTestId('setting-port')).toBeDefined()
     expect(renderer.findByTestId('setting-custom-args')).toBeDefined()
     expect(renderer.findByTestId('setting-stcheckupdate')).toBeDefined()
+    // 更新前询问行（2026-10-06）：默认 stcheckupdate=false → 前置未满足，disabled 态渲染
+    const askRow = renderer.findByTestId('setting-st_ask_before_update')
+    if (!askRow) throw new Error('setting-st_ask_before_update not found')
+    expect(Number(askRow.style.opacity ?? 1)).toBeLessThanOrEqual(0.32 + 1e-9)
     expect(renderer.findByTestId('setting-check-env')).toBeUndefined()
 
     // 「启动器设置」页：启动器行为/终端（镜像已移入环境页）
@@ -501,5 +505,27 @@ describe('对话框（smoke）', () => {
     await clickTestId('age-confirm')
     expect(onConfirm).toHaveBeenCalledWith(true)
     expect(app.useUiState.getState().dialogs.length).toBe(0)
+  })
+
+  it('酒馆更新确认（st_ask_before_update）：跳过/更新回调正确且必答', async () => {
+    await resetUiStack()
+    const onConfirm = vi.fn()
+    app.useUiState.getState().openDialog({ kind: 'stUpdateConfirm', onConfirm })
+    await settle()
+    expect(renderer.findByTestId('st-update-confirm-update')).toBeDefined()
+    expect(renderer.findByTestId('st-update-confirm-skip')).toBeDefined()
+
+    // 跳过（primary 安全默认）→ onConfirm(false)，对话框卸载
+    await clickTestId('st-update-confirm-skip')
+    expect(onConfirm).toHaveBeenCalledWith(false)
+    expect(app.useUiState.getState().dialogs.length).toBe(0)
+
+    // 更新 → onConfirm(true)
+    app.useUiState.getState().openDialog({ kind: 'stUpdateConfirm', onConfirm })
+    await settle()
+    await clickTestId('st-update-confirm-update')
+    expect(onConfirm).toHaveBeenCalledWith(true)
+    expect(app.useUiState.getState().dialogs.length).toBe(0)
+    await resetUiStack()
   })
 })

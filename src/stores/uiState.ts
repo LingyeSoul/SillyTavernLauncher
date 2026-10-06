@@ -43,6 +43,11 @@ export type DialogDescriptor =
     }
   | { kind: 'error'; title: string; message: string; detail?: string }
   | { kind: 'exitConfirm'; onConfirm: () => void }
+  /**
+   * 酒馆更新确认（st_ask_before_update，2026-10-06）：启动检查检出 ST 新版本，
+   * true = 更新后启动 / false = 跳过更新直接启动（强选择模态，必答）
+   */
+  | { kind: 'stUpdateConfirm'; onConfirm: (update: boolean) => void }
   /** 切换到 embedded 环境模式的兼容性风险确认（设计 D4；取消则不落盘回显原值） */
   | { kind: 'envModeEmbeddedConfirm'; onConfirm: () => void }
   /**

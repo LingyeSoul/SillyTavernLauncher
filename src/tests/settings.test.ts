@@ -33,10 +33,12 @@ interface SettingsModule {
   useSettings: {
     getState: () => {
       envMode: EnvModeLiteral
+      stAskBeforeUpdate: boolean
       update: (patch: {
         envMode?: EnvModeLiteral
         autoProxy?: boolean
         customArgs?: string
+        stAskBeforeUpdate?: boolean
       }) => void
       reload: () => void
     }
@@ -215,6 +217,30 @@ describe('detectEnvType 三级探测（D5，首启 checkAndSetEnvType）', () =>
     // 注入达标探测也不应被消费：若误走首启探测会覆盖成 system，保持 embedded 才证明未触发
     const store = new ConfigStore(join(tempDir, 'config.json'), tempDir, OK_PROBES)
     expect(store.get<EnvModeLiteral>('env_mode', 'portable')).toBe('embedded')
+  })
+})
+
+describe('st_ask_before_update（酒馆更新前询问，2026-10-06）', () => {
+  it('存量 config 无该键时读取 fallback true（升级即进入询问模式）', async () => {
+    writeFileSync(join(tempDir, 'config.json'), JSON.stringify({ first_run: false }), 'utf8')
+    const { useSettings } = await freshModules(tempDir)
+    expect(useSettings.getState().stAskBeforeUpdate).toBe(true)
+    // 未写回前不主动落键（与 env_mode 口径一致）
+    expect('st_ask_before_update' in readDisk()).toBe(false)
+  })
+
+  it('update stAskBeforeUpdate → 快照与 config.json 同步落盘，reload 后一致', async () => {
+    const { useSettings, config } = await freshModules(tempDir)
+    useSettings.getState().update({ stAskBeforeUpdate: false })
+    expect(useSettings.getState().stAskBeforeUpdate).toBe(false)
+    expect(config.get<boolean>('st_ask_before_update', true)).toBe(false)
+    expect(readDisk()['st_ask_before_update']).toBe(false)
+    useSettings.getState().reload()
+    expect(useSettings.getState().stAskBeforeUpdate).toBe(false)
+
+    // 往返回 true
+    useSettings.getState().update({ stAskBeforeUpdate: true })
+    expect(readDisk()['st_ask_before_update']).toBe(true)
   })
 })
 
