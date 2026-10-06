@@ -1,6 +1,6 @@
 /**
  * 关于视图（设计 §4.6，居中固定布局）：logo + 版本芯片（D5 规范化）+
- * 5 链接按钮（检查更新 = 唯一 primary）。打开链接 = cmd /c start（platform.openUrl）。
+ * 6 链接按钮（检查更新 = 唯一 primary）。打开链接 = cmd /c start（platform.openUrl）。
  * 无 workspace-heading；DEVIATION: §4.6 原单滚动型，2026-09-20 去滚动容器
  * （内容短小整体自管，用户要求，O11 回写）；AppShell 亦不包外层滚动容器。
  */
@@ -23,6 +23,7 @@ const TEXTS = {
   github: '访问 GitHub 仓库',
   website: '访问启动器官网',
   bilibili: '访问作者 B 站',
+  qqChannel: '加入 QQ 频道',
   donate: '打赏作者',
   checkUpdate: '检查更新',
   checking: '检查中...',
@@ -32,6 +33,7 @@ const URLS = {
   github: 'https://github.com/LingyeSoul/SillyTavernLauncher',
   website: 'https://sillytavern.lingyesoul.top',
   bilibili: 'https://space.bilibili.com/298721157',
+  qqChannel: 'https://pd.qq.com/s/9usg3jiu1',
   donate: 'https://ifdian.net/order/create?user_id=8a03ea64ebc211ebad0e52540025c377',
   releases: 'https://github.com/LingyeSoul/SillyTavernLauncher/releases/latest',
   changelog: 'https://sillytavern.lingyesoul.top/changelog',
@@ -116,6 +118,7 @@ export function AboutView() {
           {linkButton('github', TEXTS.github, URLS.github, 'externalLink', 'default')}
           {linkButton('website', TEXTS.website, URLS.website, 'externalLink', 'default')}
           {linkButton('bilibili', TEXTS.bilibili, URLS.bilibili, 'externalLink', 'default')}
+          {linkButton('qqChannel', TEXTS.qqChannel, URLS.qqChannel, 'externalLink', 'default')}
           {linkButton('donate', TEXTS.donate, URLS.donate, 'heart', 'default')}
           <Button
             variant="primary"
