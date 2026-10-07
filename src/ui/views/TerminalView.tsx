@@ -6,6 +6,10 @@
  *   DEVIATION: 设计 §4.1 与 gpuix-migration-design 指定 alignment=bottom（不足
  *   一屏日志贴底）；2026-09-20 改为 top：不足一屏时从顶部向下填充，满屏后
  *   followTail 跟尾语义不变。
+ *   DEVIATION（审计 C4）：有日志时日志卡锁深底（dark 集）——ANSI 色板按深色调校
+ *   且着色在引擎解析时烘焙进 store 行（terminalLogs 模块级单例，无主题重解析
+ *   通道），亮色主题下近白前景在浅底不可读；控制台锁深底是通行惯例。无日志
+ *   保持主题底喂 EmptyState（共享组件消费主题色，不为其造暗色变体）。
  * - 窗口化渲染（2026-09-21 性能修复）：virtual-list 的 itemCount/windowStart
  *   协议下只挂载 [windowStart, windowStart+WINDOW_ROWS) 的行切片——全量挂载
  *   实测每行 3 个原生元素常驻（RSS ~34KB/行，20k 行 842MB），且每行追加成本
@@ -24,7 +28,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion, useGpuixRequired, useWindowSize } from '@gpuix/react'
 import type { PublicInstance } from '@gpuix/react'
 import type { EventPayload } from '@gpuix/native'
-import { EASE_OUT_QUAD, dur, layout } from '../../theme'
+import { EASE_OUT_QUAD, dark, dur, layout } from '../../theme'
 import { useMotion, useTheme } from '../theme'
 import { Button } from '../components/Button'
 import { EmptyState } from '../components/EmptyState'
@@ -115,10 +119,12 @@ const LogRow = memo(function LogRow({ line, animate }: { line: TerminalLine; ani
     if (line.segs.length === 0) return [{ text: line.text }]
     const level = classifyLogLevel(line.text)
     if (level === 'default') return line.segs
+    // 级别兜底色取 dark 集：日志卡有日志时锁深底（见文件头 DEVIATION），
+    // 亮色主题的 status.* 在深底上虽可读但两套色并置会随主题漂移观感
     const color =
-      level === 'error' ? t.status.error
-      : level === 'warning' ? t.status.warning
-      : t.status.info
+      level === 'error' ? dark.status.error
+      : level === 'warning' ? dark.status.warning
+      : dark.status.info
     return [{ text: line.text, color, weight: level === 'error' ? 500 : undefined }]
   }, [line.text, line.segs, t])
 
@@ -128,7 +134,8 @@ const LogRow = memo(function LogRow({ line, animate }: { line: TerminalLine; ani
       style={{
         fontSize,
         fontFamily,
-        color: s.color ?? t.text.secondary,
+        // 无色段兜底取 dark.text.secondary：日志卡有日志时锁深底（文件头 DEVIATION）
+        color: s.color ?? dark.text.secondary,
         fontWeight: s.weight,
         textDecoration: s.underline ? 'underline' : undefined,
       }}>
@@ -421,9 +428,10 @@ export function TerminalView() {
           minHeight: 0,
           display: 'flex',
           flexDirection: hasLogs ? 'row' : 'column',
-          backgroundColor: t.bg.deep,
+          // 锁深底只在有日志时启用（理由见文件头 DEVIATION 审计 C4）
+          backgroundColor: hasLogs ? dark.bg.deep : t.bg.deep,
           borderWidth: 1,
-          borderColor: t.border.subtle,
+          borderColor: hasLogs ? dark.border.subtle : t.border.subtle,
           borderRadius: t.radius.md,
           overflow: 'hidden',
         }}>

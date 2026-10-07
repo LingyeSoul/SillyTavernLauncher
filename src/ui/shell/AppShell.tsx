@@ -149,7 +149,7 @@ function Sidebar() {
         style={{
           display: 'flex',
           flexDirection: 'column',
-          gap: 3,
+          gap: t.space.navItemGap,
           paddingTop: 14,
           paddingLeft: 6,
           paddingRight: 6,
@@ -236,7 +236,8 @@ function StStatusDot({ status }: { status: 'running' | 'stopped' | 'not-installe
     <motion.div
       initial={false}
       animate={{ opacity: breathPhase ? 0.5 : 1 }}
-      transition={{ duration: 1, ease: 'easeInOut' }}
+      // 半周期 1s 由 breathPeriodMs 派生（useBreath 每半周期翻相），dur 单源
+      transition={{ duration: dur.breathPeriodMs / 2000, ease: 'easeInOut' }}
       style={{
         width: 6,
         height: 6,

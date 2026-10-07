@@ -6,6 +6,7 @@
  * 0–3 数值相位驱动；'100%' 等弹性宽无像素基准，回退 opacity 呼吸（原配方）。
  */
 import { motion } from '@gpuix/react'
+import { dur } from '../../theme'
 import { useMotion, useShimmerPhase, useTheme } from '../theme'
 
 export interface SkeletonBlockProps {
@@ -37,7 +38,7 @@ export function SkeletonBlock({ width = '100%', height = 16 }: SkeletonBlockProp
         <motion.div
           initial={false}
           animate={{ left }}
-          transition={{ duration: 0.35, ease: 'easeInOut' }}
+          transition={{ duration: dur.shimmerSweep, ease: 'easeInOut' }}
           style={{
             position: 'absolute',
             top: 0,
@@ -48,9 +49,11 @@ export function SkeletonBlock({ width = '100%', height = 16 }: SkeletonBlockProp
             background: {
               type: 'linear-gradient',
               angle: 90,
+              // 亮带颜色走 token（暗=白 16%，亮=text.primary 同相 10%——白亮带在
+              // 亮色 elevated #F0F3F6 上不可见，审计 C6 修法）
               stops: [
                 { color: 'rgb(255 255 255 / 0%)', position: 0 },
-                { color: 'rgb(255 255 255 / 16%)', position: 1 },
+                { color: t.skeletonStripe, position: 1 },
               ],
             },
           }}
@@ -62,7 +65,7 @@ export function SkeletonBlock({ width = '100%', height = 16 }: SkeletonBlockProp
     <motion.div
       initial={false}
       animate={{ opacity: motionEnabled ? (shimmerPhase >= 2 ? 0.5 : 1) : 1 }}
-      transition={{ duration: motionEnabled ? 0.75 : 0, ease: 'easeInOut' }}
+      transition={{ duration: motionEnabled ? dur.shimmerFade : 0, ease: 'easeInOut' }}
       style={{
         width,
         minHeight: 16,

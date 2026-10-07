@@ -12,6 +12,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { getConfigStore } from '../services/configStore'
 import { errMsg, logError } from '../services/errorLog'
+import { IS_WINDOWS, spawnAsync } from '../services/runtime'
 import {
   applyThemeAccent, createUITheme, dark, light, resolveThemeAccent,
   THEME_ACCENTS, type ThemeAccentId, type UITheme,
@@ -25,6 +26,50 @@ export type ThemeMode = 'dark' | 'light'
 /** 骨架扫光相位步进周期（375ms × 4 相位 = 1.5s 全周期，§5.9） */
 const SHIMMER_STEP_MS = 375
 
+// —— OS 侧动画偏好探测（§6.B 的另一半：Windows「关闭不必要动画」注册表）——
+// HKCU\Control Panel\Accessibility\Animation = "0" 视为系统级关动画（Ease of Access
+// 动画开关的落点）。只认解析值恰为 "0"/"0x0"；键缺失/reg 失败/非 Windows 一律放行
+// （fail-open：宁可探测不生效，也绝不误伤正常用户的动画）。
+type OsAnimationProbe = () => Promise<boolean>
+
+let osAnimationProbe: OsAnimationProbe = defaultOsAnimationProbe
+/** 每进程只探一次（ThemeProvider 会被多处挂载；memo 到模块级 promise） */
+let osAnimationProbePromise: Promise<boolean> | null = null
+
+async function defaultOsAnimationProbe(): Promise<boolean> {
+  if (!IS_WINDOWS) return false
+  // vitest worker 环境变量：unit 项目多处离屏渲染 ThemeProvider，单测不触发真实子进程
+  if (process.env.VITEST) return false
+  try {
+    const proc = spawnAsync({
+      cmd: ['reg', 'query', 'HKCU\\Control Panel\\Accessibility', '/v', 'Animation'],
+    })
+    const stdout = await new Response(proc.stdout).text()
+    await proc.exited
+    const line = stdout.split(/\r?\n/).find((l) => l.includes('Animation'))
+    if (!line) return false
+    const raw = line.trim().split(/\s+/).pop() ?? ''
+    return raw === '0' || raw === '0x0'
+  } catch (err) {
+    logError(`[ThemeProvider] OS 动画偏好探测失败（fail-open 放行）: ${errMsg(err)}`)
+    return false
+  }
+}
+
+function probeOsAnimationDisabled(): Promise<boolean> {
+  osAnimationProbePromise ??= osAnimationProbe().catch((err) => {
+    logError(`[ThemeProvider] OS 动画偏好探测异常（fail-open 放行）: ${errMsg(err)}`)
+    return false
+  })
+  return osAnimationProbePromise
+}
+
+/** 测试注入：替身探针离线驱动（镜像源测速 __setMirrorDialogProbeForTests 同款范式） */
+export function __setOsAnimationProbeForTests(probe: OsAnimationProbe | null): void {
+  osAnimationProbe = probe ?? defaultOsAnimationProbe
+  osAnimationProbePromise = null
+}
+
 interface ThemeContextValue {
   t: UITheme
   mode: ThemeMode
@@ -32,8 +77,12 @@ interface ThemeContextValue {
   /** 主题色预设 id（themeColor，'ember' 默认；UI 见设置→启动器→外观） */
   accent: ThemeAccentId
   setAccent: (accent: ThemeAccentId) => void
-  /** reduced-motion 应用内开关（§6.B；PoC-4 的 reg query 探测未实现，列遗留 TODO） */
+  /** reduced-motion 应用内开关（§6.B；OS 侧注册表探测已实装，合流见 ThemeProvider） */
   motionEnabled: boolean
+  /** motionEnabled 的 config 侧原值（未与 OS 门控合流）——设置页开关绑定此值：
+   *  OS 关动画 + 偏好开时合流值恒 false，绑合流值会出现"点了没反应"的死开关；
+   *  OS 门控生效态可由 motionConfigEnabled && !motionEnabled 推导 */
+  motionConfigEnabled: boolean
   setMotionEnabled: (enabled: boolean) => void
 }
 
@@ -84,10 +133,25 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [accent, setAccentState] = useState<ThemeAccentId>(
     resolveThemeAccent(config.get('themeColor', 'ember')),
   )
-  // 默认开启动效；持久化键 motionEnabled（config schema 自由扩展键）
-  const [motionEnabled, setMotionEnabledState] = useState<boolean>(
+  // 默认开启动效；持久化键 motionEnabled（config schema 自由扩展键）。
+  // effective = 应用内开关 && OS 未关闭动画（§6.B 双侧门控：两路"关闭"信号取 OR）
+  const [configMotionEnabled, setConfigMotionEnabled] = useState<boolean>(
     config.get<boolean>('motionEnabled', true),
   )
+  const [osAnimationDisabled, setOsAnimationDisabled] = useState(false)
+  const motionEnabled = configMotionEnabled && !osAnimationDisabled
+
+  // OS 侧探测：注册表结果异步到达（首帧先按 config 渲染），合流只置 true 单向生效
+  // （应用内开关是用户显式偏好，OS 关闭不应把它翻成 false 再写回 config）；卸载守卫
+  useEffect(() => {
+    let cancelled = false
+    void probeOsAnimationDisabled().then((disabled) => {
+      if (!cancelled && disabled) setOsAnimationDisabled(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const value = useMemo<ThemeContextValue>(() => {
     const base = mode === 'light' ? light : dark
@@ -115,8 +179,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         }
       },
       motionEnabled,
+      motionConfigEnabled: configMotionEnabled,
       setMotionEnabled: (enabled) => {
-        setMotionEnabledState(enabled)
+        setConfigMotionEnabled(enabled)
         try {
           config.set('motionEnabled', enabled)
           config.save()
@@ -125,7 +190,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         }
       },
     }
-  }, [config, mode, accent, motionEnabled])
+  }, [config, mode, accent, motionEnabled, configMotionEnabled])
 
   return (
     <ThemeContext.Provider value={value}>

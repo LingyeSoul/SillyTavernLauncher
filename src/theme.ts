@@ -17,7 +17,8 @@
 
 export interface ThemeTokens {
   ember: string
-  amber: string
+  /** 青碧次级装饰色（旧名 amber，名实不符易误当橙用——2026-10-07 审计 A 组改名） */
+  teal: string
   gold: string
   bg: { deep: string; base: string; surface: string; elevated: string; hover: string; overlay: string }
   text: { primary: string; secondary: string; muted: string; disabled: string }
@@ -27,10 +28,13 @@ export interface ThemeTokens {
   glow: { ember: string }
   selection: { ember: string }
   scrim: string
+  /** 骨架扫光亮带（双形态：暗=白 16%，亮=text.primary 同相 10%——白亮带在亮色
+   *  elevated 底上不可见，Skeleton 消费） */
+  skeletonStripe: string
 }
 
 export const dark: ThemeTokens = {
-  ember: '#EBA375', amber: '#88BDB5', gold: '#E3BC75',
+  ember: '#EBA375', teal: '#88BDB5', gold: '#E3BC75',
   bg: { deep: '#111315', base: '#141618', surface: '#1C1F22',
         elevated: '#272B2F', hover: '#2C3136', overlay: '#1C1F22' },
   text: { primary: '#EEF0F2', secondary: '#A8AFB6', muted: '#929AA3', disabled: '#69727B' },
@@ -40,10 +44,11 @@ export const dark: ThemeTokens = {
   glow: { ember: 'rgb(235 163 117 / 12%)' },
   selection: { ember: 'rgb(235 163 117 / 35%)' },
   scrim: 'rgb(0 0 0 / 40%)',
+  skeletonStripe: 'rgb(255 255 255 / 16%)',
 }
 
 export const light: ThemeTokens = {
-  ember: '#9D4C23', amber: '#34756C', gold: '#956914',
+  ember: '#9D4C23', teal: '#34756C', gold: '#956914',
   // DEVIATION: O6 — elevated 原 #FFFFFF（dt 成对表），白卡上不可辨，改 #F0F3F6
   bg: { deep: '#EDF0F2', base: '#F6F7F8', surface: '#FFFFFF',
         elevated: '#F0F3F6', hover: '#E9EDF0', overlay: '#FFFFFF' },
@@ -54,6 +59,8 @@ export const light: ThemeTokens = {
   glow: { ember: 'rgb(157 76 35 / 10%)' },
   selection: { ember: 'rgb(235 163 117 / 35%)' },
   scrim: 'rgb(0 0 0 / 40%)',
+  // = text.primary #242A30 同相 10%：在 elevated #F0F3F6 上呈可见暗亮带
+  skeletonStripe: 'rgb(36 42 48 / 10%)',
 }
 
 // —— 主题无关常量（theme.ts §2.B/§2.C）——
@@ -61,6 +68,9 @@ export const light: ThemeTokens = {
 export const font = { sans: 'Microsoft YaHei', mono: 'Consolas' } as const
 export const fs = { h1: 26, h2: 20, h3: 16, body: 14, field: 13, caption: 12, micro: 11 } as const
 export const radius = { sm: 4, md: 6, lg: 8, nav: 5, chip: 3 } as const
+// DEVIATION: 控件几何的"正圆"（开关丸形轨道/圆点、Radio 圆点、色板圆点、状态呼吸
+// 点）圆角 = 盒高一半（跑道形/正圆推导值），不受卡片圆角档约束——圆角档管的是
+// 卡片/面板层，控件本体几何按控件语义推导（O1/O12 层约束先例的延伸）
 export const space = { cardPad: 16, cardGap: 8, sectionGap: 16, navItemGap: 3, fieldGap: 8 } as const
 export const size = { controlH: 34, navItemH: 38, fieldH: 34, emptyMark: 72 } as const
 export const layout = {
@@ -76,11 +86,20 @@ export const layout = {
 } as const
 
 // —— 动效（§6）。不命名为 `motion`，避免与 @gpuix/react 的 motion 组件导入冲突 ——
-/** = GSAP power2.out 的精确 bezier（motion ease 需要 mutable 元组类型） */
+/** = GSAP power2.out 的精确 bezier（motion ease 需要 mutable 元组类型）。
+ *  曲线纪律：状态过渡（hover/激活/菜单/开关）一律用本曲线；**循环往复动画**
+ * （呼吸/扫光/不确定进度往返）刻意用 'easeInOut'**——两端皆缓的循环才连续，
+ *  与 EASE_OUT_QUAD 是不同曲线，禁止互替（'easeOut' 字符串 ≠ power2.out）。 */
 export const EASE_OUT_QUAD: [number, number, number, number] = [0.25, 0.46, 0.45, 0.94]
 export const dur = {
   enter: 0.24, logEnter: 0.2, state: 0.14, toastHandoff: 0.3,
   menu: 0.12, shakeStep: 0.1,
+  /** Skeleton 扫光带横穿 / 透明度呼吸的插值时长（秒；此前裸写 0.35/0.75 入档） */
+  shimmerSweep: 0.35, shimmerFade: 0.75,
+  /** Modal/Toast 退场与进场同拍 240ms（M5/降级 #8），取 Math.round(dur.enter*1000) */
+  toastGapMs: 60,
+  /** 悬浮提示弹出延迟（§5.12 原值 350 入档） */
+  tooltipDelayMs: 350,
   breathPeriodMs: 2000, shimmerPeriodMs: 1500,
 } as const
 /** 列表入场 stagger（§6 M15）：仅挂载时播（motion initial 语义天然不重播）；
@@ -103,12 +122,12 @@ export function createUITheme(tokens: ThemeTokens): UITheme {
 // —— 主题色（accent）预设：只换主强调色 ember 及其派生色 ——
 //
 // 第一性原理：全 UI 的"主题色"消费点（按钮/激活态/glow/selection/编辑器光标）全部
-// 走 t.ember 一支；amber/gold 是次级装饰色（全 UI 仅 2 处独立使用），status.* 是语义
+// 走 t.ember 一支；teal/gold 是次级装饰色（全 UI 仅 2 处独立使用），status.* 是语义
 // 色——它们不随主题色切换，保持设计契约稳定。每套 accent 提供 dark/light 双值：
 // dark = 高明度低饱和色 + 深色 onPrimary；light = 低明度高饱和色 + 白 onPrimary
 // （同现有 ember 双形态规律，onPrimary↔ember 对比度 ≥ 4.5:1 由 tests/theme.accent.test.ts 契约锁定）。
-// 取色种子优先复用设计系统内已调校的成对色值：teal ← amber 对、gold ← gold 对、
-// blue ← status.info 对；violet 为新调。selection 双模式统一用 dark 侧色相 35%
+// 取色种子优先复用设计系统内已调校的成对色值：teal 对直接取 token 色值、
+// gold ← gold 对、blue ← status.info 对；violet 为新调。selection 双模式统一用 dark 侧色相 35%
 // （对齐现有 ember 的 selection 双模式同值规律）。
 
 export type ThemeAccentId = 'ember' | 'teal' | 'gold' | 'blue' | 'violet'

@@ -1,6 +1,9 @@
 /**
  * 首启同步服务器警告对话框（← Flet sync_ui._show_first_server_dialog）：
- * 30s 倒计时强制阅读 + 红字安全要点 + 「不再显示此提醒」切换。
+ * 30s 倒计时强制阅读 + 警示色（warning 金）安全要点 + 「不再显示此提醒」切换。
+ * 语义色纪律：内容是安全提醒而非错误状态，要点与警示标题用 status.warning；
+ * 红字（status.error）只留给倒计时行——「强制阅读未完成」是阻断态，归零翻
+ * success（与 ExitConfirm/AgeConfirm 的警示文案同语言，SyncView 约定一致）。
  *
  * - 触发：开启同步服务器且 sync.first_shown=false（门控纯函数见下方导出）
  * - 模态不可关闭：strong 挡 Escape（da09d6c「Modal close guards」模式，同
@@ -131,9 +134,10 @@ export function SyncFirstRunDialog({ onConfirm }: SyncFirstRunDialogProps) {
   const divider = (
     <div style={{ height: 1, backgroundColor: t.border.subtle, marginTop: 10, marginBottom: 10 }} />
   )
+  // 安全要点 = warning 语义（非错误），红字保留给真异常（SyncView:247 约定）
   const pointStyle = {
     fontSize: t.fs.field,
-    color: t.status.error,
+    color: t.status.warning,
     fontFamily: t.font.sans,
     lineHeight: 22,
   }
@@ -166,7 +170,7 @@ export function SyncFirstRunDialog({ onConfirm }: SyncFirstRunDialogProps) {
 
       {divider}
 
-      <text style={{ fontSize: t.fs.h2, fontWeight: 600, color: t.status.error, fontFamily: t.font.sans }}>
+      <text style={{ fontSize: t.fs.h2, fontWeight: 600, color: t.status.warning, fontFamily: t.font.sans }}>
         {TEXTS.warnTitle}
       </text>
       <div style={{ height: 10 }} />

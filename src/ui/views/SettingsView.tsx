@@ -111,6 +111,7 @@ const TEXTS = {
   trayDesc: '关闭按钮将隐藏窗口到托盘、酒馆保持运行；从托盘菜单唤回或退出',
   reduceMotion: '减少动效',
   reduceMotionDesc: '关闭界面过渡动画与状态动效（性能受限设备建议开启）',
+  reduceMotionOsGate: '系统动画已关闭（辅助功能），动效当前跟随系统关闭；本开关只保存应用内偏好',
   sectionAppearance: '外观',
   accentLabel: '主题色',
   accentHintPrefix: '当前',
@@ -201,7 +202,7 @@ const TERMINAL_FONT_SIZE_ITEMS = TERMINAL_FONT_SIZE_PRESETS.map((n) => ({
 const TERMINAL_FONT_PREVIEW_TEXT = 'Aa01 中文示例 [OK] SillyTavern ✓'
 
 export function SettingsView() {
-  const { t, mode, accent, setAccent, setMotionEnabled, motionEnabled } = useThemeContext()
+  const { t, mode, accent, setAccent, setMotionEnabled, motionEnabled, motionConfigEnabled } = useThemeContext()
   const settings = useSettings()
   const [activeTab, setActiveTab] = useState<SettingsTabId>('env')
   const [portDraft, setPortDraft] = useState(String(settings.stPort))
@@ -554,7 +555,9 @@ const handleEnvModeChange = (v: string): void => {
             {switchRow('auto_proxy', TEXTS.autoProxy, TEXTS.autoProxyDesc, settings.autoProxy, (v) => settings.update({ autoProxy: v }))}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
               <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Input value={portDraft} onChange={setPortDraft} placeholder={TEXTS.portHint} width={96} testId="setting-port" />
+                <Input value={portDraft} onChange={setPortDraft} placeholder={TEXTS.portHint} mono width={96} testId="setting-port" />
+                {/* Scarce Ember：网络卡的实色主操作仅保留端口保存，代理保存降级 default
+                    （同屏多实色 ember 按钮稀释主操作引导，§C1 审计修法） */}
                 <Button variant="primary" icon="save" onClick={handleSavePort} width={96} testId="setting-save-port">
                   {TEXTS.save}
                 </Button>
@@ -573,7 +576,7 @@ const handleEnvModeChange = (v: string): void => {
                   />
                 </div>
                 <Button
-                  variant="primary"
+                  variant="default"
                   icon="save"
                   onClick={() => settings.saveProxyUrl(proxyDraft)}
                   width={96}
@@ -655,7 +658,16 @@ const handleEnvModeChange = (v: string): void => {
               settings.update(v ? { tray: v } : { tray: v, autostartHidden: false })
               void applyTrayEnabled(v)
             })}
-            {switchRow('reduce_motion', TEXTS.reduceMotion, TEXTS.reduceMotionDesc, !motionEnabled, (v) => setMotionEnabled(!v))}
+            {/* 开关绑 config 侧偏好（motionConfigEnabled）而非合流值：OS 关动画时
+                合流值恒 false，绑它会出现"点了没反应"的死开关；OS 门控生效时
+                换说明文案告知动效当前跟随系统关闭 */}
+            {switchRow(
+              'reduce_motion',
+              TEXTS.reduceMotion,
+              motionConfigEnabled && !motionEnabled ? TEXTS.reduceMotionOsGate : TEXTS.reduceMotionDesc,
+              !motionConfigEnabled,
+              (v) => setMotionEnabled(!v),
+            )}
           </Card>
 
           {/* 外观（主题色预设：色板行，点击即存即生效；预览色取当前模式侧的 ember，

@@ -12,9 +12,10 @@
  *   双程共用，easeOut 在回零段缓收、再出发段陡起，往返衔接生硬；easeInOut 两端
  *   皆缓，循环观感连续。
  * - 保底路径（渲染处显式分流，非静默）：旧 renderer 无测量 API / 轮询超次未就绪
- *   → trackW 保持 null，fill 退回静态百分比渲染（即原降级行为，不确定模式保留
- *   8 档阶跃 interval）。motion 关闭且已测得时不跑 interval，fill 静态呈满行程宽
- *   （useBreath 同款"恒定相位静态降级"，不空条也不闪动）。
+ *   → trackW 保持 null，fill 退回静态百分比渲染；不确定模式的 8 档阶跃 interval
+ *   与主路径同挂 motion 门控（§6.B 无边缘豁免——保底条纹跳变也是动画，reduced-
+ *   motion 下必须静止），关闭时静态呈 40% 行程。motion 关闭且已测得时不跑
+ *   interval，fill 静态呈满行程宽（useBreath 同款"恒定相位静态降级"，不空条也不闪动）。
  */
 import { useEffect, useRef, useState } from 'react'
 import { motion, useGpuixRequired, useWindowSize } from '@gpuix/react'
@@ -99,15 +100,16 @@ export function ProgressBar({ value, testId }: ProgressBarProps) {
 
   const indeterminate = value === undefined
 
-  // 不确定模式相位时钟：保底路径照跑（现状行为，与 motion 开关无关——它本就是
-  // JS 驱动的静态渲染）；连续路径同一节拍下奇偶翻转驱动往返插值；motion 关闭且
-  // 已测得时不跑 interval（reduced-motion 合规，fill 静态见下方 fillW）
+  // 不确定模式相位时钟：连续/保底两路径同挂 motion 门控（§6.B 无边缘豁免——保底
+  // 条纹也是动画，reduced-motion 下必须静止；此前"保底照跑与 motion 无关"是漏洞）。
+  // interval 统一驱动：主路径取奇偶、保底取 %8；motion 关闭时不建 interval，
+  // fill 静态（主路径满行程宽 / 保底 40% 行程，见下方 fillW 与 fallbackPct）
   useEffect(() => {
     if (!indeterminate) return
-    if (trackW != null && !motionEnabled) return
+    if (!motionEnabled) return
     const id = setInterval(() => setPhase((p) => (p + 1) % 8), INDETERMINATE_STEP_MS)
     return () => clearInterval(id)
-  }, [indeterminate, trackW, motionEnabled])
+  }, [indeterminate, motionEnabled])
 
   const lightTrackBorder = mode === 'light'
   const pct = value !== undefined ? Math.max(0, Math.min(100, value)) : 0
@@ -115,7 +117,9 @@ export function ProgressBar({ value, testId }: ProgressBarProps) {
   // —— 保底路径：像素宽未测得 → 原静态百分比渲染（fill 宽动画逐帧 re-layout
   //    子树的铁律由轨道 overflow:'hidden' 兜底，fill 无文本）——
   if (trackW == null) {
-    const fallbackPct = indeterminate ? (phase % 8) * 10 : pct
+    // motion 关闭时相位恒 0（interval 未建），显式给 40% 静态行程——0% 读作
+    // "未开始"，40% 与主路径满行程静态同为"进行中"读法（不空条也不闪动）
+    const fallbackPct = indeterminate ? (motionEnabled ? (phase % 8) * 10 : 40) : pct
     return (
       <div
         ref={trackRef}

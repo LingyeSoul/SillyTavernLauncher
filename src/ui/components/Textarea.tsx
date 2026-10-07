@@ -1,6 +1,6 @@
 /**
  * Textarea（设计 §5.3 Textarea 同构）：wrapper alignItems:flex-start + <textarea minRows>。
- * 行高 fontSize 12 + lineHeight 18（mono）；聚焦辉光环同 Input。
+ * 行高 fontSize 12 + lineHeight 18（mono）；聚焦辉光环同 Input，边框恒 subtle（§5.3）。
  */
 import { useState } from 'react'
 import { editorTheme, useTheme, useThemeContext } from '../theme'
@@ -35,7 +35,7 @@ export function Textarea({
         alignItems: 'stretch',
         backgroundColor: t.bg.surface,
         borderWidth: 1,
-        borderColor: focused ? t.border.default : t.border.subtle,
+        borderColor: t.border.subtle,
         borderRadius: t.radius.sm,
         opacity: disabled ? 0.32 : 1,
         boxShadow: focused

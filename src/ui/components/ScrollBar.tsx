@@ -24,6 +24,10 @@
  *   极淡底色 + hover 加深"做可见化，用户嫌丑改为**隐藏式**（轨道透明透出
  *   宿主背景、thumb 常显 + hover 变色为唯一反馈）——脱靶防护由此收窄到
  *   16px 宽度一层，美观优先系用户拍板；
+ * - thumb 色值（DEVIATION 登记，审计 A 组）：dragging=ember / hover=text.muted /
+ *   常态=text.disabled，非 Forge 配方的 border.default/strong——隐藏式轨道透明
+ *   透出宿主背景，border token 在其上几乎不可见（隐藏式拍板时一并确认）；thumb
+ *   语义 = 弱化的控制件，与文本禁用/次要色同级；
  * - 滚轮转发：轨道必须 pointerEvents:'auto' 才收得到 mouseDown，代价是吃掉
  *   滚轮（GPUIX 滚轮只达命中元素、不冒泡，virtual-list 是兄弟节点收不到）
  *   → onScroll 把 delta 换算成行数经 onScrollToRow 转发回列表：

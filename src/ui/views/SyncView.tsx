@@ -263,8 +263,8 @@ export function SyncView() {
             testId="sync-server-switch"
           />
           <div style={{ flexGrow: 1, minWidth: 0 }} />
-          <Input value={host} onChange={setHost} width={140} testId="sync-host" />
-          <Input value={port} onChange={setPort} width={96} testId="sync-port" />
+          <Input value={host} onChange={setHost} mono width={140} testId="sync-host" />
+          <Input value={port} onChange={setPort} mono width={96} testId="sync-port" />
         </div>
         <div style={{ height: 8 }} />
         <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.mono }} testId="sync-server-url">
@@ -315,7 +315,9 @@ export function SyncView() {
             title={TEXTS.emptyDiscovered}
             hint={TEXTS.emptyDiscoveredHint}
             action={
-              <Button variant="primary" icon="search" onClick={scanServers} disabled={scanning} testId="sync-scan-empty">
+              // Scarce Ember：空态引导降级 default——客户端卡的「开始同步」已是
+              // 同屏唯一实色主操作（§C2 审计修法）
+              <Button variant="default" icon="search" onClick={scanServers} disabled={scanning} testId="sync-scan-empty">
                 {TEXTS.scan}
               </Button>
             }
@@ -342,7 +344,7 @@ export function SyncView() {
                 borderColor: t.border.subtle,
                 borderRadius: t.radius.md,
               }}>
-              <Chip color={t.amber}>{`服务器 ${i + 1}`}</Chip>
+              <Chip color={t.teal}>{`服务器 ${i + 1}`}</Chip>
               <text style={{ fontSize: t.fs.caption, fontFamily: t.font.mono, color: t.text.secondary, flexGrow: 1, minWidth: 0 }}>
                 {server.serverUrl}
               </text>

@@ -2,7 +2,9 @@
  * 扩展安装对话框 ×2（设计 §4.7）：
  * - Git 安装（480）：仓库 URL input mono 13 + 安装目标 Select（全局/用户）。
  * - ZIP 安装（480）：路径只读 input mono + 浏览…（PowerShell OpenFileDialog）+ 目标 Select。
- * 校验语义 ← extension_page（http(s)/git@ 前缀、非空 ZIP 路径）；安装有 busy 状态反馈。
+ * 校验语义 ← extension_page（http(s)/git@ 前缀、非空 ZIP 路径）；安装有 busy 状态反馈
+ * （内联不确定进度条；busy 期间可关窗后台继续——安装无中止协议故不被取消，
+ * 完成/失败经 toast 送达；在途锁防同/异对话框并发装互相踩踏）。
  */
 import { useState } from 'react'
 import { getExtensionManager, type ExtensionType } from '../../services/extensions'
@@ -13,6 +15,7 @@ import { useTheme } from '../theme'
 import { Button } from '../components/Button'
 import { Input } from '../components/Input'
 import { Modal, useModalClose } from '../components/Modal'
+import { ProgressBar } from '../components/ProgressBar'
 import { Select } from '../components/Select'
 
 const TEXTS = {
@@ -31,7 +34,15 @@ const TEXTS = {
   install: '安装',
   installing: '安装中...',
   cancel: '取消',
+  background: '后台继续',
+  inFlight: '已有扩展安装任务进行中，请等待完成',
 } as const
+
+/** 扩展安装在途锁 + 解散标记（模块级，Git/ZIP 两对话框共用）：关窗后台继续后
+ *  对话框卸载、组件 state 丢失；在途期间拒绝并发安装（同仓库双克隆/并发解压
+ *  会互相踩踏），完成收尾按解散标记决定是否替用户关窗 */
+let extInstallInFlight = false
+let extInstallDismissed = false
 
 const TARGET_ITEMS = [
   { value: 'global', label: '全局插件' },
@@ -70,7 +81,13 @@ function GitInstallActions({
       return
     }
     const extType: ExtensionType = target === 'global' ? 'global' : 'user'
-    // busy 态期间保持对话框可见（原实现先 closeTop，"安装中"反馈永不可见）
+    if (extInstallInFlight) {
+      uiStateActions.pushToast('info', TEXTS.inFlight)
+      return
+    }
+    extInstallInFlight = true
+    extInstallDismissed = false
+    // busy 态期间对话框可关窗后台继续（安装日志本就落终端日志页，见下方 log 回调）
     setInstalling(true)
     void (async () => {
       const manager = getExtensionManager({
@@ -78,16 +95,18 @@ function GitInstallActions({
       })
       const result = await manager.installFromGit(trimmed, extType)
       uiStateActions.pushToast(result.ok ? 'success' : 'error', result.message)
-      // 安装完成后 bump 计数驱动 ExtensionsView 重扫，再收起对话框
+      // 安装完成后 bump 计数驱动 ExtensionsView 重扫；用户已关窗则不再替其关顶层对话框
       uiStateActions.bumpExtensions()
-      requestClose()
-    })()
+      if (!extInstallDismissed) requestClose()
+    })().finally(() => {
+      extInstallInFlight = false
+    })
   }
 
   return (
     <>
-      <Button variant="quiet" disabled={installing} onClick={requestClose} testId="git-install-cancel">
-        {TEXTS.cancel}
+      <Button variant="quiet" onClick={requestClose} testId="git-install-cancel">
+        {installing ? TEXTS.background : TEXTS.cancel}
       </Button>
       <Button variant="primary" icon="download" disabled={installing} onClick={handleInstall} testId="git-install-confirm">
         {installing ? TEXTS.installing : TEXTS.install}
@@ -107,7 +126,11 @@ export function GitInstallDialog() {
       open
       width={480}
       title={TEXTS.gitTitle}
-      onClose={installing ? undefined : closeTop}
+      // 全阶段可关（R1 进度不囚禁）：busy 关窗 = 后台继续，标记解散避免完成时误关顶层对话框
+      onClose={() => {
+        if (extInstallInFlight) extInstallDismissed = true
+        closeTop()
+      }}
       actions={
         <GitInstallActions url={url} target={target} installing={installing} setInstalling={setInstalling} />
       }>
@@ -123,6 +146,11 @@ export function GitInstallDialog() {
         {TEXTS.targetLabel}
       </text>
       <Select items={TARGET_ITEMS} value={target} onValueChange={setTarget} width={160} testId="git-install-target" />
+      {installing && (
+        <div style={{ marginTop: 10 }}>
+          <ProgressBar testId="git-install-progress" />
+        </div>
+      )}
     </Modal>
   )
 }
@@ -148,7 +176,13 @@ function ZipInstallActions({
       return
     }
     const extType: ExtensionType = target === 'global' ? 'global' : 'user'
-    // busy 态期间保持对话框可见（同 Git 安装）
+    if (extInstallInFlight) {
+      uiStateActions.pushToast('info', TEXTS.inFlight)
+      return
+    }
+    extInstallInFlight = true
+    extInstallDismissed = false
+    // busy 态期间对话框可关窗后台继续（同 Git 安装）
     setInstalling(true)
     void (async () => {
       const manager = getExtensionManager({
@@ -157,14 +191,16 @@ function ZipInstallActions({
       const result = await manager.installFromZip(trimmed, extType)
       uiStateActions.pushToast(result.ok ? 'success' : 'error', result.message)
       uiStateActions.bumpExtensions()
-      requestClose()
-    })()
+      if (!extInstallDismissed) requestClose()
+    })().finally(() => {
+      extInstallInFlight = false
+    })
   }
 
   return (
     <>
-      <Button variant="quiet" disabled={installing} onClick={requestClose} testId="zip-install-cancel">
-        {TEXTS.cancel}
+      <Button variant="quiet" onClick={requestClose} testId="zip-install-cancel">
+        {installing ? TEXTS.background : TEXTS.cancel}
       </Button>
       <Button variant="primary" icon="archive" disabled={installing} onClick={handleInstall} testId="zip-install-confirm">
         {installing ? TEXTS.installing : TEXTS.install}
@@ -193,7 +229,11 @@ export function ZipInstallDialog() {
       open
       width={480}
       title={TEXTS.zipTitle}
-      onClose={installing ? undefined : closeTop}
+      // 同 Git 安装：busy 关窗 = 后台继续
+      onClose={() => {
+        if (extInstallInFlight) extInstallDismissed = true
+        closeTop()
+      }}
       actions={
         <ZipInstallActions path={path} target={target} installing={installing} setInstalling={setInstalling} />
       }>
@@ -216,6 +256,11 @@ export function ZipInstallDialog() {
         {TEXTS.targetLabel}
       </text>
       <Select items={TARGET_ITEMS} value={target} onValueChange={setTarget} width={160} testId="zip-install-target" />
+      {installing && (
+        <div style={{ marginTop: 10 }}>
+          <ProgressBar testId="zip-install-progress" />
+        </div>
+      )}
     </Modal>
   )
 }

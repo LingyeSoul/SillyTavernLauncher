@@ -184,7 +184,7 @@ function ExtensionCard({ ext, onChanged }: { ext: ExtensionInfo; onChanged: () =
         style={{
           width: 28,
           height: 28,
-          borderRadius: 6,
+          borderRadius: t.radius.md,
           backgroundColor: t.bg.elevated,
           display: 'flex',
           alignItems: 'center',

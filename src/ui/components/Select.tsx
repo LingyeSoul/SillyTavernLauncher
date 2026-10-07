@@ -12,7 +12,7 @@
  */
 import * as SelectPrimitive from '@gpuix/react/select'
 import { motion } from '@gpuix/react'
-import { dur } from '../../theme'
+import { dur, EASE_OUT_QUAD } from '../../theme'
 import { useMotion, useTheme } from '../theme'
 import { ICONS } from './icons'
 
@@ -74,7 +74,7 @@ export function Select({ items, value, onValueChange, placeholder, width, testId
           <motion.div
             initial={motionEnabled ? { opacity: 0 } : false}
             animate={{ opacity: 1 }}
-            transition={{ duration: motionEnabled ? dur.menu : 0, ease: 'easeOut' }}>
+            transition={{ duration: motionEnabled ? dur.menu : 0, ease: EASE_OUT_QUAD }}>
             {items.map((m) => (
               <SelectPrimitive.Item
                 key={m.value}

@@ -6,6 +6,7 @@
  * 重大错误另有 ErrorDialog + errorLog 兜底，自动关闭不丢反馈。
  */
 import { create } from 'zustand'
+import { dur } from '../theme'
 import { getConfigStore } from '../services/configStore'
 import type { ExtensionInfo } from '../services/extensions'
 
@@ -97,9 +98,10 @@ interface UiState {
 }
 
 let nextToastId = 1
-/** 退场 240ms + 空档 60ms = 300ms 衔接（M5）；reduced-motion 时立即结算 */
-const TOAST_EXIT_MS = 240
-const TOAST_GAP_MS = 60
+/** 退场 240ms + 空档 60ms = 300ms 衔接（M5）；reduced-motion 时立即结算。
+ *  退场与 Modal 同拍（dur.enter 单源），空档入 dur.toastGapMs */
+const TOAST_EXIT_MS = Math.round(dur.enter * 1000)
+const TOAST_GAP_MS = dur.toastGapMs
 /**
  * 各语义级自动关闭驻留时长（ms）。注意：这是业务驻留时长，不随 reduced-motion
  * 归零（动画时长归零，信息该让人看到多久还是多久）。

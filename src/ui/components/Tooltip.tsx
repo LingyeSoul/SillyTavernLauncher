@@ -1,13 +1,15 @@
 /**
- * Tooltip 包装（设计 §5.12）：@gpuix/react/tooltip，Provider delayDuration 350（原值）。
- * Content：bg.overlay 不透明 + 1px subtle + radius 4 + padding 4 8 + 12px text.secondary。
+ * Tooltip 包装（设计 §5.12）：@gpuix/react/tooltip，Provider delayDuration 350
+ * （原值，入 dur.tooltipDelayMs 单源）。Content：bg.overlay 不透明 + 1px subtle
+ * + radius 4 + padding 4 8 + 12px text.secondary。
  */
 import type { ReactNode } from 'react'
 import * as TooltipPrimitive from '@gpuix/react/tooltip'
+import { dur } from '../../theme'
 import { useTheme } from '../theme'
 
 export function TooltipProvider({ children }: { children: ReactNode }) {
-  return <TooltipPrimitive.Provider delayDuration={350}>{children}</TooltipPrimitive.Provider>
+  return <TooltipPrimitive.Provider delayDuration={dur.tooltipDelayMs}>{children}</TooltipPrimitive.Provider>
 }
 
 export interface TooltipProps {

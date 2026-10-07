@@ -9,6 +9,9 @@
  * 因此 surface 必须内容定尺寸（只包 toast 盒子），用 side/align/fit=snap 钳到
  * 窗口右上（与 FloatingLayer/Tooltip 同配方）。文本 whiteSpace normal 换行，
  * 否则不换行文本会横向溢出盒子（maxWidth 不约束文本度量）。
+ * DEVIATION: 配方 minWidth 260/maxWidth 360 自适应宽——GPUIX 无内容自适应宽度
+ * （定尺寸浮层铁律），取上限 360 恒定；短消息留白优于引入逐条 bounds 测量。
+ * textOverflow ellipsis 对 normal 折行恒不生效（死样式），移除。
  */
 import { motion } from '@gpuix/react'
 import { EASE_OUT_QUAD, dur } from '../../theme'
@@ -86,7 +89,6 @@ export function ToastHost() {
             flexGrow: 1,
             width: 280,
             whiteSpace: 'normal',
-            textOverflow: 'ellipsis',
           }}>
           {toast.message}
         </text>

@@ -1,6 +1,7 @@
 /**
  * Input（设计 §5.3）：聚焦 3px 余烬辉光环（结构化 boxShadow spread 3 / blur 0）。
  * - GPUIX 无 :focus 伪类 → onFocus/onBlur React 状态驱动；160ms 渐入不可实现 → 即时出现（降级 #4）。
+ * - 边框恒为 border.subtle：§5.3 明文「辉光环不是边框变色」，聚焦反馈只走辉光一支。
  * - wrapper 管外观、input 管编辑；input theme.border 置 transparent 防双边框（PoC-3）。
  */
 import { useState } from 'react'
@@ -40,7 +41,7 @@ export function Input({
         alignItems: 'center',
         backgroundColor: t.bg.surface,
         borderWidth: 1,
-        borderColor: focused ? t.border.default : t.border.subtle,
+        borderColor: t.border.subtle,
         borderRadius: t.radius.sm,
         opacity: disabled ? 0.32 : 1,
         boxShadow: focused

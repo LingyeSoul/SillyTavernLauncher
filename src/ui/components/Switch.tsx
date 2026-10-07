@@ -3,9 +3,11 @@
  * 轨道/圆点 pointerEvents:'none'（填充子元素铁律）——修复 BUG-S1：GPUIX 命中测试解析到
  * 最深可命中盒子，轨道 div 会吞掉点击（text/svg 会被跳过，div 盒子不会），事件到不了根
  * 节点 onClick；轨道穿透后命中落在持有 onClick 的根节点。圆点滑动 = motion.div（M3）。
+ * 聚焦辉环即时出现（同 Input 降级 #4：160ms 渐入不可实现）。
  */
 import { useState } from 'react'
 import { motion } from '@gpuix/react'
+import { EASE_OUT_QUAD, dur } from '../../theme'
 import { useMotion, useTheme } from '../theme'
 
 export interface SwitchProps {
@@ -55,7 +57,7 @@ export function Switch({ on, onChange, label, disabled = false, testId }: Switch
         <motion.div
           initial={false}
           animate={{ left: on ? 16 : 1 }}
-          transition={{ duration: motionEnabled ? 0.14 : 0, ease: 'easeOut' }}
+          transition={{ duration: motionEnabled ? dur.state : 0, ease: EASE_OUT_QUAD }}
           style={{
             position: 'absolute',
             top: 1,

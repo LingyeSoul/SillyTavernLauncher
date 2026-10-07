@@ -2,8 +2,10 @@
  * 内置环境安装对话框（2026-10-05）：系统模式探测不到 Git/Node.js 时的
  * 一键下载安装到 env/（services/envInstaller.ts 的 UI 侧）。
  *
- * 三态：confirm（缺失清单 + 安装计划确认）→ installing（分组件进度行，
- * busy 期间 onClose 置空挡 Escape/关闭，同 InstallDialogs 范式）→
+ * 三态：confirm（缺失清单 + 安装计划确认）→ installing（分组件进度行；
+ *   **busy 期间不囚禁用户**——Escape/「后台继续」可关窗，安装本身无中止协议
+ *   故不被取消，进度阶段同步落终端日志页，完成/失败经 toast 送达；在途锁
+ *   防重入双写 env/）→
  * 成功即 toast + 自动切 env_mode='portable'（env/ 是便携布局，留在 system
  * 模式 which() 找不到新装的工具，装了等于白装）/ 失败态保留已成功项，
  * 「重试」只装剩余项（installEnvComponents 组件间独立，支持部分成功）。
@@ -25,6 +27,7 @@ import {
   type EnvInstallProgress,
 } from '../../services/envInstaller'
 import { useSettings } from '../../stores/settings'
+import { useTerminalLogs } from '../../stores/terminalLogs'
 import { uiStateActions, useUiState } from '../../stores/uiState'
 import { useTheme } from '../theme'
 import { Button } from '../components/Button'
@@ -38,6 +41,8 @@ const TEXTS = {
   planNote:
     '安装完成后将自动切换到「内置懒人包环境（env/）」；下载优先经镜像源加速，失败自动换源重试。',
   cancel: '取消',
+  background: '后台继续',
+  inFlight: '安装正在进行中，完成后将提示结果',
   install: '下载并安装',
   installing: '安装中…',
   retry: '重试剩余项',
@@ -77,6 +82,12 @@ const INITIAL_ROWS: Record<EnvInstallComponent, RowState> = {
   git: { status: 'pending', phaseText: '', percent: null, error: '' },
   node: { status: 'pending', phaseText: '', percent: null, error: '' },
 }
+
+/** 安装链路在途锁 + 解散标记（模块级：关窗后台继续后对话框会卸载、组件 state
+ *  随之丢失；在途期间拒绝重入防双写 env/，完成收尾时按解散标记决定要不要
+ *  替用户关窗——用户已关则绝不碰当前顶层对话框） */
+let envInstallInFlight = false
+let envInstallDismissed = false
 
 /** Escape 结算专用：直呼真卸载（Modal onClose 结算契约，见 Modal.tsx 头注释） */
 function closeTop(): void {
@@ -121,6 +132,13 @@ function EnvInstallActions({
 
   const runInstall = (components: EnvInstallComponent[]): void => {
     if (components.length === 0) return
+    // 在途重入拦截：关窗后台继续后再打开对话框，二次点安装会双写 env/ 损坏文件
+    if (envInstallInFlight) {
+      uiStateActions.pushToast('info', TEXTS.inFlight)
+      return
+    }
+    envInstallInFlight = true
+    envInstallDismissed = false
     setMode('installing')
     setRows((prev) => {
       const next = { ...prev }
@@ -130,7 +148,17 @@ function EnvInstallActions({
       return next
     })
     void (async () => {
+      // 进度阶段同步落终端日志页：关窗后台继续期间用户切到终端视图仍可见；
+      // 只记阶段切换行（每组件至多 5 行），百分比跳动留给对话框进度行。
+      // 去重键带组件维度：今日 envInstaller 串行（for...of）下 phase 单键也安全，
+      // 但若并行化，组件间同 phase 行会被静默吞掉
+      let lastLoggedKey = ''
       const onProgress = (p: EnvInstallProgress): void => {
+        const phaseKey = `${p.component}:${p.phase}`
+        if (phaseKey !== lastLoggedKey) {
+          lastLoggedKey = phaseKey
+          useTerminalLogs.getState().appendLine(`[env] ${componentName(p.component)}：${PHASE_TEXTS[p.phase](p.percent, p.detail ?? '')}`)
+        }
         // percent 已量化到整数（服务层 floor），重复值 set 同内容——天然节流
         setRows((prev) => {
           const row = prev[p.component]
@@ -150,7 +178,8 @@ function EnvInstallActions({
         uiStateActions.pushToast('success', result.message)
         // env/ 是便携布局：切到 portable 才会用上新装的工具（system 模式走 which()）
         useSettings.getState().update({ envMode: 'portable' })
-        requestClose()
+        // 用户已关窗后台继续 → 只送达结果，不替用户关闭当前顶层对话框
+        if (!envInstallDismissed) requestClose()
         return
       }
       uiStateActions.pushToast('error', result.message)
@@ -165,13 +194,17 @@ function EnvInstallActions({
         return next
       })
       setMode('failed')
-    })()
+    })().finally(() => {
+      envInstallInFlight = false
+    })
   }
 
   return (
     <>
-      <Button variant="quiet" disabled={installing} onClick={requestClose} testId="env-install-cancel">
-        {mode === 'failed' ? TEXTS.close : TEXTS.cancel}
+      {/* busy 期间取消语义变为「关窗后台继续」：安装无中止协议，点击即播退场，
+          收尾走 onClose 标记解散；对话框卸载后组件 state 丢失不影响在途链路 */}
+      <Button variant="quiet" onClick={requestClose} testId="env-install-cancel">
+        {installing ? TEXTS.background : mode === 'failed' ? TEXTS.close : TEXTS.cancel}
       </Button>
       {mode === 'failed' ? (
         <Button
@@ -235,7 +268,12 @@ export function EnvInstallDialog(props: EnvInstallDialogProps) {
       open
       width={480}
       title={TEXTS.title}
-      onClose={mode === 'installing' ? undefined : closeTop}
+      // 全阶段可关（R1 进度不囚禁）：installing 期关窗 = 后台继续——标记会话解散，
+      // 在途链路继续跑，结果经 toast 送达（onClose 是退场结算通道，见 Modal.tsx 头注释）
+      onClose={() => {
+        if (envInstallInFlight) envInstallDismissed = true
+        closeTop()
+      }}
       actions={
         <EnvInstallActions mode={mode} rows={rows} setRows={setRows} setMode={setMode} />
       }>

@@ -37,7 +37,8 @@ export interface ModalProps {
   maxHeight?: number
 }
 
-const EXIT_MS = 240
+/** 退场与进场同拍 240ms（降级 #8/M5），由 dur.enter 单源派生 */
+const EXIT_MS = Math.round(dur.enter * 1000)
 
 /** 面板内容级 requestClose 通道（Provider 挂在 Modal 面板内容处，缺省 null） */
 const ModalCloseContext = createContext<(() => void) | null>(null)

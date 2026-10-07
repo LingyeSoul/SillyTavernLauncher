@@ -99,11 +99,11 @@ export function AboutView() {
         padding: 24,
       }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 320, gap: 10 }}>
-        {/* 官方 logo（设计 §4.6：img 48×48 r6） */}
+        {/* 官方 logo（设计 §4.6：img 48×48 r6 = radius.md） */}
         <img
           src={LOGO_DATA_URL}
           alt="SillyTavernLauncher logo"
-          style={{ width: 48, height: 48, borderRadius: 6 }}
+          style={{ width: 48, height: 48, borderRadius: t.radius.md }}
         />
         <text style={{ fontSize: t.fs.h2, fontWeight: 600, color: t.text.primary, fontFamily: t.font.sans }}>
           SillyTavernLauncher

@@ -65,7 +65,9 @@ export interface SettingsSnapshot {
 
 // —— 终端字体设置域 ——
 
-/** 字号下拉预设（px）；UI 只出预设值，杜绝非法字号态 */
+/** 字号下拉预设（px）；UI 只出预设值，杜绝非法字号态。
+ *  DEVIATION: 预设 10–18px 放开契约日志流 12px——用户可选偏离（设置页终端区），
+ *  12 为默认档仍列其中 */
 export const TERMINAL_FONT_SIZE_PRESETS = [10, 11, 12, 13, 14, 16, 18] as const
 
 /** config.json 手改/损坏时的字号兜底窗口 */

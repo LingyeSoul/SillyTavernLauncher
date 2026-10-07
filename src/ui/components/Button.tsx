@@ -4,6 +4,7 @@
  * - 按下下沉 = position:'relative' + active:{ top: 1 }（translateY 不可用，降级 #5）
  * - primary hover = 整体 opacity 0.92（token 契约内取值，不发明更深的橙）
  * - disabled opacity 0.32（dt disabled-opacity）
+ * - 字重 500（§5.0 按钮规格，全变体统一）
  * - 键盘可达：tabIndex 0 + onFocus/onBlur 状态驱动 ember 聚焦辉环（同 Input 降级 #4；
  *   此前仅 Input/Textarea 有聚焦反馈，Button/Switch/Radio/Checkbox/IconButton 补齐）
  */
@@ -93,7 +94,7 @@ export function Button({
         ...v,
       }}>
       {icon && <svg source={ICONS[icon]} style={{ width: 16, height: 16, color: v.color }} />}
-      <text style={{ fontSize: t.fs.field, fontFamily: t.font.sans, color: v.color }}>{children}</text>
+      <text style={{ fontSize: t.fs.field, fontFamily: t.font.sans, color: v.color, fontWeight: 500 }}>{children}</text>
     </div>
   )
 }

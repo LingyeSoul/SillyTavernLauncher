@@ -8,7 +8,7 @@
  */
 import type { ReactElement } from 'react'
 import { motion } from '@gpuix/react'
-import { dur } from '../../theme'
+import { dur, EASE_OUT_QUAD } from '../../theme'
 import { useMotion, useTheme } from '../theme'
 
 export interface TabItemProps {
@@ -47,7 +47,7 @@ export function TabItem({ label, active, onClick, testId, count }: TabItemProps)
       <motion.div
         initial={false}
         animate={{ opacity: active ? 1 : 0 }}
-        transition={{ duration: motionEnabled ? dur.state : 0, ease: 'easeOut' }}
+        transition={{ duration: motionEnabled ? dur.state : 0, ease: EASE_OUT_QUAD }}
         style={{
           position: 'absolute',
           left: 10,

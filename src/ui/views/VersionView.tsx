@@ -216,7 +216,7 @@ function VersionCard({ entry, current }: { entry: VersionEntry; current: boolean
           <text style={{ fontSize: t.fs.field, fontWeight: 600, fontFamily: t.font.mono, color: t.text.primary }}>
             {`v${entry.version}`}
           </text>
-          <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>{date}</text>
+          <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.mono }}>{date}</text>
         </div>
         <text style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
           {`${TEXTS.sourcePrefix} tag ${entry.tag.tag_name}`}

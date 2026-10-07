@@ -7,7 +7,7 @@
  * 不 re-layout 兄弟且无子树文本，width 动画安全。
  */
 import { motion } from '@gpuix/react'
-import { dur } from '../../theme'
+import { dur, EASE_OUT_QUAD } from '../../theme'
 import { useMotion, useTheme } from '../theme'
 import { ICONS, type IconName } from '../components/icons'
 
@@ -48,7 +48,7 @@ export function NavItem({ icon, label, active, onClick, testId }: NavItemProps) 
       <motion.div
         initial={false}
         animate={{ width: active ? 2 : 0, opacity: active ? 1 : 0 }}
-        transition={{ duration: motionEnabled ? dur.state : 0, ease: 'easeOut' }}
+        transition={{ duration: motionEnabled ? dur.state : 0, ease: EASE_OUT_QUAD }}
         style={{
           position: 'absolute',
           left: 0,
