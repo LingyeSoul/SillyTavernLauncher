@@ -6,7 +6,7 @@
  */
 import { useState } from 'react'
 import type { ReactElement } from 'react'
-import { normalizeVersion, checkForUpdates, fetchChangelog } from '../../services/updater'
+import { normalizeVersion, checkForUpdates, fetchChangelog, UPDATE_PAGE_URL } from '../../services/updater'
 import { openUrl } from '../../services/platform'
 import { APP_VERSION } from '../../version'
 import { uiStateActions } from '../../stores/uiState'
@@ -35,7 +35,6 @@ const URLS = {
   bilibili: 'https://space.bilibili.com/298721157',
   qqChannel: 'https://pd.qq.com/s/9usg3jiu1',
   donate: 'https://ifdian.net/order/create?user_id=8a03ea64ebc211ebad0e52540025c377',
-  releases: 'https://github.com/LingyeSoul/SillyTavernLauncher/releases/latest',
   changelog: 'https://sillytavern.lingyesoul.top/changelog',
 } as const
 
@@ -64,7 +63,7 @@ export function AboutView() {
           currentVersion: current,
           latestVersion: result.latest_version,
           changelog,
-          downloadUrl: URLS.releases,
+          downloadUrl: UPDATE_PAGE_URL,
         })
       } catch (err) {
         uiStateActions.pushToast('error', `检查更新失败: ${err instanceof Error ? err.message : String(err)}`)

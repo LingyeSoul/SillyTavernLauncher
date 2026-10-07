@@ -17,6 +17,8 @@ import {
   htmlToMarkdown,
   isBetaVersion,
   normalizeVersion,
+  RAW_PACKAGE_JSON_URL,
+  RELEASES_API_URL,
   unescapeHtml,
   withMirrorPrefix,
   type FetchLike,
@@ -84,9 +86,18 @@ describe('isBetaVersion（← 大小写敏感清单 1:1）', () => {
 })
 
 describe('compareLauncherVersions（← compare_versions 1:1）', () => {
-  it('远端是测试版 → 恒 0（不提示更新）', () => {
+  it('远端测试版 + 本地正式版 → 0（稳定版用户不被 beta 打扰）', () => {
     expect(compareLauncherVersions('v1.3.10', 'v1.3.11测试版3')).toBe(0)
     expect(compareLauncherVersions('v1.3.9', 'v1.3.10-beta')).toBe(0)
+  })
+
+  it('2.0-beta 周期回归（2026-10-07 修复前恒 0，更新提示全灭）', () => {
+    // beta 用户必须能收到 beta→beta 更新提示
+    expect(compareLauncherVersions('2.0.0-beta.4', '2.0.0-beta.5')).toBe(-1)
+    expect(compareLauncherVersions('2.0.0-beta.5', '2.0.0-beta.5')).toBe(0)
+    expect(compareLauncherVersions('2.0.0-beta.5', '2.0.0-beta.4')).toBe(1)
+    // beta 主干落后也提示（下一主干的 beta）
+    expect(compareLauncherVersions('2.0.0-beta.5', '2.0.1-beta.1')).toBe(-1)
   })
 
   it('主版本号比较', () => {
@@ -104,10 +115,10 @@ describe('compareLauncherVersions（← compare_versions 1:1）', () => {
     expect(compareLauncherVersions('v1.3.11测试版2', 'v1.3.11')).toBe(-1)
   })
 
-  it('双测试版比较 → 顶层守卫先命中恒 0（1:1：Python 注明后缀比较分支不再执行）', () => {
-    expect(compareLauncherVersions('v1.3.11测试版3', 'v1.3.11测试版5')).toBe(0)
-    expect(compareLauncherVersions('v1.3.11beta2', 'v1.3.11测试版5')).toBe(0)
-    expect(compareLauncherVersions('v1.3.11测试版3', 'v1.3.11测试版')).toBe(0)
+  it('双测试版比较 → 后缀比较链可达（2026-10-07 守卫收窄，原为不可达死代码）', () => {
+    expect(compareLauncherVersions('v1.3.11测试版3', 'v1.3.11测试版5')).toBe(-1)
+    expect(compareLauncherVersions('v1.3.11beta2', 'v1.3.11测试版5')).toBe(-1)
+    expect(compareLauncherVersions('v1.3.11测试版3', 'v1.3.11测试版')).toBe(1)
   })
 
   it('后缀不对称：本地有后缀 → 远端更新；远端有后缀（非测试版）→ 本地更新', () => {
@@ -122,7 +133,12 @@ describe('compareLauncherVersions（← compare_versions 1:1）', () => {
 })
 
 describe('镜像 URL（← get_github_mirror + URL 构造）', () => {
-  const RAW = 'https://raw.githubusercontent.com/LingyeSoul/SillyTavernLauncher/refs/heads/main/package.json'
+  const RAW = RAW_PACKAGE_JSON_URL
+
+  it('远端源头 URL 形状回归（2026-10-07 修复：原根路径在远端 main 不存在恒 404；/releases/latest 滤掉全部 prerelease）', () => {
+    expect(RAW_PACKAGE_JSON_URL.endsWith('/refs/heads/main/src/package.json')).toBe(true)
+    expect(RELEASES_API_URL.includes('/releases?per_page=1')).toBe(true)
+  })
 
   it('github 原样，镜像站前置', () => {
     expect(withMirrorPrefix('github', RAW)).toBe(RAW)
@@ -172,13 +188,23 @@ describe('远端版本抓取（← raw → API 回退）', () => {
     expect(await fetchLatestVersionFromRaw({ currentVersion: 'x', fetchImpl: throwing })).toBeNull()
   })
 
-  it('API 回退：tag_name 优先、name 次之', async () => {
+  it('API 回退（列表端点）：数组首项 tag_name 优先、name 次之', async () => {
     const withTag: FetchLike = async () =>
-      new Response(JSON.stringify({ tag_name: 'v1.3.12', name: 'Release 1.3.12' }), { status: 200 })
+      new Response(JSON.stringify([{ tag_name: 'v1.3.12', name: 'Release 1.3.12' }]), { status: 200 })
     expect(await fetchLatestVersionFromApi({ currentVersion: 'x', fetchImpl: withTag })).toBe('v1.3.12')
     const withName: FetchLike = async () =>
-      new Response(JSON.stringify({ name: 'v1.3.12' }), { status: 200 })
+      new Response(JSON.stringify([{ name: 'v1.3.12' }]), { status: 200 })
     expect(await fetchLatestVersionFromApi({ currentVersion: 'x', fetchImpl: withName })).toBe('v1.3.12')
+  })
+
+  it('API 回退：空数组 / 非数组载荷 / JSON 损坏 → null', async () => {
+    const empty: FetchLike = async () => new Response('[]', { status: 200 })
+    expect(await fetchLatestVersionFromApi({ currentVersion: 'x', fetchImpl: empty })).toBeNull()
+    const notArray: FetchLike = async () =>
+      new Response(JSON.stringify({ tag_name: 'v1.3.12' }), { status: 200 })
+    expect(await fetchLatestVersionFromApi({ currentVersion: 'x', fetchImpl: notArray })).toBeNull()
+    const broken: FetchLike = async () => new Response('not json', { status: 200 })
+    expect(await fetchLatestVersionFromApi({ currentVersion: 'x', fetchImpl: broken })).toBeNull()
   })
 })
 
@@ -206,9 +232,9 @@ describe('TLS 拦截回退（Watt Toolkit/网关换证书场景）', () => {
     const fetchImpl: FetchLike = vi.fn(async (url: string, init?: RequestInit) => {
       const viaCa = (init as { tls?: { ca?: string } } | undefined)?.tls?.ca === 'FAKE-CA'
       if (!viaCa) throw tlsErr
-      // raw 的本地反代上游坏了（502），API 的反代正常（200）
+      // raw 的本地反代上游坏了（502），API 的反代正常（200；列表端点返回数组）
       if (url.includes('api.github.com')) {
-        return new Response(JSON.stringify({ tag_name: 'v1.3.12' }), { status: 200 })
+        return new Response(JSON.stringify([{ tag_name: 'v1.3.12' }]), { status: 200 })
       }
       return new Response('bad gateway', { status: 502 })
     }) as unknown as FetchLike
@@ -254,7 +280,7 @@ describe('checkForUpdates（← run_check 的结果对象版）', () => {
     const fetchImpl: FetchLike = async () => {
       calls += 1
       if (calls === 1) return new Response('fail', { status: 500 })
-      return new Response(JSON.stringify({ tag_name: 'v1.4.0' }), { status: 200 })
+      return new Response(JSON.stringify([{ tag_name: 'v1.4.0' }]), { status: 200 })
     }
     const result: UpdateCheckResult = await checkForUpdates({
       currentVersion: 'v1.3.10',

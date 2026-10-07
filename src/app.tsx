@@ -35,7 +35,7 @@ import { installCrashGuard } from './services/crashGuard'
 import { logError } from './services/errorLog'
 import { stopAllProcessesSync } from './services/processManager'
 import { eulaDialogRequired, fetchAgreementDocument } from './services/agreement'
-import { checkForUpdates, fetchChangelog, normalizeVersion } from './services/updater'
+import { checkForUpdates, fetchChangelog, normalizeVersion, UPDATE_PAGE_URL } from './services/updater'
 import { applyWindowIcon } from './services/windowIcon'
 import { hideMainWindow, initWindowControl } from './services/windowControl'
 import { shouldHideAtStartup } from './services/silentStart'
@@ -52,7 +52,6 @@ import { uiStateActions } from './stores/uiState'
 import { useSettings } from './stores/settings'
 import { useTerminalLogs } from './stores/terminalLogs'
 
-const RELEASES_URL = 'https://github.com/LingyeSoul/SillyTavernLauncher/releases/latest'
 
 // gpuix 0.9.0 内嵌的 zed gpui（env_logger）在 Windows 关窗拆除路径必然打 4 条 ERROR
 // （gpui::window "window not found" + gpui_windows::window/dispatcher "无效的窗口句柄"），
@@ -149,7 +148,7 @@ function StartupFlow() {
             currentVersion: current,
             latestVersion: result.latest_version,
             changelog,
-            downloadUrl: RELEASES_URL,
+            downloadUrl: UPDATE_PAGE_URL,
           })
         } catch (err) {
           logError(`[startup] 检查更新失败: ${err instanceof Error ? err.message : String(err)}`)

@@ -4,10 +4,17 @@
  * - normalizeVersion：'v1.3.11测试版3' → '1.3.11-beta.3'（设计计划 D5，
  *   语义化 pre-release，供原生 checkUpdate 与 semver 比较使用）。
  * - isBetaVersion / compareLauncherVersions：与 Python 1:1（含中文测试版N、
- *   beta N 两种后缀的完整比较链）。
- * - 远端版本抓取：raw.githubusercontent 的 package.json version（DEVIATION：
- *   Python 抓 src/version.py 的 RELEASES_VERSION，TS 版仓库无该文件等价物，
- *   改抓 package.json version），失败回退 GitHub Releases API tag_name。
+ *   beta N 两种后缀的完整比较链）。DEVIATION（2026-10-07）："远端是测试版
+ *   恒不提示"守卫收窄为"本地非测试版才吞远端测试版"——原语义叠加下方两处
+ *   源头缺陷后，2.0-beta 周期任何用户都永远收不到更新提示（beta 用户需要
+ *   beta→beta 提示；稳定版用户不被 beta 打扰的原意保留）。
+ * - 远端版本抓取：raw.githubusercontent 的 main 分支 src/package.json version
+ *   （DEVIATION：Python 抓 src/version.py 的 RELEASES_VERSION，TS 版仓库无该
+ *   文件等价物，改抓 package.json version。2026-10-07 修正路径：原指仓库根
+ *   package.json，远端 main 上不存在 → 全球恒 404），失败回退 GitHub Releases
+ *   API tag_name（DEVIATION 2026-10-07：/releases/latest 滤掉全部 prerelease，
+ *   2.0-beta 周期实测只能拿到陈旧的 v1.3.10 → 改 /releases?per_page=1 列表
+ *   首项，预发布版本可命中）。
  * - changelog：VitePress 页面 vp-doc 区块提取 + HTML→Markdown 纯文本
  *   （_parse_changelog_to_components 是 Flet UI 组件逻辑，不迁移；
  *   UI 层直接 <markdown> 渲染，设计计划 §3）。
@@ -36,11 +43,19 @@ export interface UpdateCheckResult {
 }
 
 export const CHANGELOG_URL = 'https://sillytavern.lingyesoul.top/changelog'
+/** "前往下载"落点：官网更新说明页（用户指定 2026-10-07；不落 GitHub
+ *  releases——/releases/latest 302 到最新非预发布 tag，纯预发布周期陈旧） */
+export const UPDATE_PAGE_URL = 'https://sillytavern.lingyesoul.top/update'
 const REPO_OWNER = 'LingyeSoul'
 const REPO_NAME = 'SillyTavernLauncher'
-const RAW_PACKAGE_JSON_URL =
-  `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/refs/heads/main/package.json`
-const RELEASES_API_URL = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`
+// 暴露给 scripts/verify-update-check.ts 取证（脚本必须探测生产同款 URL，手抄会漂移）。
+// 路径必须是 src/package.json：仓库根无该文件（2026-10-07 前的根路径恒 404 实锤）
+export const RAW_PACKAGE_JSON_URL =
+  `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/refs/heads/main/src/package.json`
+// 列表端点而非 /releases/latest：后者滤掉全部 prerelease，纯预发布周期拿到的
+// 是陈旧稳定版（实测 v1.3.10）；列表首项即最新版本（预发布含内）
+export const RELEASES_API_URL =
+  `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases?per_page=1`
 const USER_AGENT = 'SillyTavernLauncher/1.0'
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>
@@ -104,8 +119,11 @@ export function isBetaVersion(versionStr: string): boolean {
  * 远端是测试版时恒 0（不提示更新）；中文测试版N/beta N 双后缀比较链 1:1。
  */
 export function compareLauncherVersions(localVersion: string, remoteVersion: string): number {
-  // 如果远程版本是测试版，无论本地版本是什么，都不认为有更新
-  if (isBetaVersion(remoteVersion)) return 0
+  // 远端是测试版且本地是正式版 → 不提示（稳定版用户不被 beta 打扰）。
+  // DEVIATION（2026-10-07）：Python 原版无条件吞掉远端测试版，导致 beta→beta
+  // 更新永远不提示（2.0-beta 周期功能全灭）；收窄后本地也是测试版时落到
+  // 下方既有后缀比较链（中文测试版N / beta N，原本是不可达死代码）
+  if (isBetaVersion(remoteVersion) && !isBetaVersion(localVersion)) return 0
 
   // 移除版本号中的前缀"v"（Python str.replace 只替换首个出现，1:1）
   const localClean = localVersion.replace('v', '')
@@ -147,9 +165,11 @@ export function compareLauncherVersions(localVersion: string, remoteVersion: str
   if (localHasSuffix && !remoteHasSuffix) return -1
   if (!localHasSuffix && remoteHasSuffix) return 1
   if (localHasSuffix && remoteHasSuffix) {
-    // 都是测试版格式：比较 测试版N / beta N
-    const localBetaMatch = /测试版\s*(\d*)|beta\s*(\d*)/i.exec(localSuffix)
-    const remoteBetaMatch = /测试版\s*(\d*)|beta\s*(\d*)/i.exec(remoteSuffix)
+    // 都是测试版格式：比较 测试版N / beta N / beta.N（分隔符对齐 normalizeVersion
+    // 的 [.\s]*——semver 点分隔形态 'beta.4' 在旧 \s* 正则下 (\d*) 捕获空串，
+    // 双双落空恒 0，2026-10-07 单测逮出）
+    const localBetaMatch = /测试版[.\s]*(\d*)|beta[.\s]*(\d*)/i.exec(localSuffix)
+    const remoteBetaMatch = /测试版[.\s]*(\d*)|beta[.\s]*(\d*)/i.exec(remoteSuffix)
     if (localBetaMatch && remoteBetaMatch) {
       const localBetaNum = localBetaMatch[1] ?? localBetaMatch[2] ?? ''
       const remoteBetaNum = remoteBetaMatch[1] ?? remoteBetaMatch[2] ?? ''
@@ -243,7 +263,11 @@ export async function fetchLatestVersionFromRaw(
   }
 }
 
-/** ← get_latest_release_version 的 API 回退（releases/latest tag_name） */
+/**
+ * ← get_latest_release_version 的 API 回退（releases 列表首项 tag_name）。
+ * 端点是 /releases?per_page=1（含预发布）而非 /releases/latest（滤掉全部
+ * prerelease——纯预发布周期恒 404 或返回陈旧稳定版，2026-10-07 实测修正）。
+ */
 export async function fetchLatestVersionFromApi(
   options: UpdaterOptions,
   outcome?: UpdateFetchOutcome,
@@ -255,9 +279,12 @@ export async function fetchLatestVersionFromApi(
   const content = await fetchText(apiUrl, timeoutMs, fetchImpl, options.caProvider, outcome)
   if (content === null) return null
   try {
-    const data = JSON.parse(content) as { tag_name?: unknown; name?: unknown }
-    if (typeof data.tag_name === 'string') return data.tag_name
-    if (typeof data.name === 'string') return data.name
+    const data = JSON.parse(content) as Array<{ tag_name?: unknown; name?: unknown }>
+    // 列表端点返回数组：首项即最新（GitHub 按创建时间倒序）
+    const latest = Array.isArray(data) ? data[0] : undefined
+    if (latest === undefined) return null
+    if (typeof latest.tag_name === 'string') return latest.tag_name
+    if (typeof latest.name === 'string') return latest.name
     return null
   } catch {
     return null
