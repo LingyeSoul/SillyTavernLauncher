@@ -553,7 +553,12 @@ const handleEnvModeChange = (v: string): void => {
               </Button>
             </div>
             {switchRow('auto_proxy', TEXTS.autoProxy, TEXTS.autoProxyDesc, settings.autoProxy, (v) => settings.update({ autoProxy: v }))}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+            {/* 标签行：Flet 版 TextField 自带 label=，移植 GPUIX（Input 仅 placeholder）时
+                漏渲染——已存值时 placeholder 消失，端口/代理会退化成无标识裸输入框 */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4, marginBottom: 8 }}>
+              <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans }}>
+                {TEXTS.portLabel}
+              </text>
               <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <Input value={portDraft} onChange={setPortDraft} placeholder={TEXTS.portHint} mono width={96} testId="setting-port" />
                 {/* Scarce Ember：网络卡的实色主操作仅保留端口保存，代理保存降级 default
@@ -565,6 +570,9 @@ const handleEnvModeChange = (v: string): void => {
               <FieldHint>{TEXTS.portDesc}</FieldHint>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
+              <text style={{ fontSize: 13, color: t.text.primary, fontFamily: t.font.sans }}>
+                {TEXTS.proxyUrlLabel}
+              </text>
               <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <div style={{ flexGrow: 1, minWidth: 0 }}>
                   <Input
