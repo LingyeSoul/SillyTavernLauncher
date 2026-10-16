@@ -20,7 +20,7 @@
 import * as http from 'node:http'
 import { createReadStream } from 'node:fs'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { join, relative, resolve, sep } from 'node:path'
 import { zipSync } from 'fflate'
 import { isDirSync, realpathBestEffort } from '../atomicFs'
@@ -29,13 +29,27 @@ import { getLocalIp } from '../network'
 export type SyncLogLevel = 'info' | 'success' | 'warning' | 'error'
 export type SyncLogCallback = (message: string, level: SyncLogLevel) => void
 
-/** ← manifest 条目（与 Python 字段一一对应） */
+/** ← manifest 条目（与 Python 字段一一对应；sha256 为跨端协议字段，见下方说明） */
 export interface ManifestEntry {
   path: string
   size: number
   mtime: number
   modified: string
   is_dir: boolean
+  /**
+   * 内容摘要（64 位 hex）。Termux 版启动器的同步客户端把 sha256 视为
+   * manifest 必填字段（缺失即拒绝增量同步），且其增量比较以内容摘要为准、
+   * 不依赖 mtime——为打通 Windows ↔ Termux 双端同步，本端 manifest 必须携带。
+   */
+  sha256: string
+}
+
+/** 流式计算文件 sha256（大文件不全量驻内存，对齐 Termux 端 buildManifest） */
+async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash('sha256')
+  const stream = createReadStream(filePath)
+  for await (const chunk of stream) hash.update(chunk as Buffer)
+  return hash.digest('hex')
 }
 
 /** ← secrets.token_urlsafe(24)：24 字节随机 → base64url（无填充） */
@@ -222,7 +236,7 @@ export class SyncServer {
 
     if (pathname === '/manifest') {
       try {
-        const manifest = this.generateManifest()
+        const manifest = await this.generateManifest()
         this.sendJson(res, 200, {
           success: true,
           manifest,
@@ -261,6 +275,7 @@ export class SyncServer {
     }
 
     if (pathname === '/info') {
+      const manifest = await this.generateManifest()
       this.sendJson(res, 200, {
         success: true,
         server_info: {
@@ -268,7 +283,7 @@ export class SyncServer {
           host: this.host,
           running: this.running,
           total_size: this.calculateTotalSize(),
-          file_count: this.generateManifest().length,
+          file_count: manifest.length,
         },
       })
       return
@@ -334,8 +349,8 @@ export class SyncServer {
   // 数据生成（← _generate_manifest / _create_zip / _calculate_total_size）
   // -------------------------------------------------------------------------
 
-  /** ← _generate_manifest：隐藏目录/隐藏文件/.tmp 跳过，路径归一为正斜杠 */
-  generateManifest(): ManifestEntry[] {
+  /** ← _generate_manifest：隐藏目录/隐藏文件/.tmp 跳过，路径归一为正斜杠；含流式 sha256（async） */
+  async generateManifest(): Promise<ManifestEntry[]> {
     const manifest: ManifestEntry[] = []
     for (const { file, filePath } of walkFiles(this.dataPath, true)) {
       if (file.startsWith('.') || file.endsWith('.tmp')) continue
@@ -348,6 +363,7 @@ export class SyncServer {
           mtime: statInfo.mtimeMs / 1000,
           modified: new Date(statInfo.mtimeMs).toISOString(),
           is_dir: false,
+          sha256: await sha256File(filePath),
         })
       } catch {
         // Skip files that can't be accessed

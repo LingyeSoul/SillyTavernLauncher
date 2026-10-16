@@ -21,14 +21,15 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs'
-import { createWriteStream } from 'node:fs'
+import { createReadStream, createWriteStream } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
-import { tmpdir } from 'node:os'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { unzipSync } from 'fflate'
@@ -134,10 +135,18 @@ export function readZipMtimes(buffer: Uint8Array): Map<string, number> {
 }
 
 // ---------------------------------------------------------------------------
-// 本地 manifest（← get_local_manifest，与 server 端同规则）
+// 本地 manifest（← get_local_manifest，与 server 端同规则；含 sha256）
 // ---------------------------------------------------------------------------
 
-export function generateLocalManifest(dataPath: string): ManifestEntry[] {
+/** 流式计算文件 sha256（与服务端 sha256File 同实现，跨端摘要可比） */
+async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash('sha256')
+  const stream = createReadStream(filePath)
+  for await (const chunk of stream) hash.update(chunk as Buffer)
+  return hash.digest('hex')
+}
+
+export async function generateLocalManifest(dataPath: string): Promise<ManifestEntry[]> {
   const manifest: ManifestEntry[] = []
   const stack: string[] = [dataPath]
   while (stack.length > 0) {
@@ -171,6 +180,7 @@ export function generateLocalManifest(dataPath: string): ManifestEntry[] {
           mtime: statInfo.mtimeMs / 1000,
           modified: new Date(statInfo.mtimeMs).toISOString(),
           is_dir: false,
+          sha256: await sha256File(fullPath),
         })
       } catch {
         // Skip files that can't be accessed
@@ -299,11 +309,18 @@ export class SyncClient {
   }
 
   /** ← get_local_manifest */
-  getLocalManifest(): ManifestEntry[] {
+  async getLocalManifest(): Promise<ManifestEntry[]> {
     return generateLocalManifest(this.dataPath)
   }
 
-  /** ← sync_full_zip：全量 ZIP 下载 → 临时文件 → 解压（含备份/恢复） */
+  /**
+   * ← sync_full_zip：全量 ZIP 下载 → 临时解压 → 事务式整体替换。
+   *
+   * DEVIATION（相对 Python 版覆盖式 extractall）：改为 Termux 端同款的事务式
+   * 替换——旧目录先 rename 到回滚位，解压产物 rename 到目标位，失败恢复。
+   * 覆盖式解压会让远端已删除的文件永久残留本地（"同步成功"但数据不一致）；
+   * 整体替换保证本地 == 远端镜像。临时目录放数据目录父目录下（同盘 rename）。
+   */
   async syncFullZip(options: { backup?: boolean; signal?: AbortSignal } = {}): Promise<boolean> {
     const backup = options.backup ?? true
     const signal = options.signal
@@ -314,20 +331,28 @@ export class SyncClient {
       return false
     }
 
-    let tempZipPath: string | null = null
+    // 临时目录与数据目录同盘（dirname(dataPath)），rename 才是原子操作
+    let tempRoot: string | null = null
     try {
       // Download ZIP file（流式写入临时文件）
       this.log('正在下载 ZIP 文件...')
       const response = await this.request('zip', { signal })
-      tempZipPath = join(mkdtempSync(join(tmpdir(), 'stlsynczip')), 'data.zip')
+      tempRoot = mkdtempSync(join(dirname(this.dataPath), '.stl-synczip-'))
+      const tempZipPath = join(tempRoot, 'data.zip')
       await pipeline(
         Readable.fromWeb(response.body as unknown as import("node:stream/web").ReadableStream<Uint8Array>),
         createWriteStream(tempZipPath),
       )
 
-      // Extract ZIP file（Zip-Slip 防护 + mtime 保留）
+      // Extract ZIP file（Zip-Slip 防护 + mtime 保留；解压到独立 payload，不触碰目标目录）
       this.log('正在解压 ZIP 文件...')
-      this.extractZip(tempZipPath, this.dataPath)
+      const payload = join(tempRoot, 'payload')
+      mkdirSync(payload, { recursive: true })
+      this.extractZip(tempZipPath, payload)
+
+      // 事务式替换：目标 → 回滚位，payload → 目标；失败恢复回滚位
+      this.log('正在替换本地数据目录...')
+      this.replaceDataDir(payload)
 
       this.log('ZIP 全量同步完成')
       return true
@@ -339,15 +364,49 @@ export class SyncClient {
       }
       return false
     } finally {
-      // 确保临时文件被删除
-      if (tempZipPath && existsSync(tempZipPath)) {
+      // 确保临时目录被删除
+      if (tempRoot && existsSync(tempRoot)) {
         try {
-          rmSync(dirname(tempZipPath), { recursive: true, force: true })
+          rmSync(tempRoot, { recursive: true, force: true })
         } catch (cleanupError) {
           logError(
             `[sync-client] 清理临时文件失败: ${errMsg(cleanupError)}`,
           )
         }
+      }
+    }
+  }
+
+  /**
+   * 事务式数据目录替换：旧目录 rename 到同目录回滚位 → payload rename 到
+   * 目标位 → 成功删回滚位；目标位 rename 失败时恢复回滚位。失败向外抛出，
+   * 由调用方（syncFullZip）以备份兜底恢复。
+   */
+  private replaceDataDir(payload: string): void {
+    const parent = dirname(this.dataPath)
+    const rollback = join(
+      parent,
+      `.${basename(this.dataPath)}.rollback-${randomUUID().replace(/-/g, '').slice(0, 12)}`,
+    )
+    const hadExisting = existsSync(this.dataPath)
+    if (hadExisting) renameSync(this.dataPath, rollback)
+    try {
+      renameSync(payload, this.dataPath)
+    } catch (err) {
+      if (hadExisting && existsSync(rollback)) {
+        try {
+          renameSync(rollback, this.dataPath)
+        } catch (restoreError) {
+          logError(`[sync-client] 回滚数据目录失败: ${errMsg(restoreError)}`)
+        }
+      }
+      throw err
+    }
+    if (hadExisting) {
+      try {
+        rmSync(rollback, { recursive: true, force: true })
+      } catch (cleanupError) {
+        logError(`[sync-client] 清理回滚目录失败: ${errMsg(cleanupError)}`)
       }
     }
   }
@@ -384,7 +443,7 @@ export class SyncClient {
     }
   }
 
-  /** ← sync_incremental：mtime manifest diff，逐文件下载并保留 mtime */
+  /** ← sync_incremental：sha256 内容比较（优先）/ mtime 比较（老服务器回退），逐文件下载并保留 mtime */
   async syncIncremental(options: { signal?: AbortSignal } = {}): Promise<boolean> {
     const signal = options.signal
     this.log('开始增量同步...')
@@ -393,7 +452,7 @@ export class SyncClient {
       // Get remote and local manifests
       this.log('获取文件清单...')
       const remoteManifest = await this.getRemoteManifest(signal)
-      const localManifest = this.getLocalManifest()
+      const localManifest = await this.getLocalManifest()
 
       if (!remoteManifest) {
         this.log('无法获取远程文件清单')
@@ -413,7 +472,15 @@ export class SyncClient {
         if (!localFile) {
           filesToDownload.push(remoteFile)
           totalSize += remoteFile.size
+        } else if (remoteFile.sha256 && localFile.sha256) {
+          // 内容摘要比较（双端均携带 sha256 时）——mtime 受 ZIP DOS 时间戳
+          // 2 秒截断与时区影响不可靠，内容比较才能避免全量后的重复下载
+          if (remoteFile.sha256 !== localFile.sha256) {
+            filesToDownload.push(remoteFile)
+            totalSize += remoteFile.size
+          }
         } else if (remoteFile.mtime > localFile.mtime) {
+          // 回退：老版本服务器 manifest 不含 sha256（Python 旧版 / 早期 TS 版）
           filesToDownload.push(remoteFile)
           totalSize += remoteFile.size
         }

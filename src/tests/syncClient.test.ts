@@ -1,10 +1,12 @@
 /**
  * ← client.py 语义等价测试：token fragment 解析（不随 URL 发送）、
- * 全量 ZIP 同步（流下载 → 解压 → mtime 保留）、增量同步（mtime diff +
- * 删除多余文件）、Zip-Slip 防护（恶意服务器）、备份/恢复。
+ * 全量 ZIP 同步（流下载 → 解压 → mtime 保留 → 事务式整体替换）、
+ * 增量同步（sha256 内容比较优先，老服务器回退 mtime + 删除多余文件）、
+ * Zip-Slip 防护（恶意服务器）、备份/恢复。
  * 全部使用真实 node:http 服务器 + fetch。
  */
 import * as http from 'node:http'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -113,16 +115,19 @@ describe('全量 ZIP 同步（← sync_full_zip）', () => {
     expect(Math.abs(localStat.mtimeMs / 1000 - SOURCE_MTIME)).toBeLessThanOrEqual(2)
   })
 
-  it('备份现有数据（← _backup_existing_data）', async () => {
+  it('备份现有数据（← _backup_existing_data）；事务式替换清除远端已删的孤儿文件', async () => {
     mkdirSync(localDir, { recursive: true })
     writeFileSync(join(localDir, 'old.txt'), 'old', 'utf8')
     const client = makeClient()
     const ok = await client.syncFullZip({ backup: true })
     expect(ok).toBe(true)
     expect(existsSync(backupRoot)).toBe(true)
-    // 旧文件被 zip 内容覆盖性合并（copytree+extractall 语义：不先清空）
-    expect(existsSync(join(localDir, 'old.txt'))).toBe(true)
-    expect(existsSync(join(localDir, 'settings.json'))).toBe(true)
+    // 事务式整体替换：本地 == 远端镜像，远端不存在的 old.txt 不再残留
+    //（旧覆盖式解压会让孤儿文件永久留存，"同步成功"但数据不一致）
+    expect(existsSync(join(localDir, 'old.txt'))).toBe(false)
+    expect(readFileSync(join(localDir, 'settings.json'), 'utf8')).toBe('{"v":1}')
+    // 备份里保留了同步前的旧数据
+    expect(existsSync(join(backupRoot))).toBe(true)
   })
 
   it('下载失败时恢复备份（← _restore_backup）', async () => {
@@ -199,7 +204,7 @@ describe('Zip-Slip 防护（恶意服务器，← _extract_zip_with_progress）'
 })
 
 describe('增量同步（← sync_incremental）', () => {
-  it('全量同步后增量无差异（mtime 相等 → 数据已是最新）', async () => {
+  it('全量同步后增量无差异（sha256 相等 → 数据已是最新）', async () => {
     const client = makeClient()
     expect(await client.syncFullZip({ backup: false })).toBe(true)
     const logs: string[] = []
@@ -209,6 +214,32 @@ describe('增量同步（← sync_incremental）', () => {
     })
     expect(await again.syncIncremental()).toBe(true)
     expect(logs.some((message) => message.includes('数据已是最新'))).toBe(true)
+  })
+
+  it('内容相同但本地 mtime 更新 → 不重复下载（sha256 优先于 mtime）', async () => {
+    const client = makeClient()
+    expect(await client.syncFullZip({ backup: false })).toBe(true)
+    // 模拟 ZIP DOS 时间戳截断/时区漂移：本地 mtime 被推到远端之后，内容未变
+    const touchedMtime = SOURCE_MTIME + 7200
+    utimesSync(join(localDir, 'settings.json'), touchedMtime, touchedMtime)
+    const logs: string[] = []
+    const again = new SyncClient(`http://127.0.0.1:${server.actualPort()}#token=${TOKEN}`, localDir, {
+      backupRoot,
+      log: (message) => logs.push(message),
+    })
+    expect(await again.syncIncremental()).toBe(true)
+    expect(logs.some((message) => message.includes('数据已是最新'))).toBe(true)
+  })
+
+  it('远端内容变更但 mtime 不变 → 仍被下载（sha256 抓住 mtime 抓不住的变化）', async () => {
+    const client = makeClient()
+    expect(await client.syncFullZip({ backup: false })).toBe(true)
+    // 服务器端只改内容，mtime 保持原值（mtime 比较会漏检，sha256 必须抓住）
+    writeFileSync(join(dataDir, 'settings.json'), '{"v":2}', 'utf8')
+    utimesSync(join(dataDir, 'settings.json'), SOURCE_MTIME, SOURCE_MTIME)
+
+    expect(await client.syncIncremental()).toBe(true)
+    expect(readFileSync(join(localDir, 'settings.json'), 'utf8')).toBe('{"v":2}')
   })
 
   it('远端更新 → 下载新内容并保留 mtime；远端删除 → 本地删除', async () => {
@@ -238,6 +269,66 @@ describe('增量同步（← sync_incremental）', () => {
     expect(existsSync(join(localDir, 'extra.txt'))).toBe(false)
   })
 
+  it('老服务器 manifest 无 sha256 → 回退 mtime 比较仍可增量', async () => {
+    // 旧版（Python/早期 TS）服务器 manifest 不带 sha256，客户端须回退 mtime 语义
+    const legacyManifest = {
+      success: true,
+      manifest: [
+        { path: 'legacy.txt', size: 6, mtime: SOURCE_MTIME + 3600, modified: '', is_dir: false },
+      ],
+      total_files: 1,
+    }
+    const legacyServer = http.createServer((req, res) => {
+      const url = req.url ?? ''
+      if (url.startsWith('/health')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ status: 'healthy', auth_required: true }))
+        return
+      }
+      if (url.startsWith('/manifest')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(legacyManifest))
+        return
+      }
+      if (url.startsWith('/file')) {
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream' })
+        res.end('legacy')
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+    await new Promise<void>((resolve) => legacyServer.listen(0, '127.0.0.1', resolve))
+    const address = legacyServer.address()
+    const port = typeof address === 'object' && address ? address.port : 0
+
+    const client = new SyncClient(`http://127.0.0.1:${port}#token=${TOKEN}`, localDir, {
+      backupRoot,
+      log: () => undefined,
+    })
+    // 本地无该文件 → 下载（与回退路径无关，但要证明整条链路在无 sha256 时可用）
+    expect(await client.syncIncremental()).toBe(true)
+    expect(readFileSync(join(localDir, 'legacy.txt'), 'utf8')).toBe('legacy')
+    // 本地已有且 mtime 不新于远端 → 不再下载（mtime 回退语义生效）
+    const logs: string[] = []
+    const again = new SyncClient(`http://127.0.0.1:${port}#token=${TOKEN}`, localDir, {
+      backupRoot,
+      log: (message) => logs.push(message),
+    })
+    expect(await again.syncIncremental()).toBe(true)
+    expect(logs.some((message) => message.includes('数据已是最新'))).toBe(true)
+    await new Promise<void>((resolve) => legacyServer.close(() => resolve()))
+  })
+
+  it('服务端 manifest 端到端携带 sha256（跨端协议字段）', async () => {
+    const client = makeClient()
+    const remote = await client.getRemoteManifest()
+    expect(remote).not.toBeNull()
+    const settings = remote?.find((m) => m.path === 'settings.json')
+    expect(settings?.sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(settings?.sha256).toBe(createHash('sha256').update('{"v":1}', 'utf8').digest('hex'))
+  })
+
   it('sync 自动模式：健康检查失败返回 false', async () => {
     const client = new SyncClient('http://127.0.0.1:1#token=x', localDir, {
       backupRoot,
@@ -249,13 +340,17 @@ describe('增量同步（← sync_incremental）', () => {
 })
 
 describe('manifest 与工具（← get_local_manifest / _format_size）', () => {
-  it('本地 manifest：正斜杠路径、跳过隐藏/.tmp', () => {
+  it('本地 manifest：正斜杠路径、跳过隐藏/.tmp、带正确 sha256', async () => {
     writeFileSync(join(dataDir, '.h'), 'x', 'utf8')
-    const manifest = generateLocalManifest(dataDir)
+    const manifest = await generateLocalManifest(dataDir)
     const paths = manifest.map((m) => m.path)
     expect(paths).toContain('settings.json')
     expect(paths).toContain('chats/room.json')
     expect(paths).not.toContain('.h')
+    // sha256 为跨端协议字段（Termux 客户端强制校验），值须与文件内容一致
+    const settings = manifest.find((m) => m.path === 'settings.json')
+    expect(settings?.sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(settings?.sha256).toBe(createHash('sha256').update('{"v":1}', 'utf8').digest('hex'))
   })
 
   it('formatSize（← _format_size）', () => {

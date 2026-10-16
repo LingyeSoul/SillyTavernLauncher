@@ -5,6 +5,7 @@
  * 服务器为真实 node:http 实例，监听 127.0.0.1 随机端口，用 fetch 断言。
  */
 import * as http from 'node:http'
+import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -118,13 +119,13 @@ describe('token 工具（← secrets / hmac.compare_digest）', () => {
   })
 })
 
-describe('/manifest（← _generate_manifest 过滤规则）', () => {
+describe('/manifest（← _generate_manifest 过滤规则 + sha256 协议字段）', () => {
   it('列出常规文件（正斜杠路径），跳过隐藏文件/.tmp/隐藏目录', async () => {
     const response = await fetch(`${baseUrl}/manifest`, authed('/manifest'))
     expect(response.status).toBe(200)
     const json = (await response.json()) as {
       success: boolean
-      manifest: Array<{ path: string; size: number; mtime: number; is_dir: boolean }>
+      manifest: Array<{ path: string; size: number; mtime: number; is_dir: boolean; sha256: string }>
       total_files: number
     }
     expect(json.success).toBe(true)
@@ -138,6 +139,9 @@ describe('/manifest（← _generate_manifest 过滤规则）', () => {
     const settings = json.manifest.find((m) => m.path === 'settings.json')
     expect(settings?.is_dir).toBe(false)
     expect(settings?.mtime).toBeCloseTo(1609459200, 0)
+    // sha256 为跨端协议字段：Termux 客户端缺失即拒增量；值须与内容一致
+    expect(settings?.sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(settings?.sha256).toBe(createHash('sha256').update('{"theme":"dark"}', 'utf8').digest('hex'))
   })
 })
 
