@@ -19,6 +19,7 @@ import {
   normalizeVersion,
   RAW_PACKAGE_JSON_URL,
   RELEASES_API_URL,
+  shouldSuppressUpdate,
   unescapeHtml,
   withMirrorPrefix,
   type FetchLike,
@@ -129,6 +130,39 @@ describe('compareLauncherVersions（← compare_versions 1:1）', () => {
   it('非测试版后缀按字符串比较', () => {
     expect(compareLauncherVersions('v1.3.11-a', 'v1.3.11-b')).toBe(-1)
     expect(compareLauncherVersions('v1.3.11-b', 'v1.3.11-a')).toBe(1)
+  })
+})
+
+describe('shouldSuppressUpdate（跳过版本提醒判定）', () => {
+  it('未跳过 / 空白值 → 不抑制', () => {
+    expect(shouldSuppressUpdate('', '2.0.1')).toBe(false)
+    expect(shouldSuppressUpdate('   ', '2.0.1')).toBe(false)
+  })
+
+  it('被跳过版本仍是最新（含 v 前缀/格式差异）→ 抑制', () => {
+    expect(shouldSuppressUpdate('2.0.1', '2.0.1')).toBe(true)
+    expect(shouldSuppressUpdate('v2.0.1', '2.0.1')).toBe(true)
+    expect(shouldSuppressUpdate('2.0.1', 'v2.0.1')).toBe(true)
+    // 远端回滚到更旧版本同样不再打扰（跳过的语义是"此版本及更旧"）
+    expect(shouldSuppressUpdate('2.0.1', '2.0.0')).toBe(true)
+  })
+
+  it('下个新版本 → 恢复提醒', () => {
+    expect(shouldSuppressUpdate('2.0.1', '2.0.2')).toBe(false)
+    expect(shouldSuppressUpdate('2.0.1', '2.1.0')).toBe(false)
+    expect(shouldSuppressUpdate('2.9.9', '3.0.0')).toBe(false)
+  })
+
+  it('测试版：同编号抑制、编号递增/转正式版恢复', () => {
+    expect(shouldSuppressUpdate('2.0.0-beta.6', '2.0.0-beta.6')).toBe(true)
+    expect(shouldSuppressUpdate('2.0.0-beta.6', 'v2.0.0-beta.7')).toBe(false)
+    expect(shouldSuppressUpdate('2.0.0-beta.6', '2.0.0')).toBe(false)
+  })
+
+  it('脏值 fail-open（损坏配置不得永久静默更新）', () => {
+    expect(shouldSuppressUpdate('unknown', '2.0.1')).toBe(false)
+    expect(shouldSuppressUpdate('latest', '2.0.1')).toBe(false)
+    expect(shouldSuppressUpdate('v', '2.0.1')).toBe(false)
   })
 })
 

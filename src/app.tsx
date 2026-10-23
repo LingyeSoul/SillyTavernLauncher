@@ -35,7 +35,14 @@ import { installCrashGuard } from './services/crashGuard'
 import { logError } from './services/errorLog'
 import { stopAllProcessesSync } from './services/processManager'
 import { eulaDialogRequired, fetchAgreementDocument } from './services/agreement'
-import { checkForUpdates, fetchChangelog, normalizeVersion, UPDATE_PAGE_URL } from './services/updater'
+import {
+  checkForUpdates,
+  fetchChangelog,
+  normalizeVersion,
+  shouldSuppressUpdate,
+  SKIP_UPDATE_VERSION_KEY,
+  UPDATE_PAGE_URL,
+} from './services/updater'
 import { applyWindowIcon } from './services/windowIcon'
 import { hideMainWindow, initWindowControl } from './services/windowControl'
 import { shouldHideAtStartup } from './services/silentStart'
@@ -142,6 +149,9 @@ function StartupFlow() {
           const current = normalizeVersion(APP_VERSION)
           const result = await checkForUpdates({ currentVersion: current })
           if (result.has_error || !result.has_update || result.latest_version === null) return
+          // 用户显式跳过的版本不再打扰（下个新版本恢复）；changelog 也免抓
+          const skipped = config.get<string>(SKIP_UPDATE_VERSION_KEY, '')
+          if (shouldSuppressUpdate(skipped, result.latest_version)) return
           const changelog = await fetchChangelog({ currentVersion: current })
           uiStateActions.openDialog({
             kind: 'updateAvailable',

@@ -20,6 +20,7 @@ import {
 } from '../services/mirrors'
 import type { BoolMessage } from '../services/types'
 import { getStConfig } from '../services/stConfig'
+import { normalizeVersion, SKIP_UPDATE_VERSION_KEY } from '../services/updater'
 import { uiStateActions } from './uiState'
 
 // 单例定义在服务层（stLifecycle 的 auto_proxy 也使用），此处转出口保持既有导入路径
@@ -34,6 +35,8 @@ export interface SettingsSnapshot {
   customArgs: string
   useOptimizeArgs: boolean
   checkupdate: boolean
+  /** 已跳过的更新提醒版本（规范化版本号；'' = 未跳过，见 services/updater.shouldSuppressUpdate） */
+  skipUpdateVersion: string
   stcheckupdate: boolean
   /** 酒馆检出更新后先询问用户（stcheckupdate 开启时生效；关闭则静默自动更新） */
   stAskBeforeUpdate: boolean
@@ -112,6 +115,7 @@ export function readSettings(): SettingsSnapshot {
     customArgs: S.get<string>('custom_args', ''),
     useOptimizeArgs: S.get<boolean>('use_optimize_args', false),
     checkupdate: S.get<boolean>('checkupdate', true),
+    skipUpdateVersion: S.get<string>(SKIP_UPDATE_VERSION_KEY, ''),
     stcheckupdate: S.get<boolean>('stcheckupdate', true),
     stAskBeforeUpdate: S.get<boolean>('st_ask_before_update', true),
     autostart: S.get<boolean>('autostart', false),
@@ -180,6 +184,10 @@ interface SettingsState extends SettingsSnapshot {
   syncMirrorToGit: (host: string, auto: boolean) => Promise<void>
   /** 立即自动测速选优（与启动期自愈同一实现） */
   autoSelectMirrorNow: () => Promise<void>
+  /** 跳过指定版本的更新提醒（规范化后落盘；下个新版本仍会提醒） */
+  skipUpdate: (version: string) => void
+  /** 清除跳过记录，恢复该版本及后续版本的更新提醒 */
+  restoreUpdateReminder: () => void
   saveCustomArgs: (value: string) => void
   saveStPort: (port: number) => void
   saveProxyUrl: (url: string) => void
@@ -208,6 +216,7 @@ export const useSettings = create<SettingsState>((set) => ({
       customArgs: 'custom_args',
       useOptimizeArgs: 'use_optimize_args',
       checkupdate: 'checkupdate',
+      skipUpdateVersion: SKIP_UPDATE_VERSION_KEY,
       stcheckupdate: 'stcheckupdate',
       stAskBeforeUpdate: 'st_ask_before_update',
       autostart: 'autostart',
@@ -336,6 +345,25 @@ export const useSettings = create<SettingsState>((set) => ({
   /** 自动选优落盘后的生效步骤（app.tsx 启动自愈与界面动作共用同一实现） */
   syncMirrorToGit: async (host, auto) => {
     await syncMirrorToGit(host, auto)
+    set(readSettings())
+  },
+
+  skipUpdate: (version) => {
+    const normalized = normalizeVersion(version)
+    S.set(SKIP_UPDATE_VERSION_KEY, normalized)
+    if (saveLauncherConfig()) {
+      uiStateActions.pushToast('success', `已跳过 v${normalized} 的更新提醒，下个新版本发布后会再次提醒`)
+    }
+    set(readSettings())
+  },
+
+  restoreUpdateReminder: () => {
+    const skipped = S.get<string>(SKIP_UPDATE_VERSION_KEY, '')
+    if (skipped.length === 0) return
+    S.set(SKIP_UPDATE_VERSION_KEY, '')
+    if (saveLauncherConfig()) {
+      uiStateActions.pushToast('success', `已恢复 v${skipped} 的更新提醒`)
+    }
     set(readSettings())
   },
 

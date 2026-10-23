@@ -3,6 +3,10 @@
  * changelog <markdown> maxHeight 280 SmartScroll（暂无更新日志态为单行短文本，
  * 裸 overflow:scroll 短态滚轮可推越界——SmartScroll 实测判定，超高才滚）。
  * 前往下载 = cmd start（platform.openUrl）。
+ *
+ * 跳过版本提醒（2026-10-23）：写入 config.skip_update_version，启动自动检查对
+ * 该版本不再打扰；关于页手动检查不受抑制，对话框内按钮翻转为「恢复更新提醒」
+ * （唯一恢复入口，避免用户只能手改 config.json）。
  */
 import { editorTheme, useTheme, useThemeContext } from '../theme'
 import { Button } from '../components/Button'
@@ -10,6 +14,8 @@ import { Chip } from '../components/Chip'
 import { Modal, useModalClose } from '../components/Modal'
 import { SmartScrollArea } from '../components/SmartScroll'
 import { useUiState } from '../../stores/uiState'
+import { useSettings } from '../../stores/settings'
+import { shouldSuppressUpdate } from '../../services/updater'
 import { openUrl } from '../../services/platform'
 
 const TEXTS = {
@@ -17,6 +23,8 @@ const TEXTS = {
   betaNotice: '这是一个测试版本，建议谨慎更新。',
   releaseNotice: '建议更新到最新版本以获得更好的体验和新功能。',
   noChangelog: '暂无更新日志',
+  skipVersion: '跳过此版本提醒',
+  restoreReminder: '恢复更新提醒',
   download: '前往下载',
   later: '稍后提醒',
 } as const
@@ -28,11 +36,29 @@ export interface UpdateAvailableDialogProps {
   downloadUrl: string
 }
 
-/** 动作区（Provider 子树内取 useModalClose，PR4）：稍后提醒/前往下载统一走 requestClose 播退场 */
-function UpdateAvailableActions({ downloadUrl }: { downloadUrl: string }) {
+/** 动作区（Provider 子树内取 useModalClose，PR4）：跳过/稍后/前往下载统一走 requestClose 播退场 */
+function UpdateAvailableActions({ latestVersion, downloadUrl }: { latestVersion: string; downloadUrl: string }) {
   const requestClose = useModalClose()
+  const skippedVersion = useSettings((s) => s.skipUpdateVersion)
+  const skipUpdate = useSettings((s) => s.skipUpdate)
+  const restoreUpdateReminder = useSettings((s) => s.restoreUpdateReminder)
+  const skipped = shouldSuppressUpdate(skippedVersion, latestVersion)
+
+  const handleSkip = (): void => {
+    // 已跳过（仅手动检查会走到这里）：先恢复提醒并停留在对话框，用户可继续下载
+    if (skipped) {
+      restoreUpdateReminder()
+      return
+    }
+    skipUpdate(latestVersion)
+    requestClose()
+  }
+
   return (
     <>
+      <Button variant="quiet" onClick={handleSkip} testId="update-skip">
+        {skipped ? TEXTS.restoreReminder : TEXTS.skipVersion}
+      </Button>
       <Button variant="quiet" onClick={requestClose} testId="update-later">
         {TEXTS.later}
       </Button>
@@ -67,7 +93,7 @@ export function UpdateAvailableDialog({
       title={TEXTS.title}
       // 结算回调：退场播完后由 Modal 调用，直呼 closeTopDialog 真卸载（见 Modal.tsx 头注释）
       onClose={() => useUiState.getState().closeTopDialog()}
-      actions={<UpdateAvailableActions downloadUrl={downloadUrl} />}>
+      actions={<UpdateAvailableActions latestVersion={latestVersion} downloadUrl={downloadUrl} />}>
       {/* 版本对 */}
       <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         <Chip>{`v${currentVersion}`}</Chip>

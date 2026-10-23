@@ -471,6 +471,62 @@ describe('对话框（smoke）', () => {
     await settle()
   })
 
+  it('更新提示：跳过本版本写盘，手动检查可恢复提醒', async () => {
+    await resetUiStack()
+    const { getConfigStore } = await import('../services/configStore')
+    const config = getConfigStore()
+    config.set('skip_update_version', '')
+    app.useSettings.getState().reload()
+    await settle()
+
+    const openUpdateDialog = (): void => {
+      app.useUiState.getState().openDialog({
+        kind: 'updateAvailable',
+        currentVersion: '2.0.0',
+        latestVersion: 'v2.0.1',
+        changelog: null,
+        downloadUrl: 'https://example.invalid/update',
+      })
+    }
+
+    openUpdateDialog()
+    await settle()
+    expect(renderer.findByTestId('update-skip')).toBeDefined()
+    expect(renderer.getAllText()).toContain('跳过此版本提醒')
+    // 三个动作按钮同行且不重叠（520 宽对话框的排版回归）
+    {
+      const skip = renderer.findByTestId('update-skip')
+      const later = renderer.findByTestId('update-later')
+      const download = renderer.findByTestId('update-download')
+      if (!skip || !later || !download) throw new Error('update action buttons missing')
+      const sb = renderer.getElementBounds(skip.id)
+      const lb = renderer.getElementBounds(later.id)
+      const db = renderer.getElementBounds(download.id)
+      if (!sb || !lb || !db) throw new Error('update action bounds missing')
+      expect(lb.y).toBe(sb.y)
+      expect(db.y).toBe(sb.y)
+      expect(sb.x + sb.width).toBeLessThanOrEqual(lb.x)
+      expect(lb.x + lb.width).toBeLessThanOrEqual(db.x)
+    }
+
+    await clickTestId('update-skip')
+    // v 前缀在落盘前规范化；跳过即确认关闭 + toast 反馈
+    expect(config.get<string>('skip_update_version')).toBe('2.0.1')
+    expect(app.useUiState.getState().dialogs.length).toBe(0)
+    expect(app.useUiState.getState().toast?.message).toContain('已跳过 v2.0.1')
+
+    // 手动检查（关于页）不受跳过抑制：对话框照常打开，按钮翻转为恢复提醒。
+    // 恢复不关闭对话框，用户可继续「前往下载」。
+    openUpdateDialog()
+    await settle()
+    expect(renderer.getAllText()).toContain('恢复更新提醒')
+    await clickTestId('update-skip')
+    expect(config.get<string>('skip_update_version')).toBe('')
+    expect(app.useUiState.getState().dialogs.length).toBe(1)
+
+    await resetUiStack()
+  })
+
   it('年龄确认：勾选前确认按钮禁用，勾选后可点', async () => {
     const onConfirm = vi.fn()
     app.useUiState.getState().openDialog({ kind: 'ageConfirm', mode: 'install', onConfirm })

@@ -57,6 +57,9 @@ export function AboutView() {
           uiStateActions.pushToast('success', '当前已是最新版本')
           return
         }
+        // 手动检查是显式意图：即使该版本已被「跳过提醒」也照常展示（对话框内
+        // 按钮翻转为「恢复更新提醒」，是跳过后唯一的恢复入口——启动自动检查
+        // 在 app.tsx 侧按 shouldSuppressUpdate 抑制）
         const changelog = await fetchChangelog({ currentVersion: current })
         uiStateActions.openDialog({
           kind: 'updateAvailable',

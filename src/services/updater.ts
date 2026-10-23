@@ -46,6 +46,11 @@ export const CHANGELOG_URL = 'https://sillytavern.lingyesoul.top/changelog'
 /** "前往下载"落点：官网更新说明页（用户指定 2026-10-07；不落 GitHub
  *  releases——/releases/latest 302 到最新非预发布 tag，纯预发布周期陈旧） */
 export const UPDATE_PAGE_URL = 'https://sillytavern.lingyesoul.top/update'
+/**
+ * 用户跳过更新提醒的版本（config.json，规范化后的版本号；'' = 未跳过）。
+ * 更新对话框「跳过此版本提醒」写入，启动自动检查按 shouldSuppressUpdate 抑制。
+ */
+export const SKIP_UPDATE_VERSION_KEY = 'skip_update_version'
 const REPO_OWNER = 'LingyeSoul'
 const REPO_NAME = 'SillyTavernLauncher'
 // 暴露给 scripts/verify-update-check.ts 取证（脚本必须探测生产同款 URL，手抄会漂移）。
@@ -190,6 +195,21 @@ export function compareLauncherVersions(localVersion: string, remoteVersion: str
     return 0
   }
   return 0
+}
+
+/**
+ * 跳过版本判定：被跳过的版本仍是最新（或比它更旧）→ 抑制更新提醒。
+ * 下个新版本（比较结果 > 0）恢复提醒；空值/脏值 fail-open 为提醒，避免损坏
+ * 配置把更新提示永久静默。调用方须先确认 has_update（beta 守卫在
+ * compareLauncherVersions 内，跳过态不改变其语义）。
+ */
+export function shouldSuppressUpdate(skippedVersion: string, latestVersion: string): boolean {
+  const skipped = skippedVersion.trim()
+  if (skipped.length === 0) return false
+  const normalized = normalizeVersion(skipped)
+  // normalizeVersion 对非版本串原样返回（'unknown'），比较链会退化到 0（恒抑制）
+  if (!/^\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?$/.test(normalized)) return false
+  return compareLauncherVersions(normalized, normalizeVersion(latestVersion)) >= 0
 }
 
 // ---------------------------------------------------------------------------

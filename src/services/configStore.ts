@@ -70,6 +70,12 @@ export interface LauncherConfig {
   }
   log: boolean
   checkupdate: boolean
+  /**
+   * 已跳过的更新提醒版本（2026-10-23）：用户在更新对话框点「跳过此版本提醒」后
+   * 写入规范化版本号；自动检查按 updater.shouldSuppressUpdate 抑制 ≤ 该版本的
+   * 提醒，下个新版本照常提醒（'' = 未跳过）。
+   */
+  skip_update_version: string
   stcheckupdate: boolean
   /**
    * 酒馆更新前询问（2026-10-06）：stcheckupdate 开启时检出新版本，先弹确认
@@ -129,6 +135,7 @@ const DEFAULT_CONFIG: LauncherConfig = {
   },
   log: false,
   checkupdate: false,
+  skip_update_version: '',
   stcheckupdate: false,
   // 默认开启：更新动到用户的目录树与依赖，先征得同意（旧配置缺键时 get 的
   // fallback 同值，存量用户升级后同样进入询问模式）

@@ -66,6 +66,7 @@ describe('ConfigStore（← config_manager.py）', () => {
     expect(store.get('github.mirrors.ghllkk')).toBe('gh.llkk.cc')
     expect(store.get('log')).toBe(false)
     expect(store.get('checkupdate')).toBe(false)
+    expect(store.get('skip_update_version')).toBe('')
     expect(store.get('stcheckupdate')).toBe(false)
     expect(store.get('sync.first_shown')).toBe(false)
     expect(store.get('sync.enabled')).toBe(false)
