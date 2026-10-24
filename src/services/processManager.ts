@@ -115,11 +115,18 @@ export function stripSurroundingQuotes(arg: string): string {
   return arg
 }
 
-/** subprocess.list2cmdline 的单参数 Windows 引号规则（MSVCRT） */
+/**
+ * subprocess.list2cmdline 的单参数 Windows 引号规则（MSVCRT）。
+ *
+ * 额外覆盖 cmd.exe 元字符：本函数只服务 `.cmd`/`.bat` 的 `cmd /c` 命令行拼装，
+ * 未加引号的 `& | < > ^ ( )` 会被 cmd 当操作符解析（`-e setTimeout(()=>…,300)`
+ * 的 `>…` 曾整段被当成重定向吞掉，Bun 收到残句 `setTimeout(()=,300)`）。
+ * 注：cmd 在引号内仍会展开 `%VAR%`，此处不做处理（无跨版本可靠的转义写法）。
+ */
 export function windowsQuoteArg(arg: string): string {
   const result: string[] = []
   const backslashes: string[] = []
-  const needQuote = arg === '' || /[\t "]/.test(arg)
+  const needQuote = arg === '' || /[\s"&|<>^()%!]/.test(arg)
   if (needQuote) result.push('"')
   for (const ch of arg) {
     if (ch === '\\') {

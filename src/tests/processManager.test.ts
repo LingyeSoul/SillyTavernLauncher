@@ -84,6 +84,11 @@ describe('命令解析（← shlex posix=False + list2cmdline）', () => {
     expect(windowsQuoteArg('C:\\dir\\')).toBe('C:\\dir\\')
     // 有空格 → 加引号，闭引号前的尾部反斜杠翻倍
     expect(windowsQuoteArg('a b\\')).toBe('"a b\\\\"')
+    // cmd /c 元字符不加引号会被当操作符/重定向（回归：`=>` 被吞成 `=`）
+    expect(windowsQuoteArg('setTimeout(()=>console.log(1),0)')).toBe(
+      '"setTimeout(()=>console.log(1),0)"',
+    )
+    expect(windowsQuoteArg('a&b|c<d>e^f')).toBe('"a&b|c<d>e^f"')
   })
 })
 
