@@ -130,9 +130,10 @@ const TEXTS = {
   portRangeError: '端口号必须在1-65535之间',
   portInvalidError: '请输入有效的端口号',
   argsErrorTitle: '参数验证失败',
-  whitelistCreateFailTitle: '白名单创建失败',
-  whitelistCreateFailMsg: '无法创建白名单文件，请检查日志',
   savedToast: '配置文件已保存',
+  listenSaveFail: '局域网访问设置保存失败，请检查 SillyTavern/config.yaml 写入权限',
+  hostWhitelistSaveFail: '主机白名单保存失败，请检查 SillyTavern/config.yaml 写入权限',
+  unifiedWhitelistSaveFail: '统一白名单保存失败，请检查 SillyTavern/config.yaml 写入权限',
   hostWhitelistOn: '主机白名单已开启',
   hostWhitelistOff: '主机白名单已关闭',
   unifiedOn: '已启用统一白名单，IP 白名单已同步到主机白名单',
@@ -233,28 +234,37 @@ export function SettingsView() {
     />
   )
 
-  /** ← listen_changed：开启时创建白名单，失败回滚 + 错误对话框 */
+  /** ← listen_changed：开启时创建白名单；创建或落盘失败回滚内存字段 + 错误 toast */
   const handleListen = (v: boolean): void => {
+    // createWhitelist 会顺带改私网过滤/白名单/放行段，失败时一并回滚
+    const prevListen = st.listen
+    const prevPrivateEnabled = st.privateAddressWhitelistEnabled
+    const prevWhitelistIps = [...st.whitelistIps]
+    const prevAllowedRanges = [...st.privateAddressAllowedRanges]
     st.listen = v
     if (v) {
       void st.createWhitelist().then((ok) => {
-        if (!ok) {
-          st.listen = false
-          uiStateActions.openDialog({
-            kind: 'error',
-            title: TEXTS.whitelistCreateFailTitle,
-            message: TEXTS.whitelistCreateFailMsg,
-          })
+        // createWhitelist 无变更时不落盘，listen 仍须单独保存，故两条结果都要检查
+        if (!ok || !st.save()) {
+          st.listen = prevListen
+          st.privateAddressWhitelistEnabled = prevPrivateEnabled
+          st.whitelistIps = prevWhitelistIps
+          st.privateAddressAllowedRanges = prevAllowedRanges
           settings.reload()
+          uiStateActions.pushToast('error', TEXTS.listenSaveFail)
           return
         }
-        st.save()
         uiStateActions.pushToast('success', TEXTS.savedToast)
         settings.reload()
       })
       return
     }
-    st.save()
+    if (!st.save()) {
+      st.listen = prevListen
+      settings.reload()
+      uiStateActions.pushToast('error', TEXTS.listenSaveFail)
+      return
+    }
     uiStateActions.pushToast('success', TEXTS.savedToast)
     settings.reload()
   }
@@ -597,8 +607,14 @@ const handleEnvModeChange = (v: string): void => {
             <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', minHeight: 40, gap: 12 }}>
               <div style={{ flexGrow: 1, minWidth: 0 }}>
                 {switchRow('host_whitelist', TEXTS.hostWhitelist, TEXTS.hostWhitelistDesc, settings.hostWhitelistEnabled, (v) => {
+                  const prev = st.hostWhitelistEnabled
                   st.hostWhitelistEnabled = v
-                  st.save()
+                  if (!st.save()) {
+                    st.hostWhitelistEnabled = prev
+                    settings.reload()
+                    uiStateActions.pushToast('error', TEXTS.hostWhitelistSaveFail)
+                    return
+                  }
                   uiStateActions.pushToast('success', v ? TEXTS.hostWhitelistOn : TEXTS.hostWhitelistOff)
                   settings.reload()
                 })}
@@ -608,14 +624,19 @@ const handleEnvModeChange = (v: string): void => {
               </Button>
             </div>
             {switchRow('unified_whitelist', TEXTS.unifiedWhitelist, TEXTS.unifiedWhitelistDesc, settings.unifiedWhitelist, (v) => {
+              // syncWhitelists 会先改 hostWhitelistHosts 再落盘，失败时一并回滚
+              const prevUnified = st.unifiedWhitelist
+              const prevHosts = [...st.hostWhitelistHosts]
               st.unifiedWhitelist = v
-              if (v) {
-                st.syncWhitelists('ip')
-                uiStateActions.pushToast('success', TEXTS.unifiedOn)
-              } else {
-                st.save()
-                uiStateActions.pushToast('success', TEXTS.unifiedOff)
+              const saved = v ? st.syncWhitelists('ip') : st.save()
+              if (!saved) {
+                st.unifiedWhitelist = prevUnified
+                st.hostWhitelistHosts = prevHosts
+                settings.reload()
+                uiStateActions.pushToast('error', TEXTS.unifiedWhitelistSaveFail)
+                return
               }
+              uiStateActions.pushToast('success', v ? TEXTS.unifiedOn : TEXTS.unifiedOff)
               settings.reload()
             })}
           </Card>

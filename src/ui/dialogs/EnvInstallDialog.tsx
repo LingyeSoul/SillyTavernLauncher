@@ -26,6 +26,7 @@ import {
   type EnvInstallPhase,
   type EnvInstallProgress,
 } from '../../services/envInstaller'
+import { errMsg, logError } from '../../services/errorLog'
 import { useSettings } from '../../stores/settings'
 import { useTerminalLogs } from '../../stores/terminalLogs'
 import { uiStateActions, useUiState } from '../../stores/uiState'
@@ -194,9 +195,28 @@ function EnvInstallActions({
         return next
       })
       setMode('failed')
-    })().finally(() => {
-      envInstallInFlight = false
-    })
+    })()
+      // 安装链路异常（如 mkdirSync(envRoot) 权限/占用直接抛）必须结算到 failed：
+      // 只挂 finally 会让对话框永久停在「安装中」且异常冒成 unhandledRejection
+      .catch((err: unknown) => {
+        const message = errMsg(err)
+        logError(`[env] 内置环境安装异常: ${message}`)
+        uiStateActions.pushToast('error', `${TEXTS.failLead}${message}`)
+        setRows((prev) => {
+          const next = { ...prev }
+          for (const c of components) {
+            // 已完成的组件保持 done（组件间独立，异常可能发生在后续组件）
+            if (next[c].status !== 'done') {
+              next[c] = { status: 'failed', phaseText: '安装失败', percent: null, error: message }
+            }
+          }
+          return next
+        })
+        setMode('failed')
+      })
+      .finally(() => {
+        envInstallInFlight = false
+      })
   }
 
   return (

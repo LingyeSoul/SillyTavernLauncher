@@ -74,15 +74,23 @@ export function Modal({
   const panelRef = useRef<PublicInstance | null>(null)
   const restoreRef = useRef<number | null>(null)
   const closingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /**
+   * 同步关闭闩锁：closing state 要下一次提交才可见，同帧双 Escape/点击都会看到
+   * closing=false、各排一个 240ms 定时器，onClose 结算两次连弹两层（2026-10-25）。
+   * 进入 requestClose 即置位，定时器结算后复位；卸载清理与 open 复位兜底。
+   */
+  const closingLockRef = useRef(false)
   const [closing, setClosing] = useState(false)
 
-  // 卸载时清掉未触发的退场定时器（避免卸载后仍回调 onClose 误弹掉上层对话框）
+  // 卸载时清掉未触发的退场定时器（避免卸载后仍回调 onClose 误弹掉上层对话框），
+  // 并复位同步闩锁（同一 Modal 实例可能被后续对话框复用）
   useEffect(() => {
     return () => {
       if (closingTimerRef.current != null) {
         clearTimeout(closingTimerRef.current)
         closingTimerRef.current = null
       }
+      closingLockRef.current = false
     }
   }, [])
 
@@ -98,16 +106,22 @@ export function Modal({
 
   // 退场动画状态：open 由 true→false 时先演退场再由父级卸载
   useEffect(() => {
-    if (!open) setClosing(false)
+    if (!open) {
+      setClosing(false)
+      closingLockRef.current = false
+    }
   }, [open])
 
   if (!open) return null
 
   const requestClose = (): void => {
     if (!onClose) return
-    // 退场中忽略重复触发（双 Escape 连弹两层对话框栈的根因）
-    if (closing) return
+    // 同步闩锁先于 state 生效：同帧第二次触发直接忽略（state 闭包在此不可靠）
+    if (closingLockRef.current) return
+    closingLockRef.current = true
     if (!motionEnabled) {
+      // 无动画路径：onClose 契约是立即真卸载，闩锁由卸载清理/open 复位复位；
+      // 调用方若未卸载则保持闩锁，后续重复触发一律忽略（不得二次结算）
       onClose()
       return
     }
@@ -116,6 +130,7 @@ export function Modal({
       closingTimerRef.current = null
       setClosing(false)
       onClose()
+      closingLockRef.current = false
     }, EXIT_MS)
   }
 

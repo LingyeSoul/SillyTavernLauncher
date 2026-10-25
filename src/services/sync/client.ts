@@ -5,6 +5,10 @@
  * - token 从 URL fragment 解析（http://host:port#token=...），
  *   绝不出现在请求 URL / query 中，仅放入 Authorization: Bearer 头。
  * - ZIP 解压逐 entry realpath 遏制（Zip-Slip），越界条目跳过并记录。
+ * - 增量同步：远端 manifest 逐条校验（safeDataPath 遏制穿越/绝对路径/反斜杠/
+ *   符号链接，size/mtime/sha256 类型校验，重复与文件-目录冲突拒绝）；下载按
+ *   清单 size 与 sha256 校验，失败清理半成品；空清单默认拒绝清空本地数据；
+ *   删除/下载前先备份，备份失败即中止。
  * - 网络请求全部带超时（AbortSignal.timeout 语义，DEVIATION：fetch 无法
  *   分离连接/读取超时，用总超时 = 2×timeout 秒，对应 Python (t, 2t) 上界）。
  *
@@ -17,6 +21,7 @@
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -29,8 +34,8 @@ import {
 } from 'node:fs'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
-import { basename, dirname, join, relative, resolve, sep } from 'node:path'
-import { Readable } from 'node:stream'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { Readable, Transform, type TransformCallback } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { unzipSync } from 'fflate'
 import { isDirSync, realpathBestEffort } from '../atomicFs'
@@ -75,6 +80,140 @@ export function createTimeoutSignal(timeoutMs: number, external?: AbortSignal): 
     external?.removeEventListener('abort', onExternalAbort)
   }, { once: true })
   return controller.signal
+}
+
+// ---------------------------------------------------------------------------
+// 远程路径安全（manifest path → 数据目录落点）
+// ---------------------------------------------------------------------------
+
+/**
+ * 将远端清单中的 POSIX 相对路径安全映射到 dataPath 内。
+ *
+ * 拒绝：非字符串/空串/NUL/反斜杠/绝对路径/空路径段/`.`/`..`/
+ * Windows 驱动器前缀与冒号（含 NTFS 备用数据流）；逐段 lstat，任何已存在
+ * 路径段是符号链接即拒绝；最后经 path.relative 做目录包含判定。
+ * 返回真实绝对路径；不安全时抛出带具体原因的 Error。
+ */
+export function safeDataPath(dataPath: string, relativePath: unknown): string {
+  if (typeof relativePath !== 'string' || relativePath.length === 0) {
+    throw new Error('无效的同步文件路径: 必须是相对 POSIX 路径')
+  }
+  if (relativePath.includes('\0') || relativePath.includes('\\')) {
+    throw new Error(`无效的同步文件路径（含 NUL 或反斜杠）: ${JSON.stringify(relativePath)}`)
+  }
+  if (isAbsolute(relativePath) || relativePath.startsWith('/')) {
+    throw new Error(`不安全的同步文件路径（绝对路径）: ${relativePath}`)
+  }
+
+  const parts = relativePath.split('/')
+  if (parts.some((part) => part === '' || part === '.' || part === '..')) {
+    throw new Error(`不安全的同步文件路径（空路径段或 . / ..）: ${relativePath}`)
+  }
+  // C:foo 是 Windows 驱动器相对路径，isAbsolute 不拦；冒号还可能是 NTFS ADS 分隔符
+  if (/^[A-Za-z]:/.test(relativePath) || parts.some((part) => part.includes(':'))) {
+    throw new Error(`不安全的同步文件路径（Windows 驱动器或备用数据流）: ${relativePath}`)
+  }
+
+  const base = realpathBestEffort(dataPath)
+  let candidate = base
+  for (const part of parts) {
+    candidate = resolve(candidate, part)
+    let statInfo: ReturnType<typeof lstatSync>
+    try {
+      statInfo = lstatSync(candidate)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      // 不存在的路径段（或其父级是普通文件）不可能是符号链接
+      if (code === 'ENOENT' || code === 'ENOTDIR') continue
+      throw new Error(`无法检查同步路径段 ${relativePath}: ${errMsg(err)}`)
+    }
+    if (statInfo.isSymbolicLink()) {
+      throw new Error(`不安全的同步文件路径（路径段是符号链接）: ${relativePath}`)
+    }
+  }
+
+  const target = realpathBestEffort(candidate)
+  const contained = relative(base, target)
+  if (contained === '' || contained === '..' || contained.startsWith(`..${sep}`) || isAbsolute(contained)) {
+    throw new Error(`不安全的同步文件路径（越过数据目录）: ${relativePath}`)
+  }
+  return target
+}
+
+/**
+ * 校验并规范化远端 manifest（协议字段：path/size/mtime/modified/is_dir/sha256）。
+ *
+ * - path：逐条经 safeDataPath；重复路径拒绝；文件/目录前缀冲突拒绝；
+ * - size：安全非负整数；mtime：有限数；sha256：缺省/null 或 64 位 hex；
+ * - sha256 统一小写，缺省归一为 null（老服务器回退 mtime 比较）。
+ * 任何不合法条目都抛错（调用方 getRemoteManifest 统一转为 null）。
+ */
+function normalizeRemoteManifest(dataPath: string, payload: unknown): ManifestEntry[] {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    throw new Error('同步服务器返回了无效文件清单')
+  }
+  const record = payload as Record<string, unknown>
+  if (record.success !== true) {
+    throw new Error(typeof record.error === 'string' && record.error ? record.error : '未知错误')
+  }
+  const manifest = record.manifest
+  if (!Array.isArray(manifest)) {
+    throw new Error('同步服务器返回了无效文件清单: manifest 不是数组')
+  }
+
+  const normalized: ManifestEntry[] = []
+  const seen = new Set<string>()
+  const sha256Pattern = /^[0-9a-fA-F]{64}$/
+
+  for (const raw of manifest) {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      throw new Error('文件清单条目格式无效: 条目必须是对象')
+    }
+    const item = raw as Record<string, unknown>
+    if (typeof item.path !== 'string') {
+      throw new Error('文件清单条目格式无效: path 必须是字符串')
+    }
+    safeDataPath(dataPath, item.path)
+    if (seen.has(item.path)) {
+      throw new Error(`文件清单包含重复路径: ${item.path}`)
+    }
+    seen.add(item.path)
+
+    const size = item.size
+    if (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0) {
+      throw new Error(`文件清单条目格式无效（size 非有限非负整数）: ${item.path}`)
+    }
+    const mtime = item.mtime
+    if (typeof mtime !== 'number' || !Number.isFinite(mtime)) {
+      throw new Error(`文件清单条目格式无效（mtime 非有限数）: ${item.path}`)
+    }
+    const digest = item.sha256
+    if (digest !== undefined && digest !== null) {
+      if (typeof digest !== 'string' || !sha256Pattern.test(digest)) {
+        throw new Error(`文件清单条目格式无效（sha256 非 64 位 hex）: ${item.path}`)
+      }
+    }
+
+    normalized.push({
+      path: item.path,
+      size,
+      mtime,
+      modified: typeof item.modified === 'string' ? item.modified : '',
+      is_dir: false,
+      sha256: typeof digest === 'string' ? digest.toLowerCase() : null,
+    })
+  }
+
+  for (const path of seen) {
+    const parts = path.split('/')
+    for (let i = 1; i < parts.length; i++) {
+      const prefix = parts.slice(0, i).join('/')
+      if (seen.has(prefix)) {
+        throw new Error(`文件清单包含文件与目录路径冲突: ${prefix}`)
+      }
+    }
+  }
+  return normalized
 }
 
 // ---------------------------------------------------------------------------
@@ -203,6 +342,12 @@ export class SyncClient {
   private readonly log: (message: string) => void
   private readonly fetchImpl: FetchImpl
   private lastBackupPath: string | null = null
+  /**
+   * 最近一次增量同步是否因「远端清单为空」而主动拒绝。
+   * sync() 据此禁止自动回退到 ZIP 全量同步——否则刚拒绝删除，紧接着 ZIP
+   * 又会把本地数据整体替换为空目录，守卫形同虚设。
+   */
+  private lastIncrementalRefusedEmptyRemote = false
 
   constructor(serverUrl: string, dataPath?: string, options: SyncClientOptions = {}) {
     let parsed: URL
@@ -297,11 +442,8 @@ export class SyncClient {
   async getRemoteManifest(signal?: AbortSignal): Promise<ManifestEntry[] | null> {
     try {
       const response = await this.request('manifest', { signal })
-      const data = (await response.json()) as { success?: boolean; manifest?: ManifestEntry[]; error?: string }
-      if (data.success) {
-        return data.manifest ?? []
-      }
-      throw new Error(data.error ?? '未知错误')
+      const payload: unknown = await response.json()
+      return normalizeRemoteManifest(this.dataPath, payload)
     } catch (err) {
       logError(`[sync-client] 获取远程文件清单失败: ${errMsg(err)}`)
       return null
@@ -444,8 +586,13 @@ export class SyncClient {
   }
 
   /** ← sync_incremental：sha256 内容比较（优先）/ mtime 比较（老服务器回退），逐文件下载并保留 mtime */
-  async syncIncremental(options: { signal?: AbortSignal } = {}): Promise<boolean> {
+  async syncIncremental(
+    options: { signal?: AbortSignal; backup?: boolean; allowEmptyRemote?: boolean } = {},
+  ): Promise<boolean> {
     const signal = options.signal
+    const backup = options.backup ?? true
+    const allowEmptyRemote = options.allowEmptyRemote ?? false
+    this.lastIncrementalRefusedEmptyRemote = false
     this.log('开始增量同步...')
 
     try {
@@ -457,6 +604,20 @@ export class SyncClient {
       if (!remoteManifest) {
         this.log('无法获取远程文件清单')
         return false
+      }
+
+      // 空清单守卫：0 个远端文件 + 本地有数据 = 极可能是服务器数据目录未就绪/挂错，
+      // 不能把"远端没读到"当成"远端全删了"，否则一次误连就清空全量聊天记录。
+      if (remoteManifest.length === 0 && localManifest.length > 0 && !allowEmptyRemote) {
+        this.lastIncrementalRefusedEmptyRemote = true
+        this.log(
+          `远程文件清单为空（0 个文件），本地存在 ${localManifest.length} 个文件；` +
+          '已拒绝清空本地数据（如确需清空，请使用 ZIP 全量同步）',
+        )
+        return false
+      }
+      if (remoteManifest.length === 0 && localManifest.length > 0 && allowEmptyRemote) {
+        this.log('远程文件清单为空且已允许清空（allowEmptyRemote），将删除全部本地文件')
       }
 
       // Create local manifest lookup
@@ -500,20 +661,28 @@ export class SyncClient {
       this.log(`需要下载 ${filesToDownload.length} 个文件 (${formatSize(totalSize)})`)
       this.log(`需要删除 ${filesToDelete.length} 个文件`)
 
-      // Delete obsolete files
+      // 先备份再动数据：备份失败即中止，删除/下载一律不执行
+      if (backup && !this.backupExistingData()) {
+        this.log('备份现有数据失败，已中止增量同步（本地数据未修改）')
+        return false
+      }
+
+      let failures = 0
+
+      // Delete obsolete files（落点同样经 safeDataPath，拒绝符号链接/穿越）
       for (const filePath of filesToDelete) {
-        const fullPath = join(this.dataPath, filePath)
         try {
+          const fullPath = safeDataPath(this.dataPath, filePath)
           rmSync(fullPath, { force: true })
           this.log(`已删除: ${filePath}`)
         } catch (err) {
+          failures += 1
           this.log(`删除文件失败 ${filePath}: ${err instanceof Error ? err.message : String(err)}`)
         }
       }
 
       // Download new/updated files
       let downloadedSize = 0
-      let failures = 0
       for (let i = 0; i < filesToDownload.length; i++) {
         if (signal?.aborted) throw signal.reason ?? new Error('同步已取消')
         const fileInfo = filesToDownload[i] as ManifestEntry
@@ -541,10 +710,11 @@ export class SyncClient {
 
   /** ← sync：自动回退（zip ↔ incremental） */
   async sync(
-    options: { preferZip?: boolean; backup?: boolean; signal?: AbortSignal } = {},
+    options: { preferZip?: boolean; backup?: boolean; allowEmptyRemote?: boolean; signal?: AbortSignal } = {},
   ): Promise<boolean> {
     const preferZip = options.preferZip ?? true
     const backup = options.backup ?? true
+    const allowEmptyRemote = options.allowEmptyRemote ?? false
     const signal = options.signal
     this.log('开始数据同步...')
 
@@ -567,30 +737,85 @@ export class SyncClient {
         return true
       }
       this.log('ZIP 同步失败，尝试增量同步...')
-      return this.syncIncremental({ signal })
+      return this.syncIncremental({ signal, backup, allowEmptyRemote })
     }
     this.log('尝试增量同步...')
-    if (await this.syncIncremental({ signal })) {
+    if (await this.syncIncremental({ signal, backup, allowEmptyRemote })) {
       return true
+    }
+    // 空清单拒绝必须终止链路：紧接着 ZIP 全量会把本地数据整体替换为空目录，
+    // “拒绝清空”的守卫会被自动回退绕过（用户要清空应显式选 ZIP 或 allowEmptyRemote）
+    if (this.lastIncrementalRefusedEmptyRemote) {
+      this.log('已拒绝自动回退到 ZIP 全量同步（远端清单为空，避免清空本地数据）')
+      return false
     }
     this.log('增量同步失败，尝试 ZIP 同步...')
     return this.syncFullZip({ backup, signal })
   }
 
-  /** ← _download_file：下载单文件并保留远端 mtime */
+  /**
+   * ← _download_file：下载单文件并保留远端 mtime。
+   *
+   * 数据安全约束：落点必须经 safeDataPath；先写同目录临时文件，流式累计字节
+   * 超清单 size 立即失败；Content-Length 超 size 直接拒绝；sha256（若提供）
+   * 边写边算，结束后比对。任何失败都删除临时半成品，已存在的同名本地文件
+   * 在 rename 之前保持原样。
+   */
   private async downloadFile(fileInfo: ManifestEntry, signal?: AbortSignal): Promise<boolean> {
+    let tempPath: string | null = null
     try {
+      // 先验证落点再发请求：不合法路径连 /file 都不请求（防御性纵深）
+      const filePath = safeDataPath(this.dataPath, fileInfo.path)
       const response = await this.request('file', { params: { path: fileInfo.path }, signal })
 
-      // Ensure directory exists
-      const filePath = join(this.dataPath, fileInfo.path)
+      const contentLengthHeader = response.headers.get('content-length')
+      if (contentLengthHeader !== null) {
+        const declaredSize = Number(contentLengthHeader)
+        if (Number.isFinite(declaredSize) && declaredSize > fileInfo.size) {
+          throw new Error(
+            `服务器声明的 Content-Length ${declaredSize} 超过清单大小 ${fileInfo.size}`,
+          )
+        }
+      }
+
+      // Ensure directory exists（落点已由 safeDataPath 验证：穿越/符号链接/绝对路径全拒绝）
       mkdirSync(dirname(filePath), { recursive: true })
 
-      // Save file（流式写入）
+      tempPath = join(dirname(filePath), `.${basename(filePath)}.${randomUUID()}.part.tmp`)
+      const hash = createHash('sha256')
+      let receivedBytes = 0
+      const meter = new Transform({
+        transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
+          receivedBytes += chunk.byteLength
+          if (receivedBytes > fileInfo.size) {
+            callback(new Error(`下载内容超过清单声明大小 ${fileInfo.size} 字节`))
+            return
+          }
+          hash.update(chunk)
+          callback(null, chunk)
+        },
+      })
+
+      const body = response.body
+      if (!body) throw new Error('响应体为空')
       await pipeline(
-        Readable.fromWeb(response.body as unknown as import("node:stream/web").ReadableStream<Uint8Array>),
-        createWriteStream(filePath),
+        Readable.fromWeb(body as unknown as import('node:stream/web').ReadableStream<Uint8Array>),
+        meter,
+        createWriteStream(tempPath),
       )
+
+      if (receivedBytes !== fileInfo.size) {
+        throw new Error(`下载大小不一致: 清单 ${fileInfo.size} 字节，实际 ${receivedBytes} 字节`)
+      }
+      if (fileInfo.sha256) {
+        const actualSha256 = hash.digest('hex')
+        if (actualSha256 !== fileInfo.sha256.toLowerCase()) {
+          throw new Error(`sha256 校验失败: 清单 ${fileInfo.sha256}，实际 ${actualSha256}`)
+        }
+      }
+
+      renameSync(tempPath, filePath)
+      tempPath = null
 
       // Set modification time to match remote
       try {
@@ -600,6 +825,13 @@ export class SyncClient {
       }
       return true
     } catch (err) {
+      if (tempPath !== null) {
+        try {
+          rmSync(tempPath, { force: true })
+        } catch (cleanupError) {
+          logError(`[sync-client] 清理未完成下载失败 ${fileInfo.path}: ${errMsg(cleanupError)}`)
+        }
+      }
       this.log(`下载文件失败 ${fileInfo.path}: ${err instanceof Error ? err.message : String(err)}`)
       return false
     }
@@ -612,14 +844,14 @@ export class SyncClient {
       return true
     }
 
-    mkdirSync(this.backupRoot, { recursive: true })
-
     // 使用数据目录的相对路径作为备份文件夹名
     const dataDirName = basename(this.dataPath.replace(/[\\/]+$/, ''))
     const timestamp = formatBackupTimestamp(new Date())
     const backupPath = join(this.backupRoot, `${dataDirName}_${timestamp}`)
 
     try {
+      // 备份根目录创建也在 try 内：创建失败必须返回 false（调用方据此中止，不碰数据）
+      mkdirSync(this.backupRoot, { recursive: true })
       this.log(`备份现有数据到: ${backupPath}`)
       cpSync(this.dataPath, backupPath, { recursive: true })
       // Store backup path for potential restore

@@ -8,8 +8,9 @@
  * lifecycle 与 confirm 通道均为注入替身，零子进程零网络。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { loadAgreementCache } from '../services/agreement'
 import type { StUpdateCheckResult, StUpdateCheckStatus } from '../services/stLifecycle'
-import { startStWithUpdateConfirm, useStState } from '../stores/stState'
+import { shouldPromptStUpdate, startStWithUpdateConfirm, useStState } from '../stores/stState'
 import { useTerminalLogs } from '../stores/terminalLogs'
 
 /** 构造 lifecycle 替身：三个编排入口全部 mock，调用即断言素材 */
@@ -47,6 +48,51 @@ async function waitForLogLine(match: (text: string) => boolean): Promise<string>
 
 beforeEach(() => {
   useTerminalLogs.getState().clear()
+})
+
+/** config 替身：只回答 st_ask_before_update，其余键回落默认值 */
+function askConfig(askBeforeUpdate: boolean): { get<T = unknown>(key: string, defaultValue?: T): T } {
+  return {
+    get<T = unknown>(key: string, defaultValue?: T): T {
+      if (key === 'st_ask_before_update') return askBeforeUpdate as T
+      return defaultValue as T
+    },
+  }
+}
+
+describe('shouldPromptStUpdate（更新询问的窗口冻结门控）', () => {
+  it.each([
+    ['live', true, true],
+    ['frozen', true, false],
+    ['unknown', true, true],
+    ['live', false, false],
+    ['frozen', false, false],
+    ['unknown', false, false],
+  ] as const)('windowState=%s + st_ask_before_update=%s → %s', (windowState, ask, expected) => {
+    expect(shouldPromptStUpdate(askConfig(ask), windowState)).toBe(expected)
+  })
+
+  it('静默启动配置（三键齐 + 无交互）下即使窗口 live/unknown 也不询问', () => {
+    // 静默启动时窗口可能在 autostart 与隐藏动作的竞态窗口内短暂可见——只看
+    // windowState 会漏掉这条路径，必须叠加 shouldHideAtStartup 的配置门控。
+    const silentConfig = {
+      get<T = unknown>(key: string, defaultValue?: T): T {
+        const values: Record<string, unknown> = {
+          st_ask_before_update: true,
+          autostart: true,
+          autostart_hidden: true,
+          tray: true,
+          first_run: false,
+          agreement_accepted: true,
+          agreement_version: loadAgreementCache()?.date ?? '',
+        }
+        return (key in values ? values[key] : defaultValue) as T
+      },
+    }
+    expect(shouldPromptStUpdate(silentConfig, 'live')).toBe(false)
+    expect(shouldPromptStUpdate(silentConfig, 'unknown')).toBe(false)
+    expect(shouldPromptStUpdate(silentConfig, 'frozen')).toBe(false)
+  })
 })
 
 describe('startStWithUpdateConfirm（询问模式启动编排）', () => {

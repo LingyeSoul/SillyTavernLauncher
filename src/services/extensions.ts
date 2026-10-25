@@ -162,11 +162,17 @@ export type GitRunner = (
   signal?: AbortSignal,
 ) => Promise<GitRunnerResult>
 
+/** git 克隆超时（毫秒）：网络卡死/认证挂起时不能无限占住安装流程 */
+const GIT_CLONE_TIMEOUT_MS = 120_000
+
 /** 默认实现：复用 git.ts 的可执行解析（env_mode 决定系统/便携 git；
  *  embedded 扩展安装不走本 runner——installFromGit 按 env_mode 路由 IsoGitOps 浅克隆） */
 const defaultGitRunner: GitRunner = async (args, cwd, signal) => {
   const gitExe = resolveGitExecutable()
   const proc = spawnAsync({ cmd: [gitExe, ...args], cwd, windowsHide: true })
+  let timedOut = false
+  const timeoutMessage = (detail: string): string =>
+    `克隆超时（超过 ${GIT_CLONE_TIMEOUT_MS}ms），已终止 git 进程${detail.trim() ? `: ${detail.trim()}` : ''}`
   const abort = (): void => {
     try {
       proc.kill()
@@ -175,23 +181,40 @@ const defaultGitRunner: GitRunner = async (args, cwd, signal) => {
     }
   }
   signal?.addEventListener('abort', abort, { once: true })
-  const stdoutDone = new Response(proc.stdout).text()
-  const stderrDone = new Response(proc.stderr).text()
+  // 超时后不等待输出流收尾：Windows 下 git 的孙进程（remote helper）可能仍持有
+  // stderr 管道，只 kill git 等待流会无限挂起——用 race 在 120s 到点即按失败返回
+  let timeoutTimer: ReturnType<typeof setTimeout> | null = null
+  const timeoutDone = new Promise<never>((_, reject) => {
+    timeoutTimer = setTimeout(() => {
+      timedOut = true
+      abort()
+      reject(new Error('git clone timeout'))
+    }, GIT_CLONE_TIMEOUT_MS)
+  })
+  const collected = Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ])
+  // 超时先返回后 collected 才 rejection 属于预期（进程已被杀）——挂观察者防 unhandled
+  collected.catch(() => undefined)
   try {
-    const [exitCode, stdout, stderr] = await Promise.all([
-      proc.exited,
-      stdoutDone,
-      stderrDone,
-    ])
+    const [exitCode, stdout, stderr] = await Promise.race([collected, timeoutDone])
+    if (timedOut) {
+      return { ok: false, exitCode, stdout, stderr: timeoutMessage(stderr) }
+    }
     return { ok: exitCode === 0, exitCode, stdout, stderr }
   } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err)
     return {
       ok: false,
       exitCode: null,
       stdout: '',
-      stderr: err instanceof Error ? err.message : String(err),
+      // 超时 reject 与流读取异常都走这里——超时语义必须保留，不能退化成普通错误
+      stderr: timedOut ? timeoutMessage('') : errorMsg,
     }
   } finally {
+    if (timeoutTimer !== null) clearTimeout(timeoutTimer)
     signal?.removeEventListener('abort', abort)
   }
 }
@@ -584,6 +607,11 @@ export class ExtensionManager {
       if (attempt.ok) {
         this.log(`成功安装扩展: ${extName}`)
         return { ok: true, message: `成功安装扩展: ${extName}` }
+      }
+      // 最终失败：清理本次残留（镜像切换重试前已清一次；未切换或重试再失败在这里兜底），
+      // 否则半成品目录会让下次安装永远撞"扩展已存在"
+      if (existsSync(targetPath)) {
+        removeTree(targetPath, true)
       }
       return { ok: false, message: attempt.message }
     } catch (err) {

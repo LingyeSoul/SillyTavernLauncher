@@ -17,7 +17,7 @@ import { basename, delimiter } from 'node:path'
 import { resolveExecutableExtension } from './env'
 import { errMsg, logError } from './errorLog'
 import { isFile, IS_WINDOWS, spawnAsync, spawnSyncCmd } from './runtime'
-import type { LogLine, ProcessInfo, Subprocess } from './types'
+import type { LogLine, ProcessInfo, Subprocess, SyncSpawnResult } from './types'
 
 /** ← asyncio StreamReader 默认 64KB 行缓冲上限 */
 export const MAX_LINE_BYTES = 64 * 1024
@@ -279,7 +279,9 @@ export async function executeProcessAsync(
       throw new Error('命令解析为空')
     }
     let executable = stripSurroundingQuotes(tokens[0] ?? '')
-    const cmdArgs = tokens.slice(1)
+    // 逐 token 剥外层引号：数组 spawn 不经过 shell/OS 命令行解析，保留引号会把
+    // `"a b"` 原样当作含引号的 argv 传给子进程（2026-10-25 实测：node 收到 `"a b"`）。
+    const cmdArgs = tokens.slice(1).map(stripSurroundingQuotes)
 
     // Windows 的 Node 包同时包含无扩展名 POSIX 脚本和 .cmd 启动器，
     // 无扩展名时优先探测 Win32 可执行伴生文件（.exe/.cmd/.bat/.ps1）。
@@ -294,8 +296,7 @@ export async function executeProcessAsync(
     // 批处理文件走 shell 方式
     const isBatch = IS_WINDOWS && /\.(cmd|bat)$/i.test(executable)
     if (isBatch) {
-      const normalizedArgs = cmdArgs.map(stripSurroundingQuotes)
-      const shellCommand = [executable, ...normalizedArgs].map(windowsQuoteArg).join(' ')
+      const shellCommand = [executable, ...cmdArgs].map(windowsQuoteArg).join(' ')
       // 与 Python subprocess(shell=True) 完全一致的命令行形态：
       // {ComSpec} /c "{shellCommand}"（verbatim 避免引号被再次转义）
       const comspec = process.env.ComSpec ?? 'cmd.exe'
@@ -358,35 +359,61 @@ async function waitForExit(proc: Subprocess, timeoutMs: number): Promise<boolean
   }
 }
 
+/** stopAllProcesses 的可注入依赖（测试隔离真实 taskkill / 等待；默认行为不变） */
+export interface StopAllProcessesDeps {
+  /** 强制终止单个 PID（默认 taskkill /pid <pid> /T /F） */
+  taskkill?: (pid: number) => SyncSpawnResult
+  /** 等待退出（默认本地实现）；判定以 proc.exitCode 为准，返回值仅表示等待是否按时结束 */
+  waitForExit?: (proc: Subprocess, timeoutMs: number) => Promise<boolean>
+  /** 平台判定（默认 IS_WINDOWS）；测试强制走 taskkill 分支 */
+  isWindows?: boolean
+  /** 优雅终止宽限（默认 TERM_GRACE_MS，仅 POSIX 使用） */
+  termGraceMs?: number
+  /** 强制终止宽限（默认 KILL_GRACE_MS） */
+  killGraceMs?: number
+}
+
 /**
  * 停止所有进程（两阶段终止）。
  * Windows：TERM 无效，直接 taskkill /pid <pid> /T /F 杀整棵进程树后等待。
  * POSIX：SIGTERM 等 2s → SIGKILL 等 1s。
+ *
+ * 2026-10-25 修复「停止假成功」：不再先整体清空注册表；逐个终止并确认
+ * proc.exitCode !== null 后才移除该 PID。存活者保留在注册表（退出钩子仍能兜底）
+ * 并记录 PID/命令。返回 true 语义 = 全部已停止；无进程或仍有存活者均返回 false。
  */
 export async function stopAllProcesses(
   onEvent: (message: string) => void = () => undefined,
+  deps: StopAllProcessesDeps = {},
 ): Promise<boolean> {
   if (activeProcesses.size === 0) return false
   const processesToStop = [...activeProcesses.values()]
-  activeProcesses.clear()
+  const wait = deps.waitForExit ?? waitForExit
+  const windows = deps.isWindows ?? IS_WINDOWS
+  const termGraceMs = deps.termGraceMs ?? TERM_GRACE_MS
+  const killGraceMs = deps.killGraceMs ?? KILL_GRACE_MS
+  const taskkill =
+    deps.taskkill ?? ((pid: number) => spawnSyncCmd(['taskkill', '/pid', String(pid), '/T', '/F']))
 
   onEvent(`正在终止 ${processesToStop.length} 个进程...`)
 
+  const survivors: ProcessInfo[] = []
   for (const info of processesToStop) {
     try {
       onEvent(`终止进程 PID=${info.pid}: ${info.command.slice(0, 50)}`)
 
       if (info.proc.exitCode !== null) {
+        activeProcesses.delete(info.pid)
         onEvent(`  进程 PID=${info.pid} 已停止`)
         continue
       }
 
-      if (IS_WINDOWS) {
-        const result = spawnSyncCmd(['taskkill', '/pid', String(info.pid), '/T', '/F'])
+      if (windows) {
+        const result = taskkill(info.pid)
         if (result.exitCode !== 0 && result.stderr.trim()) {
           onEvent(`  taskkill 失败: ${result.stderr.trim()}`)
         }
-        await waitForExit(info.proc, KILL_GRACE_MS)
+        await wait(info.proc, killGraceMs)
       } else {
         // 阶段 1: 优雅终止（SIGTERM），最多等 2s
         try {
@@ -394,7 +421,8 @@ export async function stopAllProcesses(
         } catch {
           // 忽略
         }
-        if (!(await waitForExit(info.proc, TERM_GRACE_MS))) {
+        await wait(info.proc, termGraceMs)
+        if (info.proc.exitCode === null) {
           // 阶段 2: 强制终止（SIGKILL），最多等 1s
           onEvent(`  进程 PID=${info.pid} 优雅退出失败，强制终止...`)
           try {
@@ -402,19 +430,44 @@ export async function stopAllProcesses(
           } catch {
             // 忽略
           }
-          await waitForExit(info.proc, KILL_GRACE_MS)
+          await wait(info.proc, killGraceMs)
         }
+      }
+
+      if (info.proc.exitCode !== null) {
+        activeProcesses.delete(info.pid)
+        onEvent(`  进程 PID=${info.pid} 已停止`)
+      } else {
+        survivors.push(info)
+        onEvent(
+          `  进程 PID=${info.pid} 仍在运行（命令: ${info.command}），保留在活动进程表等待退出兜底`,
+        )
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (message.trim()) {
         onEvent(`终止进程 ${info.pid} 时出错: ${message}`)
       }
+      // 异常路径同样按真实退出状态结算，不得误删存活进程
+      if (info.proc.exitCode !== null) {
+        activeProcesses.delete(info.pid)
+      } else {
+        survivors.push(info)
+        onEvent(
+          `  进程 PID=${info.pid} 仍在运行（命令: ${info.command}），保留在活动进程表等待退出兜底`,
+        )
+      }
     }
   }
 
-  onEvent('✓ 所有进程已终止')
-  return true
+  if (survivors.length === 0) {
+    onEvent('✓ 所有进程已终止')
+    return true
+  }
+  onEvent(
+    `✗ ${survivors.length} 个进程仍在运行（PID: ${survivors.map((info) => info.pid).join(', ')}），已保留在活动进程表`,
+  )
+  return false
 }
 
 /** 同步硬杀（程序退出时使用；无任何等待） */
@@ -481,10 +534,16 @@ export interface ArgsValidation {
 const DANGEROUS_CHARS = ['|', '&', ';', '$', '`', '(', ')', '<', '>', '\n', '\r'] as const
 
 // 对应 Python r"^[\w\-=/:\\.,@%+]+$"：Python \w 在 Unicode 模式下含中文等字母，
-// JS 侧用 \p{L}\p{N}\p{M} + 下划线等价展开。
-const SAFE_ARG_PART_RE = /^[\p{L}\p{N}\p{M}_\-=/:\\.,@%+]+$/u
+// JS 侧用 \p{L}\p{N}\p{M} + 下划线等价展开。2026-10-25 起逐 token 先剥外层引号
+// 再校验，因此额外允许字面空格（仅引号内可能出现；未加引号的 token 本就被空白分隔）。
+const SAFE_ARG_PART_RE = /^[\p{L}\p{N}\p{M}_\-=/:\\.,@%+ ]+$/u
 
-/** 验证自定义启动参数，防止命令注入（shell 元字符白名单）。 */
+/**
+ * 验证自定义启动参数，防止命令注入（shell 元字符白名单）。
+ *
+ * 危险字符检查先于 tokenize 且覆盖引号内内容（`"a;b"` 仍拒绝）；随后逐 token
+ * 剥掉成对包裹引号再校验，使 `--whitelist "a b"` 这类带空格参数可用。
+ */
 export function validateCustomArgs(args: string): ArgsValidation {
   if (!args || !args.trim()) {
     return { ok: true, message: '' }
@@ -509,7 +568,11 @@ export function validateCustomArgs(args: string): ArgsValidation {
     return { ok: false, message: `参数格式错误: ${err instanceof Error ? err.message : String(err)}` }
   }
 
-  for (const part of parts) {
+  for (const rawPart of parts) {
+    const part = stripSurroundingQuotes(rawPart)
+    if (part === '') {
+      return { ok: false, message: `参数包含空参数: '${rawPart}'` }
+    }
     if (!SAFE_ARG_PART_RE.test(part)) {
       return { ok: false, message: `参数包含非法字符: '${part}'` }
     }

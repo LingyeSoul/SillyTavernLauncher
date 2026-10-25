@@ -1,12 +1,20 @@
 /**
  * ← tests/test_st_config.py（SillyTavernConfigTests）语义等价移植：
  * eemeli/yaml 注释 round-trip、未知字段保留、非法节回退安全默认、
- * whitelist.txt 一次性迁移、智能子网白名单、unified 双向同步、原子写。
+ * whitelist.txt 一次性迁移、智能子网白名单、unified 双向同步、原子写、损坏配置备份。
  */
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseDocument } from 'yaml'
 import {
   DEFAULT_PRIVATE_ADDRESS_RANGES,
@@ -87,6 +95,25 @@ describe('StConfig（← st/config.py stcfg）', () => {
     expect(saved.listen).toBe(false)
   })
 
+  it('损坏的 config.yaml：加载先备份原文件，后续 save 不丢原文', () => {
+    const corruptText = ['listen: true', 'port: [unclosed', 'customKey: keep-me', ''].join('\n')
+    writeConfig(corruptText)
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const config = new StConfig({ baseDir })
+    errSpy.mockRestore()
+
+    // 损坏原文先留档：命名与 config.json 备份一致（<文件名>.corrupt-<YYYYMMDD-HHmmss>）
+    const backups = readdirSync(baseDir).filter((name) => name.startsWith('config.yaml.corrupt-'))
+    expect(backups).toHaveLength(1)
+    const backupPath = join(baseDir, backups[0] ?? '')
+    expect(readFileSync(backupPath, 'utf8')).toBe(corruptText)
+
+    // 备份后仍允许保存（不锁死应用），但用户原配置必须能从备份找回
+    expect(config.save()).toBe(true)
+    expect(readConfigText()).not.toBe(corruptText)
+    expect(readFileSync(backupPath, 'utf8')).toBe(corruptText)
+  })
+
   it('config.yaml 不存在时使用默认值，保存后创建目录与文件', () => {
     rmSync(baseDir, { force: true, recursive: true })
     const config = new StConfig({ baseDir })
@@ -99,6 +126,16 @@ describe('StConfig（← st/config.py stcfg）', () => {
     expect(existsSync(join(baseDir, 'config.yaml'))).toBe(true)
     // 原子写：无 .tmp 残留
     expect(existsSync(`${join(baseDir, 'config.yaml')}.tmp`)).toBe(false)
+  })
+
+  it('原子写：rename 最终失败时清理 .tmp 并返回 false', () => {
+    writeConfig('listen: false\n')
+    const config = new StConfig({ baseDir })
+    // 目标位置换成目录 → rename 恒失败（不依赖真实文件占用）；重试耗尽后必须清理 .tmp
+    rmSync(join(baseDir, 'config.yaml'))
+    mkdirSync(join(baseDir, 'config.yaml'))
+    expect(config.save()).toBe(false)
+    expect(existsSync(join(baseDir, 'config.yaml.tmp'))).toBe(false)
   })
 
   it('非法 privateAddressWhitelist（标量）回退安全默认（← test_invalid_...）', () => {
@@ -152,6 +189,15 @@ describe('StConfig（← st/config.py stcfg）', () => {
     const saved = readConfigRoot().privateAddressWhitelist as Record<string, unknown>
     expect(saved.enabled).toBe(true)
     expect(saved.allowedRanges).not.toContain('192.168.42.*')
+  })
+
+  it('createWhitelist：save 失败返回 false（设置页不得弹成功）', async () => {
+    writeConfig('listen: false\n')
+    const config = new StConfig({ baseDir, getLocalIp: fakeIp('192.168.42.17') })
+    // 替换 save 实现：避免依赖文件权限/占用等宿主环境（验收要求可注入）
+    config.save = (): boolean => false
+
+    await expect(config.createWhitelist()).resolves.toBe(false)
   })
 
   it('ensurePrivateFilterForListen：listen 未开启 → ok 且不落盘（适配 ST private request filter）', async () => {
@@ -243,6 +289,18 @@ describe('StConfig（← st/config.py stcfg）', () => {
     expect(config.whitelistIps).toEqual(before)
   })
 
+  it('checkAndUpdateWhitelistSubnet：save 失败返回 false（不谎报已更新）', async () => {
+    writeConfig(
+      ['listen: true', 'whitelist:', '  - 192.168.1.*', '  - 127.0.0.1', '  - ::1', ''].join(
+        '\n',
+      ),
+    )
+    const config = new StConfig({ baseDir, getLocalIp: fakeIp('10.20.30.5') })
+    config.save = (): boolean => false
+
+    await expect(config.checkAndUpdateWhitelistSubnet()).resolves.toBe(false)
+  })
+
   it('unified 双向同步：ip → host（IPv6 加方括号），host → ip（过滤非法/localhost）', () => {
     writeConfig('listen: true\n')
     const config = new StConfig({ baseDir })
@@ -259,6 +317,14 @@ describe('StConfig（← st/config.py stcfg）', () => {
 
     const saved = readConfigRoot()
     expect(saved.whitelist).toEqual(['fe80::1', '10.0.0.8'])
+  })
+
+  it('syncWhitelists：save 失败返回 false（统一白名单开关不得弹成功）', () => {
+    writeConfig('listen: true\n')
+    const config = new StConfig({ baseDir })
+    config.save = (): boolean => false
+
+    expect(config.syncWhitelists('ip')).toBe(false)
   })
 
   it('toSnapshot 输出托管字段纯数据视图', () => {

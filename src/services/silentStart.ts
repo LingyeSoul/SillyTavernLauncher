@@ -14,7 +14,7 @@
 import type { ConfigStore } from './configStore'
 import { eulaDialogRequired } from './agreement'
 
-export function shouldHideAtStartup(config: ConfigStore): boolean {
+export function shouldHideAtStartup(config: Pick<ConfigStore, 'get'>): boolean {
   if (!config.get<boolean>('autostart', false)) return false
   if (!config.get<boolean>('autostart_hidden', false)) return false
   if (!config.get<boolean>('tray', false)) return false

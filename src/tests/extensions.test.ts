@@ -171,6 +171,37 @@ describe('git 安装（← install_from_git）', () => {
     expect(gitRunnerCalls.length).toBe(0)
   })
 
+  it('clone 失败留下的半成品目录被清理（不阻塞下次安装）', async () => {
+    setupInstalledSt()
+    // 模拟 git 在目标目录留下半成品后失败（磁盘/中断类本地错误，非网络类不触发镜像重试）
+    const runner = makeGitRunner((args) => {
+      const target = args[args.length - 1] as string
+      mkdirSync(target, { recursive: true })
+      writeFileSync(join(target, 'index.js.partial'), 'partial', 'utf8')
+      return { ok: false, exitCode: 128, stdout: '', stderr: 'fatal: bad object HEAD' }
+    })
+    const manager = makeManager({ gitRunner: runner.run })
+
+    const first = await manager.installFromGit(
+      'https://github.com/example/partial.git',
+      'global',
+      'partial-ext',
+    )
+    expect(first.ok).toBe(false)
+    expect(first.message).toContain('Git 克隆失败')
+    expect(existsSync(join(manager.getGlobalExtPath(), 'partial-ext'))).toBe(false)
+
+    // 残留目录被清掉后重试能再次触达 git，而不是永远撞"扩展已存在"
+    const second = await manager.installFromGit(
+      'https://github.com/example/partial.git',
+      'global',
+      'partial-ext',
+    )
+    expect(second.ok).toBe(false)
+    expect(second.message).not.toContain('扩展已存在')
+    expect(gitRunnerCalls.length).toBe(2)
+  })
+
   it('已存在同名扩展时拒绝', async () => {
     setupInstalledSt()
     const manager = makeManager()

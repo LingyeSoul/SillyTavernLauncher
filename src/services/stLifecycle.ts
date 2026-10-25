@@ -50,6 +50,7 @@ import {
 import {
   buildProcessEnv,
   executeProcessAsync,
+  getActiveProcesses,
   getActiveProcessesCount,
   hasActiveProcess,
   stopAllProcesses,
@@ -205,13 +206,13 @@ export interface PathValidation {
   message: string
 }
 
-/** NPM 不支持的字符集（← problematic_chars 集合，含 '-'，1:1 保留） */
+/** NPM 不支持的字符集（← problematic_chars 集合；2026-10-25 移除 '-'，其余保留） */
 const PROBLEMATIC_CHARS = new Set([
   // 空格和空白字符
   ' ', '\t', '\n', '\r',
   // 特殊符号
   '!', '"', '#', '$', '%', '&', "'", '(', ')', '*', '+', ',', ';', '<', '=', '>',
-  '?', '@', '[', ']', '^', '`', '{', '|', '}', '~', '-',
+  '?', '@', '[', ']', '^', '`', '{', '|', '}', '~',
   // 中文标点
   '，', '。', '！', '？', '；', '：', '（', '）', '【', '】', '、', '《', '》',
   '“', '”', '…', '——',
@@ -571,6 +572,8 @@ export interface StLifecycleDeps {
    */
   probeProxyReachable?: (url: string) => Promise<boolean>
   getActiveProcessesCount?: () => number
+  /** 活动进程快照（默认 processManager.getActiveProcesses）；停止失败时用于列出存活 PID */
+  getActiveProcesses?: () => ProcessInfo[]
   /** ST 服务进程是否在运行（← Python is_running 显式标志语义；默认按 kind='st-server' 检查） */
   hasStServerProcess?: () => boolean
   /**
@@ -637,6 +640,14 @@ export type StUpdateCheckStatus = 'not-installed' | 'no-git' | 'check-failed' | 
 export interface StUpdateCheckResult {
   status: StUpdateCheckStatus
   message: string
+}
+
+/** 停止失败的用户可见消息：列出仍在运行的 PID（无法取得时退化为通用文案） */
+function formatStopFailure(survivors: readonly ProcessInfo[], action: string): string {
+  const pids = [...new Set(survivors.map((info) => info.pid))].join(', ')
+  return pids
+    ? `部分进程未能终止（PID: ${pids}），${action}`
+    : `部分进程未能终止，${action}`
 }
 
 // ---------------------------------------------------------------------------
@@ -1156,7 +1167,14 @@ export class StLifecycle {
       this.log(`检测到 ${count} 个运行中的进程`)
       this.log('正在停止SillyTavern进程...')
       const stop = this.deps.stopAllProcesses ?? stopAllProcesses
-      await stop((message) => this.log(message))
+      const stopped = await stop((message) => this.log(message))
+      if (!stopped) {
+        // 2026-10-25：停止失败不得再报「已停止」——列出注册表里仍存活（等待退出兜底）的 PID
+        const survivors = (this.deps.getActiveProcesses ?? getActiveProcesses)()
+        const message = formatStopFailure(survivors, '请重试或手动结束')
+        this.log(message)
+        return { ok: false, message }
+      }
       this.log('✓ 所有进程已停止')
       return { ok: true, message: '✓ 所有进程已停止' }
     } catch (err) {
@@ -1177,8 +1195,20 @@ export class StLifecycle {
     }
     this.log('正在重启SillyTavern...')
     try {
+      // 2026-10-25：停止失败必须中止重启——旧进程仍存活时再 spawn 会出现双实例，
+      // 且旧实现吞掉 stopAllProcesses 的 false，失败仍上报「已重启」。
+      // 无进程时 stopAllProcesses 维持既有 false 语义，不能据此误判为停止失败。
+      const countBefore = (this.deps.getActiveProcessesCount ?? getActiveProcessesCount)()
       const stop = this.deps.stopAllProcesses ?? stopAllProcesses
-      await stop((message) => this.log(message))
+      const stopped = await stop((message) => this.log(message))
+      if (!stopped) {
+        const survivors = (this.deps.getActiveProcesses ?? getActiveProcesses)()
+        if (countBefore > 0 || survivors.length > 0) {
+          const message = formatStopFailure(survivors, '已中止重启，请重试或手动结束')
+          this.log(message)
+          return { ok: false, message, proc: null }
+        }
+      }
       this.log('旧进程已停止')
 
       // 检查路径是否包含中文或空格（restart 仅做这两项检查）

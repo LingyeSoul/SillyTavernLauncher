@@ -68,7 +68,7 @@ export function contentFingerprint(content: string): string {
  * 2026-09-22 提升为共享口径——静默启动（services/silentStart）的"本轮无
  * 交互"门与弹窗判定必须读同一段代码，两处各写一份必然漂移。
  */
-export function eulaDialogRequired(config: ConfigStore): boolean {
+export function eulaDialogRequired(config: Pick<ConfigStore, 'get'>): boolean {
   if (!config.get<boolean>('agreement_accepted', false)) return true
   return config.get<string>('agreement_version', '') !== (loadAgreementCache()?.date ?? '')
 }

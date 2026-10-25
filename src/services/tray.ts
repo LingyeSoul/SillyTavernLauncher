@@ -251,6 +251,12 @@ export interface TrayInitOptions {
   handlers: TrayHandlers
 }
 
+/** JSCallback 的最小生命周期面：ptr 供 WNDCLASSW 写入，close 释放原生回调槽 */
+interface TrayWndProc {
+  ptr: bigint | number
+  close?: () => void
+}
+
 /** 托盘运行态（globalThis 持有：--hot 重求值后 FFI 资源仍存活，模块状态需跟着走） */
 interface TrayRuntime {
   user32: TrayUser32
@@ -258,7 +264,7 @@ interface TrayRuntime {
   helperHwnd: bigint
   notifyData: Buffer
   /** JSCallback 保活引用：被 GC 回收 = wndproc 调用即崩，绝不置 null */
-  wndProc: { ptr: bigint | number }
+  wndProc: TrayWndProc
   /** 泵/退出钩子的反注册句柄 */
   pumpTimer: ReturnType<typeof setInterval>
   exitHook: () => void
@@ -417,6 +423,12 @@ export async function initTray(options: TrayInitOptions): Promise<boolean> {
     heapFree(addr: bigint): number
     classRegistered: boolean
   } | null = null
+  // 失败路径资源凭证：隐藏窗口/HICON/JSCallback 创建成功后立即登记，catch 按
+  // DestroyWindow → UnregisterClass → DestroyIcon → wndProc.close → HeapFree 拆除；
+  // 未创建（仍为 null）的步骤跳过，绝不销毁别人的句柄
+  let helperHwnd: bigint | null = null
+  let iconHandle: bigint | null = null
+  let wndProc: TrayWndProc | null = null
   try {
     await loadFfi()
     const { dlopen, FFIType, JSCallback } = await import('bun:ffi')
@@ -449,10 +461,11 @@ export async function initTray(options: TrayInitOptions): Promise<boolean> {
       if (u === null) return 0n // 不可能：回调只可能在 FFI 加载后抵达
       return u.DefWindowProcW(hwnd, msg, wParam, lParam)
     }
-    const wndProc = new JSCallback(wndProcFn, {
+    const callback = new JSCallback(wndProcFn, {
       args: [FFIType.u64, FFIType.u32, FFIType.u64, FFIType.i64],
       returns: FFIType.i64,
-    }) as unknown as { ptr: bigint | number }
+    }) as unknown as TrayWndProc
+    wndProc = callback
 
     // 2. 注册窗口类 + 建隐藏顶层窗（WS_POPUP 永不显示；标题 NULL 不撞标题+PID 枚举）
     const kernel32 = dlopen('kernel32.dll', {
@@ -482,7 +495,7 @@ export async function initTray(options: TrayInitOptions): Promise<boolean> {
     rollback = { addr: classNameAddr, instance: hInstance, heapFree, classRegistered: false }
 
     const wc = Buffer.alloc(WNDCLASS_SIZE)
-    wc.writeBigUInt64LE(BigInt.asUintN(64, BigInt(wndProc.ptr)), WC_WNDPROC)
+    wc.writeBigUInt64LE(BigInt.asUintN(64, BigInt(callback.ptr)), WC_WNDPROC)
     wc.writeBigUInt64LE(hInstance, WC_HINSTANCE)
     wc.writeBigUInt64LE(classNameAddr, WC_CLASSNAME)
     if (user32.RegisterClassW(wc) === 0) throw new Error('RegisterClassW 失败（类已注册或参数非法）')
@@ -490,7 +503,7 @@ export async function initTray(options: TrayInitOptions): Promise<boolean> {
 
     // 消息号先落模块级：wndproc 在建窗期间就可能被调（WM_NCCREATE），读的是它
     taskbarCreatedMsg = user32.RegisterWindowMessageW(utf16zBuf('TaskbarCreated'))
-    const helperHwnd = user32.CreateWindowExW(
+    const createdHwnd = user32.CreateWindowExW(
       0,
       classNameBuf,
       0n,
@@ -504,19 +517,21 @@ export async function initTray(options: TrayInitOptions): Promise<boolean> {
       hInstance,
       0n,
     )
-    if (helperHwnd === 0n) throw new Error('CreateWindowExW 失败')
+    if (createdHwnd === 0n) throw new Error('CreateWindowExW 失败')
+    helperHwnd = createdHwnd
 
     // 3. 图标（复用 windowIcon 的预缩放管线，尺寸取系统小图标档）
-    const iconHandle = await createHiconFromDataUrl(
+    const createdIcon = await createHiconFromDataUrl(
       options.iconDataUrl,
       user32.GetSystemMetrics(SM_CXSMICON),
       user32.GetSystemMetrics(SM_CYSMICON),
     )
-    if (iconHandle === 0) throw new Error('托盘图标创建失败（CreateIconFromResourceEx 返回 0）')
+    if (createdIcon === 0) throw new Error('托盘图标创建失败（CreateIconFromResourceEx 返回 0）')
+    iconHandle = BigInt(createdIcon)
 
     const notifyData = buildNotifyIconData({
-      hwnd: helperHwnd,
-      iconHandle: BigInt(iconHandle),
+      hwnd: createdHwnd,
+      iconHandle: BigInt(createdIcon),
       callbackMessage: TRAY_CALLBACK_MESSAGE,
       id: 1,
       tooltip: options.tooltip ?? 'SillyTavernLauncher',
@@ -552,29 +567,58 @@ export async function initTray(options: TrayInitOptions): Promise<boolean> {
     runtime = {
       user32,
       shellNotifyIcon,
-      helperHwnd,
+      helperHwnd: createdHwnd,
       notifyData,
-      wndProc,
+      wndProc: callback,
       pumpTimer,
       exitHook,
       classNameAddr,
       hInstance,
-      iconHandle: BigInt(iconHandle),
+      iconHandle: BigInt(createdIcon),
       freeClassNameMem: () => heapFree(classNameAddr),
     }
     ;(globalThis as TrayGlobal).__stlTray = runtime
     handlers = options.handlers
-    console.log(`[tray] 系统托盘已启用（helper hwnd=${helperHwnd}）`)
+    console.log(`[tray] 系统托盘已启用（helper hwnd=${createdHwnd}）`)
     return true
   } catch (err) {
-    if (rollback !== null) {
-      if (rollback.classRegistered) {
-        try {
-          user32Cache?.UnregisterClassW(rollback.addr, rollback.instance)
-        } catch (unregErr) {
-          logError(`[tray] 初始化失败回滚：UnregisterClass 失败: ${errMsg(unregErr)}`)
+    // 回滚顺序：窗 → 窗口类 → 图标 → 回调 → 类名堆缓冲。
+    // 每步独立 try/catch：单步失败不阻断后续释放，且绝不静默。
+    if (helperHwnd !== null) {
+      try {
+        if (user32Cache?.DestroyWindow(helperHwnd) === 0) {
+          logError('[tray] 初始化失败回滚：DestroyWindow 返回 0（隐藏窗可能已失效）')
         }
+      } catch (destroyErr) {
+        logError(`[tray] 初始化失败回滚：DestroyWindow 失败: ${errMsg(destroyErr)}`)
       }
+    }
+    if (rollback !== null && rollback.classRegistered) {
+      try {
+        if (user32Cache?.UnregisterClassW(rollback.addr, rollback.instance) === 0) {
+          logError('[tray] 初始化失败回滚：UnregisterClass 返回 0（窗口类可能已失效）')
+        }
+      } catch (unregErr) {
+        logError(`[tray] 初始化失败回滚：UnregisterClass 失败: ${errMsg(unregErr)}`)
+      }
+    }
+    if (iconHandle !== null) {
+      try {
+        if (user32Cache?.DestroyIcon(iconHandle) === 0) {
+          logError('[tray] 初始化失败回滚：DestroyIcon 返回 0（图标句柄可能已失效）')
+        }
+      } catch (iconErr) {
+        logError(`[tray] 初始化失败回滚：DestroyIcon 失败: ${errMsg(iconErr)}`)
+      }
+    }
+    if (wndProc !== null) {
+      try {
+        wndProc.close?.()
+      } catch (closeErr) {
+        logError(`[tray] 初始化失败回滚：释放窗口过程回调失败: ${errMsg(closeErr)}`)
+      }
+    }
+    if (rollback !== null) {
       try {
         rollback.heapFree(rollback.addr)
       } catch (freeErr) {
@@ -612,6 +656,12 @@ export function destroyTray(): void {
     rt.user32.DestroyIcon(rt.iconHandle)
   } catch (err) {
     logError(`[tray] 销毁托盘图标句柄失败: ${errMsg(err)}`)
+  }
+  try {
+    // Bun JSCallback 的原生回调槽需显式释放（未暴露时跳过，不阻断后续拆解）
+    rt.wndProc.close?.()
+  } catch (err) {
+    logError(`[tray] 释放窗口过程回调失败: ${errMsg(err)}`)
   }
   try {
     rt.freeClassNameMem()

@@ -20,7 +20,7 @@
  */
 import { useEffect } from 'react'
 import { motion } from '@gpuix/react'
-import { getStLifecycle, useStState } from '../../stores/stState'
+import { getStLifecycle, isDirBusy, useStState } from '../../stores/stState'
 import { useVersionState, type VersionEntry } from '../../stores/versionState'
 import { uiStateActions } from '../../stores/uiState'
 import { EASE_OUT_QUAD, dur, stagger } from '../../theme'
@@ -52,6 +52,7 @@ const TEXTS = {
   emptyHint: '请先安装 SillyTavern 或点击刷新获取版本列表',
   loadFailed: '获取版本列表失败',
   refresh: '刷新',
+  switchBusy: '已有安装/启动/更新操作进行中，请等待完成后再切换版本',
 } as const
 
 export function VersionView() {
@@ -60,6 +61,7 @@ export function VersionView() {
   const currentVersion = useStState((s) => s.currentVersion)
   const versionLoading = useStState((s) => s.versionLoading)
   const installed = useStState((s) => s.installed)
+  const dirBusy = useStState((s) => isDirBusy(s.busy))
   const refreshVersion = useStState((s) => s.refreshVersion)
   const versions = useVersionState((s) => s.versions)
   const loading = useVersionState((s) => s.loading)
@@ -165,6 +167,7 @@ export function VersionView() {
             <VersionCard
               entry={entry}
               current={(currentVersion?.version ?? '').replace(/^v/, '') === entry.version}
+              disabled={dirBusy}
             />
           </motion.div>
         ))}
@@ -172,7 +175,16 @@ export function VersionView() {
   )
 }
 
-function VersionCard({ entry, current }: { entry: VersionEntry; current: boolean }) {
+function VersionCard({
+  entry,
+  current,
+  disabled,
+}: {
+  entry: VersionEntry
+  current: boolean
+  /** 目录级互斥（安装/启动/更新/切换进行中）：切换按钮禁用，防并发改写工作区 */
+  disabled: boolean
+}) {
   const t = useTheme()
   const openDialog = uiStateActions.openDialog
   const date = entry.tag.date.slice(0, 10)
@@ -227,6 +239,7 @@ function VersionCard({ entry, current }: { entry: VersionEntry; current: boolean
         {!current && (
           <Button
             variant="quiet"
+            disabled={disabled}
             onClick={() => {
               openDialog({
                 kind: 'versionSwitch',
@@ -251,10 +264,21 @@ export async function executeVersionSwitch(
   commit: string,
   tagName: string,
 ): Promise<void> {
-  const result = await getStLifecycle().switchStVersion({ version, commit }, tagName)
-  if (result.ok) uiStateActions.pushToast('success', result.message)
-  else uiStateActions.pushToast('error', result.message)
-  const { refreshVersion, refresh } = useStState.getState()
+  const { busy, refreshVersion, refresh } = useStState.getState()
+  // 目录级互斥：更新中的 git pull 与切版本并发会同时改写工作区（2026-10-25）
+  if (isDirBusy(busy)) {
+    uiStateActions.pushToast('warning', TEXTS.switchBusy)
+    return
+  }
+  // 切换同样改写 ST 工作区：占用 update 槽，让安装/启动/更新侧的 isDirBusy 也拦住
+  useStState.setState((s) => ({ busy: { ...s.busy, update: true } }))
+  try {
+    const result = await getStLifecycle().switchStVersion({ version, commit }, tagName)
+    if (result.ok) uiStateActions.pushToast('success', result.message)
+    else uiStateActions.pushToast('error', result.message)
+  } finally {
+    useStState.setState((s) => ({ busy: { ...s.busy, update: false } }))
+  }
   refreshVersion().catch(() => undefined)
   refresh()
 }

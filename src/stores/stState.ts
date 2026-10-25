@@ -14,9 +14,10 @@ import type { StUpdateCheckResult } from '../services/stLifecycle'
 import { checkStInstalled } from '../services/env'
 import { errMsg, logError } from '../services/errorLog'
 import { hasActiveProcess } from '../services/processManager'
-import { getConfigStore, type EnvMode } from '../services/configStore'
+import { getConfigStore, type ConfigStore, type EnvMode } from '../services/configStore'
 import type { BoolMessage } from '../services/types'
 import { shouldHideAtStartup } from '../services/silentStart'
+import { mainWindowQueryState } from '../services/windowControl'
 import { useTerminalLogs } from './terminalLogs'
 import { uiStateActions } from './uiState'
 
@@ -45,6 +46,26 @@ export function isDirBusy(busy: StBusyState): boolean {
 
 function appendLog(message: string): void {
   useTerminalLogs.getState().appendLine(message)
+}
+
+/**
+ * 更新前询问门控（2026-10-25）：配置要求询问 + 主窗口可交互（非 frozen）。
+ *
+ * 两条独立证据缺一不可：
+ * - `shouldHideAtStartup` = 本轮静默启动（配置三键齐 + 无交互步骤）。该态下窗口
+ *   可能在 autostart 与隐藏动作的竞态窗口内仍短暂可见，但用户不在屏幕前，询问
+ *   必然无人应答；
+ * - `windowState === 'frozen'` = 窗口已被手动关闭到托盘/最小化，确认框不可见，
+ *   起对话框会让启动 busy 永久卡死（frozen 态 renderer 查询也不可用）。
+ * 两者任一成立都走自动检查/更新；其余情况保留询问语义。
+ */
+export function shouldPromptStUpdate(
+  config: Pick<ConfigStore, 'get'>,
+  windowState: ReturnType<typeof mainWindowQueryState>,
+): boolean {
+  if (!config.get<boolean>('st_ask_before_update', true)) return false
+  if (shouldHideAtStartup(config)) return false
+  return windowState !== 'frozen'
 }
 
 /**
@@ -182,15 +203,22 @@ export const useStState = create<StStateState>((set, get) => ({
       const config = getConfigStore()
       const lc = getStLifecycle()
       // ← Flet：stcheckupdate 开 → 先检查更新，否则直接启动。
-      // st_ask_before_update 再切一刀：检出更新先问用户（更新/跳过）——静默启动
-      // 除外（主窗口已藏到托盘，对话框无人应答只会卡死启动链路，仍走自动更新）
+      // st_ask_before_update 再切一刀：检出更新先问用户（更新/跳过）——但主窗口
+      // 隐藏到托盘/最小化（frozen）时确认框不可见，起对话框只会卡死启动链路，
+      // 故该态跳过询问走自动检查/更新（2026-10-25 手动关闭到托盘后从托盘启动实测）
       let result: BoolMessage
       if (!config.get<boolean>('stcheckupdate', true)) {
         result = await lc.startSt()
-      } else if (config.get<boolean>('st_ask_before_update', true) && !shouldHideAtStartup(config)) {
-        result = await startStWithUpdateConfirm(lc, confirmStUpdateViaDialog)
       } else {
-        result = await lc.checkAndStartSt()
+        const windowState = mainWindowQueryState()
+        if (shouldPromptStUpdate(config, windowState)) {
+          result = await startStWithUpdateConfirm(lc, confirmStUpdateViaDialog)
+        } else {
+          if (config.get<boolean>('st_ask_before_update', true) && windowState === 'frozen') {
+            appendLog('主窗口已隐藏到托盘或最小化，更新确认框不可见，已自动检查更新后启动')
+          }
+          result = await lc.checkAndStartSt()
+        }
       }
       if (!result.ok) {
         // 已在运行/未安装/依赖缺失等业务失败：日志已有，toast 提醒

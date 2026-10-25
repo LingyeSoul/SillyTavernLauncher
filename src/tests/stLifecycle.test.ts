@@ -139,6 +139,17 @@ function fakeRunningProcess(): ProcessInfo {
   }
 }
 
+/** 指定 PID 的存活进程（停止失败断言：注册表保留的存活者） */
+function fakeRunningProcessWithPid(pid: number): ProcessInfo {
+  const base = fakeRunningProcess()
+  return {
+    ...base,
+    pid,
+    command: `node server.js --pid=${pid}`,
+    proc: { ...base.proc, pid },
+  }
+}
+
 /** 延迟退出模型：delayMs 后以 exitCode 退出（复现缺包秒崩的启动期死亡） */
 function fakeDelayedExitProcess(exitCode: number, delayMs: number): ProcessInfo {
   let code: number | null = null
@@ -280,8 +291,16 @@ describe('validatePathForNpm（← validate_path_for_npm 1:1）', () => {
     expect(validatePathForNpm('C:\\a!b').ok).toBe(false)
   })
 
-  it("连字符 '-' 在 Python 集合内同样拒绝（1:1 保留）", () => {
-    expect(validatePathForNpm('C:\\my-dir').ok).toBe(false)
+  it("连字符 '-' 合法（2026-10-25 修复：SillyTavern-Launcher 曾被整体锁死）", () => {
+    const result = validatePathForNpm('E:\\WorkProject\\SillyTavern-Launcher')
+    expect(result.ok).toBe(true)
+    expect(result.message).toContain('路径验证通过')
+    expect(validatePathForNpm('C:\\my-dir').ok).toBe(true)
+  })
+
+  it('空格/中文路径仍拒绝（移除 - 不放松其余校验）', () => {
+    expect(validatePathForNpm('E:\\WorkProject\\My Folder').ok).toBe(false)
+    expect(validatePathForNpm('E:\\工作目录\\SillyTavern-Launcher').ok).toBe(false)
   })
 
   it('非 ASCII 非 CJK 字符拒绝（ascii 编码检查）', () => {
@@ -1706,6 +1725,22 @@ describe('stopSt（← stop_sillytavern）', () => {
     expect(stopAll).toHaveBeenCalledTimes(1)
     expect(logs.some((message) => message.includes('正在终止 1 个进程...'))).toBe(true)
   })
+
+  it('停止失败 → ok:false 并列出存活 PID（不再恒报已停止）', async () => {
+    const survivor = fakeRunningProcessWithPid(4321)
+    const busy = makeLifecycle({
+      deps: {
+        stopAllProcesses: vi.fn(async () => false),
+        getActiveProcessesCount: () => 1,
+        getActiveProcesses: () => [survivor],
+      },
+    })
+
+    const result = await busy.stopSt()
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('部分进程未能终止（PID: 4321），请重试或手动结束')
+    expect(logs.some((message) => message.includes('✓ 所有进程已停止'))).toBe(false)
+  })
 })
 
 describe('restartSt（← restart_sillytavern，仅中文/空格检查）', () => {
@@ -1740,6 +1775,42 @@ describe('restartSt（← restart_sillytavern，仅中文/空格检查）', () =
     expect(result.ok).toBe(true)
     expect(harness.calls[0]?.command).toBe('"C:/fake/node.exe" server.js')
     expect(logs.some((message) => message.includes('SillyTavern已重启'))).toBe(true)
+  })
+
+  it('停止失败 → 中止重启（不 spawn 新进程，如实返回）', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const lifecycle = makeLifecycle({
+      deps: {
+        ...harness.deps,
+        getActiveProcessesCount: () => 1,
+        getActiveProcesses: () => [fakeRunningProcessWithPid(9753)],
+        stopAllProcesses: vi.fn(async () => false),
+      },
+    })
+
+    const result = await lifecycle.restartSt()
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('部分进程未能终止（PID: 9753），已中止重启，请重试或手动结束')
+    expect(harness.calls.length).toBe(0)
+    expect(logs.some((message) => message.includes('SillyTavern已重启'))).toBe(false)
+  })
+
+  it('无运行进程（stop 返回 false）不误判为停止失败，仍继续重启', async () => {
+    setupSt({ nodeModules: true })
+    const harness = makeExecHarness(() => 0)
+    const lifecycle = makeLifecycle({
+      deps: {
+        ...harness.deps,
+        getActiveProcessesCount: () => 0,
+        getActiveProcesses: () => [],
+        stopAllProcesses: vi.fn(async () => false),
+      },
+    })
+
+    const result = await lifecycle.restartSt()
+    expect(result.ok).toBe(true)
+    expect(harness.calls.length).toBe(1)
   })
 })
 

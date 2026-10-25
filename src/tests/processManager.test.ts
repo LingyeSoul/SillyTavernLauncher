@@ -6,7 +6,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   MAX_LINE_BYTES,
   buildProcessEnv,
@@ -15,6 +15,7 @@ import {
   getActiveProcessesCount,
   hasActiveProcess,
   readStreamLines,
+  registerProcess,
   removeProcess,
   stopAllProcesses,
   stopAllProcessesSync,
@@ -23,7 +24,7 @@ import {
   validateCustomArgs,
   windowsQuoteArg,
 } from '../services/processManager'
-import type { LogLine } from '../services/types'
+import type { LogLine, ProcessInfo } from '../services/types'
 import { which } from '../services/runtime'
 
 let tempDir: string
@@ -39,6 +40,8 @@ beforeEach(() => {
 afterEach(async () => {
   // 兜底清理，防止用例失败时泄漏子进程
   await stopAllProcesses()
+  // 注入替身遗留的假进程（真实 taskkill 杀不掉）从注册表移除，避免跨用例污染
+  for (const info of getActiveProcesses()) removeProcess(info.pid)
   rmSync(tempDir, { force: true, recursive: true })
 })
 
@@ -183,6 +186,26 @@ describe('validateCustomArgs（← event.py 自定义参数校验，注入白名
     },
   )
 
+  it('引号包裹的带空格参数通过（token 先剥外层引号再校验）', () => {
+    expect(validateCustomArgs('--port 8000')).toEqual({ ok: true, message: '' })
+    expect(validateCustomArgs('--whitelist "a b"')).toEqual({ ok: true, message: '' })
+    expect(validateCustomArgs("-x 'a b'")).toEqual({ ok: true, message: '' })
+  })
+
+  it('空引号参数拒绝', () => {
+    const empty = validateCustomArgs('--flag ""')
+    expect(empty.ok).toBe(false)
+    expect(empty.message).toContain('空参数')
+    expect(validateCustomArgs("--flag ''").ok).toBe(false)
+  })
+
+  it('引号内危险字符/未闭合引号/命令替换仍拒绝', () => {
+    expect(validateCustomArgs('"a;b"').ok).toBe(false)
+    expect(validateCustomArgs('"a|b"').ok).toBe(false)
+    expect(validateCustomArgs('--whitelist "a b').ok).toBe(false)
+    expect(validateCustomArgs('$(x)').ok).toBe(false)
+  })
+
   it('未闭合引号被拒绝', () => {
     expect(validateCustomArgs("--key 'unclosed").ok).toBe(false)
     expect(validateCustomArgs('--key "unclosed').ok).toBe(false)
@@ -197,8 +220,8 @@ describe('validateCustomArgs（← event.py 自定义参数校验，注入白名
 describe('executeProcessAsync（← execute_process_async）', () => {
   it('stdout/stderr 行流分别回调（bun -e 等价命令）', async () => {
     const bin = runtimeBin()
-    // 注：与 Python shlex(posix=False) 一致，参数 token 会保留引号，
-    // 直接 exec 路径下带引号参数是字面量——event.py 的启动命令同样不带引号参数。
+    // 注：tokenizeCommand 保留引号，但数组 spawn 前会逐 token 剥掉外层引号——
+    // 子进程收到的是去引号后的原始参数（等价 Windows CreateProcess 的解析结果）。
     const info = await executeProcessAsync({
       command: `"${bin}" -e console.log('a');console.error('b')`,
       cwd: tempDir,
@@ -213,6 +236,18 @@ describe('executeProcessAsync（← execute_process_async）', () => {
     expect(events[0]).toContain('$')
     // 结束后自动从注册表移除
     expect(getActiveProcessesCount()).toBe(0)
+  })
+
+  it('引号包裹的带空格参数以去引号后的原值进入 argv（数组 spawn 不保留引号）', async () => {
+    const bin = runtimeBin()
+    const info = await executeProcessAsync({
+      command: `"${bin}" -e console.log(JSON.stringify(process.argv.slice(1))) "a b"`,
+      cwd: tempDir,
+      onLine: collect,
+    })
+    expect(info).not.toBeNull()
+    await info?.whenSettled
+    expect(lines).toContainEqual({ stream: 'stdout', text: '["a b"]' })
   })
 
   it('命令解析为空 → null + 错误事件', async () => {
@@ -312,6 +347,90 @@ describe('executeProcessAsync（← execute_process_async）', () => {
 })
 
 describe('停止进程（← _stop_processes_impl_async / stop_processes_sync）', () => {
+  /** 永不退出且 kill 无效的假进程（停止失败路径：taskkill 报错 + 等待超时） */
+  function stubbornProcess(pid: number, command: string): ProcessInfo {
+    return {
+      pid,
+      command,
+      createdAt: Date.now(),
+      proc: {
+        pid,
+        stdout: new ReadableStream(),
+        stderr: new ReadableStream(),
+        exited: new Promise<number>(() => undefined),
+        exitCode: null,
+        kill: () => undefined,
+      },
+      whenSettled: Promise.resolve(),
+    }
+  }
+
+  it('停止失败：存活进程保留在注册表、返回 false（不再假成功）', async () => {
+    const fake = stubbornProcess(424242, 'stubborn --flag')
+    registerProcess(fake.proc, fake.command)
+    const taskkill = vi.fn(() => ({ exitCode: 1, stdout: '', stderr: '拒绝访问' }))
+    const wait = vi.fn(async () => false)
+
+    try {
+      const stopped = await stopAllProcesses((m) => events.push(m), {
+        isWindows: true,
+        taskkill,
+        waitForExit: wait,
+        killGraceMs: 1,
+      })
+
+      expect(stopped).toBe(false)
+      expect(taskkill).toHaveBeenCalledWith(424242)
+      expect(wait).toHaveBeenCalledTimes(1)
+      expect(getActiveProcesses().some((info) => info.pid === 424242)).toBe(true)
+      expect(events.some((m) => m.includes('PID=424242') && m.includes('仍在运行'))).toBe(true)
+      expect(events.some((m) => m.includes('stubborn --flag'))).toBe(true)
+      expect(events.some((m) => m.includes('所有进程已终止'))).toBe(false)
+    } finally {
+      removeProcess(424242)
+    }
+  })
+
+  it('部分成功：仅移除确认退出的 PID，存活者保留在注册表', async () => {
+    const dead: ProcessInfo = {
+      pid: 313131,
+      command: 'dead --flag',
+      createdAt: Date.now(),
+      proc: {
+        pid: 313131,
+        stdout: new ReadableStream(),
+        stderr: new ReadableStream(),
+        exited: Promise.resolve(0),
+        exitCode: 0,
+        kill: () => undefined,
+      },
+      whenSettled: Promise.resolve(),
+    }
+    const alive = stubbornProcess(434343, 'alive --flag')
+    registerProcess(dead.proc, dead.command)
+    registerProcess(alive.proc, alive.command)
+    const taskkill = vi.fn(() => ({ exitCode: 0, stdout: '', stderr: '' }))
+
+    try {
+      const stopped = await stopAllProcesses(undefined, {
+        isWindows: true,
+        taskkill,
+        waitForExit: async () => false,
+        killGraceMs: 1,
+      })
+
+      expect(stopped).toBe(false)
+      expect(taskkill).toHaveBeenCalledTimes(1)
+      expect(taskkill).toHaveBeenCalledWith(434343)
+      const pids = getActiveProcesses().map((info) => info.pid)
+      expect(pids).not.toContain(313131)
+      expect(pids).toContain(434343)
+    } finally {
+      removeProcess(313131)
+      removeProcess(434343)
+    }
+  })
+
   it('stopAllProcesses：Windows 走 taskkill /T /F 杀整树', async () => {
     const bin = runtimeBin()
     const info = await executeProcessAsync({

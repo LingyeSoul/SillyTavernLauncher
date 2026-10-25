@@ -11,8 +11,11 @@
  * DEVIATION: save 由直接覆盖改为原子写（.tmp + rename，硬性纪律）。
  * DEVIATION: Python 对 requestProxy 等节为标量时会让保存抛错并整体失败；
  * TS 侧统一 heal 为 {} 后继续保存（不丢用户其余配置）。
+ * DEVIATION: 解析失败时先把原文件备份为 <configPath>.corrupt-<时间戳>（对齐
+ *   configStore 的损坏备份），再回退最小文档；否则后续 save（启动自愈/设置保存）
+ *   会把用户原配置无痕整体覆盖。
  */
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { Document, isMap, parseDocument } from 'yaml'
 import { atomicWriteFileSync, ensureDirSync } from './atomicFs'
@@ -145,8 +148,31 @@ export class StConfig {
 
       this.migrateWhitelistFromTxt()
     } catch (err) {
-      logError(`配置加载错误: ${errMsg(err)}`)
+      // 原文件必须先留档：调用方随后可能 save（保存自愈/设置页），无备份即无痕覆盖
+      const backupPath = this.backupCorruptConfig()
+      logError(
+        `配置加载错误: ${errMsg(err)}` +
+          (backupPath === null ? '' : `（原文件已备份到 ${backupPath}）`),
+      )
       this.doc = new Document({ listen: this.listen, port: this.port })
+    }
+  }
+
+  /** 损坏配置备份为 <configPath>.corrupt-<时间戳>（尽力而为，失败仅记日志） */
+  private backupCorruptConfig(): string | null {
+    if (!existsSync(this.configPath)) return null
+    try {
+      const now = new Date()
+      const pad = (value: number) => String(value).padStart(2, '0')
+      const stamp =
+        `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+        `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+      const backupPath = `${this.configPath}.corrupt-${stamp}`
+      copyFileSync(this.configPath, backupPath)
+      return backupPath
+    } catch (err) {
+      logError(`备份损坏的 config.yaml 失败: ${errMsg(err)}`)
+      return null
     }
   }
 
@@ -330,8 +356,8 @@ export class StConfig {
     if (!newWhitelist.includes('::1')) newWhitelist.push('::1')
 
     this.whitelistIps = newWhitelist
-    this.save()
-    return true
+    // save 失败必须返回 false：调用方（设置页/启动自愈）据此报错而不是谎报已更新
+    return this.save()
   }
 
   /** 确保回环放行段在列（开启私网过滤的最小权限默认；缺失则补，不重复）；返回是否有补缺 */
@@ -379,8 +405,8 @@ export class StConfig {
       }
       if (this.ensureLoopbackRanges()) changed = true
 
-      if (changed) this.save()
-      return true
+      // 无变更时无需落盘；有变更时以 save 结果为准（失败必须让调用方感知）
+      return changed ? this.save() : true
     } catch (err) {
       logError(`白名单更新失败: ${errMsg(err)}`)
       return false

@@ -40,8 +40,9 @@ export interface ManifestEntry {
    * 内容摘要（64 位 hex）。Termux 版启动器的同步客户端把 sha256 视为
    * manifest 必填字段（缺失即拒绝增量同步），且其增量比较以内容摘要为准、
    * 不依赖 mtime——为打通 Windows ↔ Termux 双端同步，本端 manifest 必须携带。
+   * 兼容老版本服务器：字段可缺省 / 为 null，客户端回退 mtime 比较。
    */
-  sha256: string
+  sha256?: string | null
 }
 
 /** 流式计算文件 sha256（大文件不全量驻内存，对齐 Termux 端 buildManifest） */
