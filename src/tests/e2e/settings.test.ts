@@ -38,13 +38,22 @@ async function expectToast(session: E2ESession, text: string, timeoutMs = 8_000)
 /** 终端 section 在「启动器设置」tab 底部：窗口高度被屏幕钳制（如 1600 请求被压到
  *  ~1047 逻辑高）时元素可能在视口外，click 的窗口坐标落空。先在主区滚动容器上定点
  *  滚轮（固定窗口坐标，不依赖可能已滚出视口的元素；实测 deltaY 为负才向下滚），
- *  直到目标 bounds 进入视口带（y≤700）。 */
+ *  直到目标 bounds 进入滚动容器视口。
+ *
+ * 2026-10-25 修复：原先用硬编码 `y <= 700` 判定可见，在屏幕把 1600 请求钳到
+ *  ~1047 的机器上，目标 y=735 明明在视口内却被判为视口外；而内容装得下时
+ *  SmartScrollArea 已翻 'hidden'，滚轮无效 → 误报“未收敛”。改为读
+ *  settings-tab-scroll 的真实 bounds 做包含判定。 */
 async function scrollSettingsIntoView(session: E2ESession, testId: string): Promise<void> {
+  const viewport = await session.app.getByTestId('settings-tab-scroll').bounds()
+  if (!viewport) throw new Error('settings-tab-scroll not found')
+  const top = viewport.y + 8
+  const bottom = viewport.y + viewport.height - 8
   let prevY = Number.POSITIVE_INFINITY
   for (let i = 0; i < 12; i++) {
     const b = await session.app.getByTestId(testId).bounds()
     if (!b) throw new Error(`${testId} not found`)
-    if (b.y >= 0 && b.y <= 700) return
+    if (b.y >= top && b.y + b.height <= bottom) return
     if (b.y >= prevY) throw new Error(`${testId} 滚动后 bounds 未收敛（y=${b.y}），wheel 可能未生效`)
     prevY = b.y
     // 主区内容固定点（侧栏 168 右侧、窗口中部），滚轮事件由 overflow:scroll 容器承接
