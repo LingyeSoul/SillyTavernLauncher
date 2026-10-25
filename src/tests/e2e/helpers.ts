@@ -7,6 +7,10 @@
  *   故用 Promise.race 加启动超时。
  * - 子进程 pid 通过二次 initialize 握手获取（协议幂等，实测可用），
  *   用于退出检测与 cleanup 前的死亡确认（Windows 下子进程 cwd 会锁住临时目录）。
+ * - 启动命令必须解析到真正的 bun 可执行文件：Node 的 spawn('bun') 在 Windows 上
+ *   只会找 bun.exe（CreateProcess 不解析 npm 的 bun.cmd 批处理），PATH 里只有
+ *   npm shim 时报 ENOENT。按 STL_E2E_BUN → 官方安装目录 → npm 包内 bun.exe
+ *   顺序解析，找不到才回落 'bun'（交给 PATH）。
  */
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -21,6 +25,27 @@ const HERE = fileURLToPath(new URL('.', import.meta.url))
 
 /** app.tsx 绝对路径：bun 按文件位置解析 src/node_modules，cwd 仅影响用户数据落盘 */
 export const APP_ENTRY = resolve(HERE, '../..', 'app.tsx')
+
+/**
+ * 解析 E2E 子进程要启动的 bun：
+ * 1. `STL_E2E_BUN` 显式覆盖（CI/特殊安装布局）；
+ * 2. 官方安装器落点 `~/.bun/bin/bun[.exe]`；
+ * 3. Windows 上 npm 包的 `node_modules/bun/bin/bun.exe`（npm 的 bun.cmd 不能直接 spawn）。
+ * 全部不存在时回落 'bun'，保持原行为（PATH 已含 bun.exe 的机器仍可用）。
+ */
+function resolveBunExecutable(): string {
+  const exeName = process.platform === 'win32' ? 'bun.exe' : 'bun'
+  const candidates: string[] = []
+  if (process.env.STL_E2E_BUN) candidates.push(process.env.STL_E2E_BUN)
+  const home = process.env.USERPROFILE ?? process.env.HOME
+  if (home) candidates.push(join(home, '.bun', 'bin', exeName))
+  if (process.platform === 'win32' && process.env.APPDATA) {
+    candidates.push(join(process.env.APPDATA, 'npm', 'node_modules', 'bun', 'bin', 'bun.exe'))
+  }
+  return candidates.find((candidate) => existsSync(candidate)) ?? 'bun'
+}
+
+const BUN_COMMAND = resolveBunExecutable()
 
 /** 截图输出目录（已 gitignore；mkdir 保证新克隆机器首跑截图用例不因缺目录失败 os error 3） */
 export const SHOTS_DIR = join(HERE, '__shots__')
@@ -183,7 +208,7 @@ export async function launchE2E(options: LaunchOptions = {}): Promise<E2ESession
 
   const app = await Promise.race([
     launch({
-      command: 'bun',
+      command: BUN_COMMAND,
       args: [APP_ENTRY],
       cwd: tempDir,
       env: {
