@@ -16,6 +16,7 @@ import {
   normalizeSpeedTest,
   OFFICIAL_MIRROR,
   readMirrorState,
+  writeMirrorState,
   type MirrorSpeedTest,
 } from '../services/mirrors'
 import type { BoolMessage } from '../services/types'
@@ -106,6 +107,9 @@ export function validateTerminalFontFamily(
 
 const S = getConfigStore()
 
+/** 配置写盘失败的统一文案（写入口与各调用点共用，勿再散写第二份） */
+const CONFIG_SAVE_FAILED_MESSAGE = '配置保存失败，请检查文件写入权限'
+
 export function readSettings(): SettingsSnapshot {
   const st = getStConfig()
   return {
@@ -142,7 +146,7 @@ function saveLauncherConfig(): boolean {
     return true
   } catch (err) {
     logError(`[settings] 保存配置失败: ${errMsg(err)}`)
-    uiStateActions.pushToast('error', '配置保存失败，请检查文件写入权限')
+    uiStateActions.pushToast('error', CONFIG_SAVE_FAILED_MESSAGE)
     return false
   }
 }
@@ -286,8 +290,13 @@ export const useSettings = create<SettingsState>((set) => ({
       set(readSettings())
       return
     }
-    S.set('github.enabled', true)
-    S.save()
+    // 运行期唯一写入口：github.* 一律经 writeMirrorState（落盘与失败记录同址）。
+    // 写盘失败必须在此中止——否则下面会照常宣布"正在测速选优"，等于谎报
+    if (!writeMirrorState({ enabled: true }, S)) {
+      uiStateActions.pushToast('error', CONFIG_SAVE_FAILED_MESSAGE)
+      set(readSettings())
+      return
+    }
     set(readSettings())
     if (state.auto && !mirrorAutoSelectDisabled()) {
       uiStateActions.pushToast('info', '未选定镜像站，正在自动测速选优…')
@@ -335,9 +344,11 @@ export const useSettings = create<SettingsState>((set) => ({
 
   /** 自动选优开关：纯 config 键（不触碰 gitconfig/remote——那是 selectMirror 的职责） */
   setMirrorAuto: (auto) => {
-    S.set('github.auto', auto)
-    if (saveLauncherConfig()) {
+    // 同样经唯一写入口；失败提示与 saveLauncherConfig 同文案，避免出现第二条失败通路
+    if (writeMirrorState({ auto }, S)) {
       uiStateActions.pushToast('success', auto ? '已开启自动测速选优' : '已关闭自动测速选优')
+    } else {
+      uiStateActions.pushToast('error', CONFIG_SAVE_FAILED_MESSAGE)
     }
     set(readSettings())
   },

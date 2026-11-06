@@ -30,11 +30,13 @@
  *   检测到候选后必须过 TCP 可达性门检（probeProxyReachable）——注册表
  *   残留的死代理（代理软件退出未清理）直接烘焙进 config.yaml 会让 ST
  *   全部出站请求 ECONNREFUSED（2026-09-29 新用户 127.0.0.1:10808 实锤）。
+ * - 拆分（2026-11-03，架构评审 C1 第一刀）：gitconfig INI 编解码搬去
+ *   ./gitConfigIni，系统代理读取/归一化/TCP 可达性探测搬去 ./systemProxy——
+ *   本模块只保留编排与调用，两块纯函数不再占据编排视野。
  * DEVIATION: "SillyTavern 正在运行" 判断从 terminal.is_running 标志改为
  *   processManager 活动进程计数（等价状态源）。
  */
-import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import net from 'node:net'
+import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { getConfigStore, type ConfigStore, type EnvMode } from './configStore'
@@ -66,8 +68,18 @@ import {
   type PortableEnvPaths,
 } from './env'
 import { getStConfig, type PrivateFilterHealResult } from './stConfig'
-import { IS_WINDOWS, spawnSyncCmd, which } from './runtime'
+import { which } from './runtime'
 import { ensureDirSync } from './atomicFs'
+import {
+  iniGetOption,
+  iniHasOption,
+  iniSetOption,
+  parseGitConfigIni,
+  readGitConfigText,
+  serializeGitConfigIni,
+  type IniSection,
+} from './gitConfigIni'
+import { probeProxyReachable, readWindowsRegistryProxy } from './systemProxy'
 import {
   buildProcessEnvEmbedded,
   defaultEmbeddedExecPath,
@@ -82,7 +94,9 @@ import {
   failoverMirror,
   isValidMirrorHost,
   OFFICIAL_MIRROR,
+  writeMirrorState,
   type MirrorFailoverOutcome,
+  type MirrorState,
 } from './mirrors'
 import { errMsg, logError } from './errorLog'
 import type { BoolMessage, ProcessInfo, SyncSpawnResult } from './types'
@@ -353,196 +367,8 @@ export function resolveToolchain(
 }
 
 // ---------------------------------------------------------------------------
-// gitconfig INI 解析/序列化（← configparser + optionxform=str + 手写回写）
-// ---------------------------------------------------------------------------
-
-export interface IniSection {
-  name: string
-  entries: Array<{ key: string; value: string }>
-}
-
-/** 多编码容错读取：utf-8 → gbk → latin1（← Python 三段 fallback） */
-export function readGitConfigText(path: string): string {
-  const buffer = readFileSync(path)
-  for (const encoding of ['utf-8', 'gbk', 'latin1']) {
-    try {
-      return new TextDecoder(encoding, { fatal: true }).decode(buffer)
-    } catch {
-      // 尝试下一编码
-    }
-  }
-  return buffer.toString('latin1')
-}
-
-export function parseGitConfigIni(text: string): IniSection[] {
-  const sections: IniSection[] = []
-  let current: IniSection | null = null
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim()
-    if (!line || line.startsWith(';') || line.startsWith('#')) continue
-    const sectionMatch = /^\[(.+)\]$/.exec(line)
-    if (sectionMatch) {
-      current = { name: sectionMatch[1] ?? '', entries: [] }
-      sections.push(current)
-      continue
-    }
-    const eqIndex = line.indexOf('=')
-    if (eqIndex === -1) continue
-    const key = line.slice(0, eqIndex).trim()
-    const value = line.slice(eqIndex + 1).trim()
-    if (!current) {
-      // ← configparser MissingSectionHeaderError
-      throw new Error('更新Git配置失败: Missing section header')
-    }
-    // 键名大小写保留（optionxform=str）
-    current.entries.push({ key, value })
-  }
-  return sections
-}
-
-export function serializeGitConfigIni(sections: IniSection[]): string {
-  const parts: string[] = []
-  for (const section of sections) {
-    parts.push(`[${section.name}]\n`)
-    for (const { key, value } of section.entries) {
-      // 转义可能引起问题的字符（← value.replace("%", "%%")）
-      parts.push(`${key} = ${value.replace(/%/g, '%%')}\n`)
-    }
-    parts.push('\n')
-  }
-  return parts.join('')
-}
-
-function iniHasOption(section: IniSection, key: string): boolean {
-  return section.entries.some((entry) => entry.key === key)
-}
-
-function iniGetOption(section: IniSection, key: string): string | undefined {
-  return section.entries.find((entry) => entry.key === key)?.value
-}
-
-function iniSetOption(section: IniSection, key: string, value: string): void {
-  const existing = section.entries.find((entry) => entry.key === key)
-  if (existing) existing.value = value
-  else section.entries.push({ key, value })
-}
-
-// ---------------------------------------------------------------------------
 // 依赖注入面（测试 mock processManager / git / config / stConfig）
 // ---------------------------------------------------------------------------
-
-/** reg query 同步查询形状（测试注入用）；exitCode 对齐 SyncSpawnResult 的可空性 */
-export interface RegistryQueryResult {
-  exitCode: number | null
-  stdout: string
-}
-
-const INTERNET_SETTINGS_KEY =
-  'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'
-
-/**
- * ← urllib.getproxies_registry：读 Windows 系统代理（HKCU Internet Settings）。
- * ProxyEnable=0x1 时取 ProxyServer；仅匹配 ASCII 值名（ProxyEnable/ProxyServer/
- * REG_DWORD/REG_SZ），不受 reg 标头中文编码差异影响。查询失败按无代理处理。
- */
-export function readWindowsRegistryProxy(
-  query: (args: string[]) => RegistryQueryResult = (args: string[]) => spawnSyncCmd(args),
-): string {
-  if (!IS_WINDOWS) return ''
-  const enabled = query(['reg', 'query', INTERNET_SETTINGS_KEY, '/v', 'ProxyEnable'])
-  if (enabled.exitCode !== 0 || !/\bProxyEnable\s+REG_DWORD\s+0x1\b/i.test(enabled.stdout)) {
-    return ''
-  }
-  const server = query(['reg', 'query', INTERNET_SETTINGS_KEY, '/v', 'ProxyServer'])
-  if (server.exitCode !== 0) return ''
-  const value = server.stdout.match(/\bProxyServer\s+REG_SZ\s+(\S*)/i)?.[1] ?? ''
-  return normalizeProxyServer(value)
-}
-
-/**
- * ProxyServer 值 → 代理 URL（← getproxies_registry 的取值归一化）。
- * 'proto=host:port;...' 分协议串取 https 段（次选 http），裸 'host:port'
- * 全协议适用；结果缺 '://' 时补 http:// 前缀（对齐 CPython 行为）。
- */
-export function normalizeProxyServer(value: string): string {
-  const raw = value.trim()
-  if (!raw) return ''
-  let candidate = raw
-  if (raw.includes('=')) {
-    const entries = raw
-      .split(';')
-      .map((part) => part.trim().match(/^([A-Za-z]+)=(.+)$/))
-      .filter((match): match is RegExpMatchArray => match !== null)
-    const picked =
-      entries.find((match) => match[1]?.toLowerCase() === 'https') ??
-      entries.find((match) => match[1]?.toLowerCase() === 'http')
-    if (!picked) return ''
-    candidate = picked[2] ?? ''
-  }
-  if (!candidate.includes('://')) candidate = `http://${candidate}`
-  return candidate
-}
-
-/** 代理 URL 缺显式端口时的协议默认端口（socks 系列统一 1080，对齐惯例） */
-const PROXY_DEFAULT_PORTS: Record<string, number> = {
-  'http:': 80,
-  'https:': 443,
-  'socks:': 1080,
-  'socks4:': 1080,
-  'socks5:': 1080,
-}
-
-export interface ProxyEndpoint {
-  host: string
-  port: number
-}
-
-/**
- * 代理 URL → {host, port}；协议无默认端口且未写端口 / 主机名缺失 / 端口越界 → null。
- * 解析失败即视为不可探测（调用方按不可达处理）。
- */
-export function extractProxyEndpoint(url: string): ProxyEndpoint | null {
-  const trimmed = url.trim()
-  if (!trimmed) return null
-  let parsed: URL
-  try {
-    parsed = new URL(trimmed)
-  } catch {
-    return null
-  }
-  const host = parsed.hostname
-  if (!host) return null
-  const port = parsed.port !== '' ? Number(parsed.port) : PROXY_DEFAULT_PORTS[parsed.protocol]
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) return null
-  return { host, port }
-}
-
-/** 代理可达性探测超时（毫秒）：本机代理拒绝连接是即时的，超时只兜防火墙丢包场景 */
-export const PROXY_PROBE_TIMEOUT_MS = 1000
-
-/**
- * 代理可达性探测（TCP 层）：只验证 host:port 有进程在听，不校验代理协议——
- * ST 经代理出站的失败模式（ECONNREFUSED）正是端口无监听。ping 不可替代：
- * 127.0.0.1 ping 恒通但端口可以没人听。node:net 直连（非子进程，不经 runtime）。
- */
-export function probeProxyReachable(
-  url: string,
-  timeoutMs: number = PROXY_PROBE_TIMEOUT_MS,
-): Promise<boolean> {
-  const endpoint = extractProxyEndpoint(url)
-  if (!endpoint) return Promise.resolve(false)
-  return new Promise((resolve) => {
-    const socket = net.createConnection({ host: endpoint.host, port: endpoint.port })
-    const settle = (ok: boolean): void => {
-      socket.removeAllListeners()
-      socket.destroy()
-      resolve(ok)
-    }
-    socket.setTimeout(timeoutMs, () => settle(false))
-    socket.once('connect', () => settle(true))
-    socket.once('error', () => settle(false))
-  })
-}
 
 export interface StProxyConfig {
   proxyEnabled: boolean
@@ -1794,12 +1620,17 @@ export class StLifecycle {
     try {
       const official = mirrorType === OFFICIAL_MIRROR || mirrorType.length === 0
       const currentHost = this.config.get<string>('github.mirror', '')
-      // 保存设置到配置文件（官方源：保留已选 host，只翻转 enabled）
-      this.config.set('github.enabled', !official)
-      if (!official) this.config.set('github.mirror', mirrorType)
-      else if (!isValidMirrorHost(currentHost)) this.config.set('github.mirror', '')
-      if (options.auto !== undefined) this.config.set('github.auto', options.auto)
-      this.config.save()
+      // 保存设置到配置文件（官方源：保留已选 host，只翻转 enabled）。
+      // 唯一写入口 = writeMirrorState（落盘 + 失败记录都在那里；此处不得再直接
+      // config.set，否则 github.* 又会出现第二套写实现与第二套失败策略）。
+      const patch: Partial<MirrorState> = { enabled: !official }
+      if (!official) patch.host = mirrorType
+      else if (!isValidMirrorHost(currentHost)) patch.host = ''
+      if (options.auto !== undefined) patch.auto = options.auto
+      if (!writeMirrorState(patch, this.config)) {
+        this.log('错误: 镜像配置保存失败')
+        return { ok: false, message: '镜像配置保存失败，请检查配置文件写入权限' }
+      }
 
       // 判断是否应修改内部Git配置（仅限内置Git或启用了patchgit的系统Git；
       // D1 三态化：portable 恒改写 / system 看 patchgit / embedded 无 gitconfig 手术恒 false）

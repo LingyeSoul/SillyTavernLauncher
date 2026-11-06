@@ -21,7 +21,7 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { findWindowByTitleAndPid } from '../services/windowIcon'
+import { findWindowByTitleAndPid } from '../services/windowLookup'
 import { TRAY_WINDOW_CLASS } from '../services/tray'
 
 if (process.platform !== 'win32' || !process.versions.bun) {
@@ -235,10 +235,12 @@ const BASE_SEED = {
 } as const
 
 /**
- * 启动被测应用（临时 cwd 种子 config + 离线协议缓存）。直接 spawn bun 而非
- * `cmd /c bun ...`：窗口归属的进程必须是拿到 pid 的那个（cmd 中转时 proc.pid
- * 是 cmd 的 pid，按 PID 匹配窗口永远找不到，实测踩过）。不经 `bun run`/
- * `npm run`：那两者的 windowsHide 语义会让窗口只创建不显示。
+ * 启动被测应用（临时 cwd 种子 config + 离线协议缓存）。必须 spawn bun 本体而非
+ * 包装器：`spawn('bun')` 在 npm 安装形态下命中 bun.ps1/bun.cmd shim（本机实测
+ * `Get-Command bun` 即 npm\bun.ps1），proc.pid 是包装器的 pid、窗口属于其子进程，
+ * 按 PID 匹配窗口永远找不到——verify-tray 阶段二就曾因此报「未找到被测窗口」
+ * 超时。`cmd /c bun ...` 同理。本脚本自身跑在 bun 里，`process.execPath` 就是本体。
+ * 不经 `bun run`/`npm run`：那两者的 windowsHide 语义会让窗口只创建不显示。
  * stdout/stderr 即时回显并汇聚到 appOutput（供 scanFreezeNoise 扫描）。
  */
 export async function startApp(options: StartAppOptions): Promise<RunningApp> {
@@ -248,7 +250,7 @@ export async function startApp(options: StartAppOptions): Promise<RunningApp> {
   writeFileSync(join(dir, 'agreement_cache.json'), JSON.stringify({ date: '2099-01-01', content: '# 离线种子' }))
 
   const appEntry = resolve(import.meta.dir, '..', 'app.tsx')
-  const proc = spawn('bun', [appEntry], {
+  const proc = spawn(process.execPath, [appEntry], {
     cwd: dir,
     env: {
       ...process.env,

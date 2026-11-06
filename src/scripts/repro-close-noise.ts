@@ -19,6 +19,7 @@ import { dlopen, FFIType } from 'bun:ffi'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { findWindowByTitleAndPid } from '../services/windowLookup'
 
 const WM_CLOSE = 0x0010
 const WINDOW_TITLE = 'SillyTavernLauncher'
@@ -30,36 +31,11 @@ if (process.platform !== 'win32' || !process.versions.bun) {
 }
 
 interface ProbeUser32Symbols {
-  GetTopWindow(hwnd: unknown): number
-  GetWindow(hwnd: number, cmd: number): number
-  GetWindowTextW(hwnd: number, buf: unknown, maxCount: number): number
-  GetWindowThreadProcessId(hwnd: number, pidOut: unknown): number
   PostMessageW(hwnd: number, msg: number, wParam: bigint, lParam: bigint): number
 }
 const user32 = dlopen('user32.dll', {
-  GetTopWindow: { args: [FFIType.pointer], returns: FFIType.pointer },
-  GetWindow: { args: [FFIType.pointer, FFIType.u32], returns: FFIType.pointer },
-  GetWindowTextW: { args: [FFIType.pointer, FFIType.pointer, FFIType.i32], returns: FFIType.i32 },
-  GetWindowThreadProcessId: { args: [FFIType.pointer, FFIType.pointer], returns: FFIType.u32 },
   PostMessageW: { args: [FFIType.pointer, FFIType.u32, FFIType.u64, FFIType.i64], returns: FFIType.i32 },
 }).symbols as unknown as ProbeUser32Symbols
-
-/** 与 services/windowIcon 同款的 标题+PID 双匹配枚举（跨进程读标题安全） */
-function findWindowByTitleAndPid(title: string, pid: number): number {
-  let hwnd = user32.GetTopWindow(0n)
-  let guard = 0
-  while (hwnd !== 0 && guard++ < 2000) {
-    const pidOut = new Uint32Array(1)
-    user32.GetWindowThreadProcessId(hwnd, pidOut)
-    if (pidOut[0] === pid) {
-      const buf = Buffer.alloc(512)
-      const len = user32.GetWindowTextW(hwnd, buf, 256)
-      if (buf.toString('utf16le', 0, Math.max(0, len) * 2) === title) return hwnd
-    }
-    hwnd = user32.GetWindow(hwnd, 2 /* GW_HWNDNEXT */)
-  }
-  return 0
-}
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -148,7 +124,9 @@ async function runOnce(run: number): Promise<RunResult> {
     ),
   )
 
-  const proc = Bun.spawn(['bun', APP_ENTRY], {
+  // process.execPath = bun 本体：`bun` 在 npm 安装形态下是 .cmd/.ps1 包装器，
+  // proc.pid 会变成包装器的 pid，下面的 PID 匹配窗口必然落空（实测 no-window）。
+  const proc = Bun.spawn([process.execPath, APP_ENTRY], {
     cwd: tempDir,
     env: { ...process.env, GPUIX_BACKGROUND: '1', STL_SKIP_AGREEMENT_RECHECK: '1' },
     stdin: 'ignore',
@@ -163,7 +141,7 @@ async function runOnce(run: number): Promise<RunResult> {
   // 等窗口创建（render 同步建窗，留启动裕量）
   let hwnd = 0
   for (let i = 0; i < 90 && hwnd === 0 && pidAlive(pid); i++) {
-    hwnd = findWindowByTitleAndPid(WINDOW_TITLE, pid)
+    hwnd = await findWindowByTitleAndPid(WINDOW_TITLE, pid)
     if (hwnd === 0) await sleep(500)
   }
 

@@ -28,27 +28,29 @@ const ICON_SMALL2 = 2
 const SMTO_ABORTIFHUNG = 0x0002
 
 /**
- * FFI 符号收窄：bun:ffi 的 pointer 出入参类型是 bigint|Pointer|null 宽联合，
- * 本脚本按句柄即 number 使用（与 services/windowIcon.ts 的 User32Symbols 同款收窄）。
+ * FFI 符号收窄：句柄一律按 u64 往来（2026-11-03 真机实测）。
+ * `FFIType.pointer` 返回是 `Pointer | bigint | null` 宽联合，NULL 实际是 `null`
+ * ——`hIcon === 0` 这类判空永远不成立，失败会被误判成成功；`u64` 返回 bigint，
+ * 真 NULL 是 `0n`。与 services/windowLookup.ts 同一取舍。
  */
 interface VerifyUser32Symbols {
-  CreateIconFromResourceEx(bits: unknown, size: number, isIcon: number, version: number, cx: number, cy: number, flags: number): number
-  DestroyIcon(hIcon: number): number
-  GetTopWindow(hwnd: unknown): number
-  GetWindow(hwnd: number, cmd: number): number
-  GetWindowTextW(hwnd: number, buf: unknown, maxCount: number): number
-  GetWindowThreadProcessId(hwnd: number, pidOut: unknown): number
-  SendMessageTimeoutW(hwnd: number, msg: number, wParam: bigint, lParam: bigint, flags: number, timeout: number, result: unknown): number
+  CreateIconFromResourceEx(bits: unknown, size: number, isIcon: number, version: number, cx: number, cy: number, flags: number): bigint
+  DestroyIcon(hIcon: bigint): number
+  GetTopWindow(hwnd: unknown): bigint
+  GetWindow(hwnd: bigint, cmd: number): bigint
+  GetWindowTextW(hwnd: bigint, buf: unknown, maxCount: number): number
+  GetWindowThreadProcessId(hwnd: bigint, pidOut: unknown): number
+  SendMessageTimeoutW(hwnd: bigint, msg: number, wParam: bigint, lParam: bigint, flags: number, timeout: number, result: unknown): number
 }
 
 const user32 = dlopen('user32.dll', {
   CreateIconFromResourceEx: {
     args: [FFIType.pointer, FFIType.u32, FFIType.i32, FFIType.u32, FFIType.i32, FFIType.i32, FFIType.u32],
-    returns: FFIType.pointer,
+    returns: FFIType.u64,
   },
   DestroyIcon: { args: [FFIType.pointer], returns: FFIType.i32 },
-  GetTopWindow: { args: [FFIType.pointer], returns: FFIType.pointer },
-  GetWindow: { args: [FFIType.pointer, FFIType.u32], returns: FFIType.pointer },
+  GetTopWindow: { args: [FFIType.pointer], returns: FFIType.u64 },
+  GetWindow: { args: [FFIType.pointer, FFIType.u32], returns: FFIType.u64 },
   GetWindowTextW: { args: [FFIType.pointer, FFIType.pointer, FFIType.i32], returns: FFIType.i32 },
   GetWindowThreadProcessId: { args: [FFIType.pointer, FFIType.pointer], returns: FFIType.u32 },
   SendMessageTimeoutW: {
@@ -64,7 +66,7 @@ if (!probeTitle) {
   // 自检模式：PNG 字节 → HICON
   const png = readFileSync(join(import.meta.dir, '..', 'assets', 'logo.png'))
   const hIcon = user32.CreateIconFromResourceEx(png, png.length, 1, 0x00030000, 0, 0, 0)
-  if (hIcon === 0) {
+  if (hIcon === 0n) {
     console.error('FAIL: CreateIconFromResourceEx 返回 NULL')
     process.exit(1)
   }
@@ -74,21 +76,24 @@ if (!probeTitle) {
 }
 
 // 探针模式：枚举找标题（可选按 PID 过滤），WM_GETICON 反查
-const readTitle = (hwnd: number): string => {
+// DEVIATION: 枚举不复用 services/windowLookup——本脚本是 FFI 声明自身的自检，
+// 复用即失去独立声明的校验意义；且探针支持只按标题匹配（--pid 可选），
+// findWindowByTitleAndPid 的 pid 是必填参数。
+const readTitle = (hwnd: bigint): string => {
   const buf = Buffer.alloc(512)
   const n = user32.GetWindowTextW(hwnd, buf, 256)
   return buf.toString('utf16le', 0, Math.max(0, n) * 2)
 }
-const readPid = (hwnd: number): number => {
+const readPid = (hwnd: bigint): number => {
   const pid = new Uint32Array(1)
   user32.GetWindowThreadProcessId(hwnd, pid)
   return pid[0]
 }
 let hwnd = user32.GetTopWindow(0n)
-let found = 0
+let found: bigint | null = null
 let foundPid = 0
 let guard = 0
-while (hwnd !== 0 && guard++ < 2000) {
+while (hwnd !== 0n && guard++ < 2000) {
   if (readTitle(hwnd) === probeTitle) {
     const pid = readPid(hwnd)
     if (pidArg === null || pid === pidArg) {
@@ -99,7 +104,7 @@ while (hwnd !== 0 && guard++ < 2000) {
   }
   hwnd = user32.GetWindow(hwnd, 2 /* GW_HWNDNEXT */)
 }
-if (found === 0) {
+if (found === null) {
   console.error(
     pidArg === null
       ? `FAIL: 未找到标题为 "${probeTitle}" 的窗口`

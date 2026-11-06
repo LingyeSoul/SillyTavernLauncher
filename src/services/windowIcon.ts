@@ -7,11 +7,11 @@
  * 为什么不用 GPUIX 的 API：@gpuix/native 0.9.0 的 WindowOptions 没有 icon
  * 字段，native 导出面（activateWindow/setWindowTitle/...）也没有任何窗口
  * 句柄或图标入口（已核实二进制符号表）。因此走 Win32 侧自力更生：
- *   枚举顶层窗口（GetTopWindow/GetWindow 链）按 标题+PID 双匹配定位本进程窗口
+ *   → 定位本进程窗口（标题+PID 双匹配枚举，实现在 services/windowLookup.ts）
  *   → CreateIconFromResourceEx(PNG 字节直喂，Vista+ 支持 PNG 图标资源)
  *   → PostMessageW(WM_SETICON, ICON_SMALL / ICON_BIG / ICON_SMALL2)
- *   （不用 FindWindowW：它只返回 Z 序第一个命中，dev 与 E2E 并存多个
- *   同名启动器窗口时会永远拿到别家实例）
+ *   （不用 FindWindowW：理由见 windowLookup 模块头——它只返回 Z 序第一个命中，
+ *   dev 与 E2E 并存多个同名启动器窗口时会永远拿到别家实例）
  *
  * 关键决策（全部经 bun:ffi 冒烟验证，见 scripts/verify-window-icon.ts）：
  * - PostMessageW 而非 SendMessageW：GPUIX 的 UI 消息泵在独立原生线程，
@@ -25,12 +25,13 @@
  *
  * 纯函数部分（解码/缩放/编码）在 Node/vitest 下可测；FFI 部分仅
  * win32 + Bun 运行时执行，其余环境为静默空操作（非错误路径）。
- * 窗口枚举（findWindowByTitleAndPid）为 FFI 导出：任意进程的 标题+PID
- * 双匹配探测，供打包冒烟等进程外观测复用；非 win32+Bun 下抛错而非空操作
- * （观测方需要显式失败，不能与"未找到窗口"混淆）。
+ * 窗口定位不在本模块：标题+PID 双匹配枚举已拆到 services/windowLookup.ts
+ * （findWindowByTitleAndPid；非 win32+Bun 下抛错而非空操作——观测方需要
+ * 显式失败，不能与"未找到窗口"混淆）。
  */
 import { deflateSync, inflateSync } from 'node:zlib'
 import { logError } from './errorLog'
+import { findWindowByTitleAndPid } from './windowLookup'
 
 // ---------------------------------------------------------------------------
 // 纯函数：PNG 解码 / 缩放 / 编码（Node & Bun 皆可运行，供单测）
@@ -265,17 +266,14 @@ const SM_CXSMICON = 49
 const SM_CYSMICON = 50
 
 interface User32Symbols {
-  GetTopWindow(hwnd: unknown): number
-  /** cmd: GW_HWNDNEXT=2 沿 Z 序走兄弟窗口 */
-  GetWindow(hwnd: number, cmd: number): number
-  GetWindowTextW(hwnd: number, buf: unknown, maxCount: number): number
-  GetWindowThreadProcessId(hwnd: number, pidOut: unknown): number
   GetSystemMetrics(index: number): number
-  CreateIconFromResourceEx(bits: unknown, size: number, isIcon: number, version: number, cx: number, cy: number, flags: number): number
+  /**
+   * 返回 HICON 句柄，NULL 为 `0n`（u64 返回）。pointer 返回的 NULL 是 `null`，
+   * `=== 0` 判不出来：失败会漏过判空，直到下游 `BigInt(null)` 抛 TypeError 才
+   * 以无关堆栈的形式暴露（同 services/windowLookup.ts 的取舍）。
+   */
+  CreateIconFromResourceEx(bits: unknown, size: number, isIcon: number, version: number, cx: number, cy: number, flags: number): bigint
   PostMessageW(hwnd: number, msg: number, wParam: bigint, lParam: bigint): number
-}
-interface Kernel32Symbols {
-  GetCurrentProcessId(): number
 }
 
 /** --hot 模块重求值去重（globalThis 跨热更存活） */
@@ -285,7 +283,7 @@ interface IconAppliedFlag {
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
-/** user32 符号懒加载缓存：applyWindowIcon 与 findWindowByTitleAndPid 共用一次 dlopen */
+/** user32 符号懒加载缓存：applyWindowIcon 与 createHiconFromDataUrl 共用一次 dlopen */
 let user32Symbols: User32Symbols | null = null
 
 async function loadUser32(): Promise<User32Symbols> {
@@ -293,14 +291,10 @@ async function loadUser32(): Promise<User32Symbols> {
   // 动态引入：vitest(Node) 下模块解析失败必须走调用方 catch 而不是顶层 import
   const { dlopen, FFIType } = await import('bun:ffi')
   user32Symbols = dlopen('user32.dll', {
-    GetTopWindow: { args: [FFIType.pointer], returns: FFIType.pointer },
-    GetWindow: { args: [FFIType.pointer, FFIType.u32], returns: FFIType.pointer },
-    GetWindowTextW: { args: [FFIType.pointer, FFIType.pointer, FFIType.i32], returns: FFIType.i32 },
-    GetWindowThreadProcessId: { args: [FFIType.pointer, FFIType.pointer], returns: FFIType.u32 },
     GetSystemMetrics: { args: [FFIType.i32], returns: FFIType.i32 },
     CreateIconFromResourceEx: {
       args: [FFIType.pointer, FFIType.u32, FFIType.i32, FFIType.u32, FFIType.i32, FFIType.i32, FFIType.u32],
-      returns: FFIType.pointer,
+      returns: FFIType.u64,
     },
     PostMessageW: { args: [FFIType.pointer, FFIType.u32, FFIType.u64, FFIType.i64], returns: FFIType.i32 },
   }).symbols as unknown as User32Symbols
@@ -308,45 +302,12 @@ async function loadUser32(): Promise<User32Symbols> {
 }
 
 /**
- * GetTopWindow/GetWindow 链上按 标题+PID 双匹配定位顶层窗口（找不到返回 0）。
- * 不能用 FindWindowW 单命中：它只返回 Z 序第一个标题命中，dev 与 E2E 常态
- * 并存多个同名启动器窗口时会拿到别家实例（见模块头）。
- */
-function findWindowByTitleAndPidSync(user32: User32Symbols, title: string, pid: number): number {
-  let hwnd = user32.GetTopWindow(0n)
-  let guard = 0
-  while (hwnd !== 0 && guard++ < 2000) {
-    const pidOut = new Uint32Array(1)
-    user32.GetWindowThreadProcessId(hwnd, pidOut)
-    if (pidOut[0] === pid) {
-      const buf = Buffer.alloc(512)
-      const len = user32.GetWindowTextW(hwnd, buf, 256)
-      if (buf.toString('utf16le', 0, Math.max(0, len) * 2) === title) return hwnd
-    }
-    hwnd = user32.GetWindow(hwnd, 2 /* GW_HWNDNEXT */)
-  }
-  return 0
-}
-
-/**
- * 枚举顶层窗口，定位"标题为 title 且属于 pid 进程"的窗口；未找到返回 0。
- * 供进程外观测方（打包冒烟、诊断脚本）判定目标进程的窗口是否已创建。
- * 跨进程读标题安全：GetWindowTextW 读系统缓存副本，不向目标窗口泵发消息。
- */
-export async function findWindowByTitleAndPid(title: string, pid: number): Promise<number> {
-  if (process.platform !== 'win32' || !process.versions.bun) {
-    throw new Error('窗口枚举仅支持 win32 + Bun 运行时')
-  }
-  return findWindowByTitleAndPidSync(await loadUser32(), title, pid)
-}
-
-/**
  * 从 PNG dataURL 创建指定尺寸的 HICON（窗口图标三槽位与系统托盘共用）。
  * 就近选档预缩放（预乘 alpha 盒式采样）再 CreateIconFromResourceEx 直喂 PNG 字节。
- * 返回 0 = 创建失败；dataURL 非法/格式不支持会抛错，调用方自行 catch 记日志。
+ * 返回 0n = 创建失败；dataURL 非法/格式不支持会抛错，调用方自行 catch 记日志。
  * 仅 win32 + Bun 可调用（user32 符号经 loadUser32 懒加载）。
  */
-export async function createHiconFromDataUrl(dataUrl: string, targetW: number, targetH: number): Promise<number> {
+export async function createHiconFromDataUrl(dataUrl: string, targetW: number, targetH: number): Promise<bigint> {
   const user32 = await loadUser32()
   const pngBytes = pngBytesFromDataUrl(dataUrl)
   const source = decodePngRgba(pngBytes)
@@ -372,18 +333,15 @@ export async function applyWindowIcon(dataUrl: string, title: string): Promise<v
   if (process.platform !== 'win32' || !process.versions.bun) return
   try {
     const user32 = await loadUser32()
-    const { dlopen, FFIType } = await import('bun:ffi')
-    const kernel32 = dlopen('kernel32.dll', {
-      GetCurrentProcessId: { args: [], returns: FFIType.u32 },
-    }).symbols as unknown as Kernel32Symbols
 
     // 1. 枚举顶层窗口找"标题匹配 + 属于本进程"的那个
-    //    （FindWindowW 单命中的陷阱见 findWindowByTitleAndPidSync 注释）。
-    const myPid = kernel32.GetCurrentProcessId()
+    //    （FindWindowW 单命中的陷阱见 windowLookup 模块头）。
+    //    process.pid 与 GetCurrentProcessId() 等价（windowControl 同款口径）。
+    const myPid = process.pid
     // render() 同步建窗，但留重试兜底（标题设置或窗口链入 Z 序的极短窗口期）
     let hwnd = 0
     for (let attempt = 0; attempt < 10 && hwnd === 0; attempt++) {
-      hwnd = findWindowByTitleAndPidSync(user32, title, myPid)
+      hwnd = await findWindowByTitleAndPid(title, myPid)
       if (hwnd === 0) await sleep(100)
     }
     if (hwnd === 0) throw new Error('未找到本进程的窗口（枚举 10 次重试后放弃）')
@@ -393,7 +351,7 @@ export async function applyWindowIcon(dataUrl: string, title: string): Promise<v
     //    要走 catch 的 logError，上移到调用点求值会绕过 try 直接炸主流程）
     const hIconSmall = await createHiconFromDataUrl(dataUrl, user32.GetSystemMetrics(SM_CXSMICON), user32.GetSystemMetrics(SM_CYSMICON))
     const hIconBig = await createHiconFromDataUrl(dataUrl, user32.GetSystemMetrics(SM_CXICON), user32.GetSystemMetrics(SM_CYICON))
-    if (hIconSmall === 0 || hIconBig === 0) throw new Error(`CreateIconFromResourceEx 失败：small=${hIconSmall} big=${hIconBig}`)
+    if (hIconSmall === 0n || hIconBig === 0n) throw new Error(`CreateIconFromResourceEx 失败：small=${hIconSmall} big=${hIconBig}`)
 
     // 3. 三槽位投递（PostMessage 异步，避免跨线程 SendMessage 死锁风险）。
     //    顺序必须 SMALL2 → SMALL → BIG：实测 gpui 窗口 wndproc 对

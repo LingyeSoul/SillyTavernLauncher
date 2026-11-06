@@ -28,7 +28,7 @@
  * win32 + Bun 运行时执行，其余环境全部静默降级（不抛错、不改行为）。
  */
 import { errMsg, logError } from './errorLog'
-import { findWindowByTitleAndPid } from './windowIcon'
+import { findWindowByTitleAndPid } from './windowLookup'
 
 // ---------------------------------------------------------------------------
 // 纯函数：抓取偏移与拖动位置换算（Node & Bun 皆可运行，供单测）
@@ -77,8 +77,8 @@ const WM_CLOSE = 0x0010
 /**
  * 句柄一律用 u64 往来（出参 bigint、入参 number|bigint 皆收）：
  * FFIType.pointer 出参是 Pointer 对象，`!== 0` 恒真、无法判空——u64 才能可靠
- * 区分"未定位到窗口"与真实句柄（与 services/windowIcon.ts 的 pointer 收窄
- * 是同类取舍，那里不判空所以能用 pointer）。
+ * 区分"未定位到窗口"与真实句柄（全仓句柄返出一律 u64：services/windowLookup.ts
+ * 的枚举同款，见其 User32Symbols 注释）。
  */
 interface User32Symbols {
   GetCursorPos(pointOut: Int32Array): number
@@ -120,7 +120,7 @@ async function loadUser32(): Promise<User32Symbols> {
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 /**
- * 启动期定位本进程窗口并缓存句柄（标题 + PID 双匹配，见 windowIcon 模块头：
+ * 启动期定位本进程窗口并缓存句柄（标题 + PID 双匹配，见 windowLookup 模块头：
  * FindWindowW 单命中在 dev 与 E2E 并存时会拿到别家实例）。
  * 失败仅记日志降级：标题栏仍可点击（最小化/关闭走同一句柄，未定位则整体空操作），
  * 不影响应用运行。

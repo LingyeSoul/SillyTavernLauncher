@@ -11,7 +11,7 @@
  * - **隐藏顶层窗而非 message-only 窗**：① TaskbarCreated（explorer 重启后重挂
  *   图标）是 HWND_BROADCAST 广播，message-only 窗收不到；② 右键菜单的"点外
  *   失焦消失"依赖本进程持有前台窗口，message-only 无法前台化。窗口永不显示
- *   （WS_POPUP、标题 NULL），不会撞 windowIcon 的 标题+PID 双匹配枚举。
+ *   （WS_POPUP、标题 NULL），不会撞 windowLookup 的 标题+PID 双匹配枚举。
  * - **消息泵在 JS 线程（setInterval + PeekMessage 轮询）**：Bun 事件循环不是
  *   Windows 消息循环，自己泵才能把 explorer 投递的托盘回调送进 wndproc；
  *   wndproc（JSCallback）经 DispatchMessage 永远同步地在 JS 线程被调——
@@ -526,7 +526,7 @@ export async function initTray(options: TrayInitOptions): Promise<boolean> {
       user32.GetSystemMetrics(SM_CXSMICON),
       user32.GetSystemMetrics(SM_CYSMICON),
     )
-    if (createdIcon === 0) throw new Error('托盘图标创建失败（CreateIconFromResourceEx 返回 0）')
+    if (createdIcon === 0n) throw new Error('托盘图标创建失败（CreateIconFromResourceEx 返回 NULL）')
     iconHandle = BigInt(createdIcon)
 
     const notifyData = buildNotifyIconData({

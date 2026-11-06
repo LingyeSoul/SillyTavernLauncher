@@ -21,7 +21,7 @@
  * - --windows-hide-console：GUI 子系统，双击不弹黑窗（exe 内 console.log
  *   仍写入 logs/，诊断不受影响）
  * - 冒烟验证：临时目录冷启动 exe，判定信号 = 进程存活 ≥5s 且主窗口已创建
- *   （GetTopWindow/GetWindow 链 标题+PID 双匹配，复用 services/windowIcon 枚举）。
+ *   （GetTopWindow/GetWindow 链 标题+PID 双匹配，复用 services/windowLookup 枚举）。
  *   不依赖磁盘副作用与网络——旧版等 config/agreement/logs 落盘，而冷启动唯一
  *   可靠落盘是 EULA 远端抓取缓存，网络抖动即误报（RCA 2026-09-20）。
  *   STL_SKIP_AGREEMENT_RECHECK=1 对齐 E2E 种子环境（首启 EULA 仍会后台抓
@@ -38,7 +38,8 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { APP_VERSION } from '../version'
-import { decodePngRgba, resizeRgba, encodePngRgba, ICON_SIZES, findWindowByTitleAndPid } from '../services/windowIcon'
+import { decodePngRgba, resizeRgba, encodePngRgba, ICON_SIZES } from '../services/windowIcon'
+import { findWindowByTitleAndPid } from '../services/windowLookup'
 
 /** 项目根 = src/ 的上一级（启动器安装根，config/logs/env 均相对它） */
 const SRC_ROOT = join(import.meta.dir, '..')
