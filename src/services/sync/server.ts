@@ -19,39 +19,21 @@
  */
 import * as http from 'node:http'
 import { createReadStream } from 'node:fs'
-import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { readFileSync, statSync } from 'node:fs'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { join, relative, resolve, sep } from 'node:path'
 import { zipSync } from 'fflate'
 import { isDirSync, realpathBestEffort } from '../atomicFs'
 import { getLocalIp } from '../network'
+import {
+  buildManifest,
+  walkFiles,
+  type InfoResponse,
+  type ManifestEntry,
+} from './protocol'
 
 export type SyncLogLevel = 'info' | 'success' | 'warning' | 'error'
 export type SyncLogCallback = (message: string, level: SyncLogLevel) => void
-
-/** ← manifest 条目（与 Python 字段一一对应；sha256 为跨端协议字段，见下方说明） */
-export interface ManifestEntry {
-  path: string
-  size: number
-  mtime: number
-  modified: string
-  is_dir: boolean
-  /**
-   * 内容摘要（64 位 hex）。Termux 版启动器的同步客户端把 sha256 视为
-   * manifest 必填字段（缺失即拒绝增量同步），且其增量比较以内容摘要为准、
-   * 不依赖 mtime——为打通 Windows ↔ Termux 双端同步，本端 manifest 必须携带。
-   * 兼容老版本服务器：字段可缺省 / 为 null，客户端回退 mtime 比较。
-   */
-  sha256?: string | null
-}
-
-/** 流式计算文件 sha256（大文件不全量驻内存，对齐 Termux 端 buildManifest） */
-async function sha256File(filePath: string): Promise<string> {
-  const hash = createHash('sha256')
-  const stream = createReadStream(filePath)
-  for await (const chunk of stream) hash.update(chunk as Buffer)
-  return hash.digest('hex')
-}
 
 /** ← secrets.token_urlsafe(24)：24 字节随机 → base64url（无填充） */
 export function generateSyncToken(): string {
@@ -94,42 +76,6 @@ export interface SyncServerOptions {
   /** 是否校验数据目录存在（默认 true；测试空目录场景可关） */
   requireDataPath?: boolean
   now?: () => Date
-}
-
-interface WalkEntry {
-  file: string
-  filePath: string
-}
-
-/** ← os.walk + 隐藏目录过滤（原地修改 dirs 语义） */
-function walkFiles(root: string, skipHiddenDirs: boolean): WalkEntry[] {
-  const results: WalkEntry[] = []
-  const stack: string[] = [root]
-  while (stack.length > 0) {
-    const dir = stack.pop() as string
-    let entries: string[] = []
-    try {
-      entries = readdirSync(dir)
-    } catch {
-      continue
-    }
-    for (const entry of entries) {
-      const fullPath = join(dir, entry)
-      let isDir = false
-      try {
-        isDir = statSync(fullPath).isDirectory()
-      } catch {
-        continue
-      }
-      if (isDir) {
-        if (skipHiddenDirs && entry.startsWith('.')) continue
-        stack.push(fullPath)
-      } else {
-        results.push({ file: entry, filePath: fullPath })
-      }
-    }
-  }
-  return results
 }
 
 export class SyncServer {
@@ -277,7 +223,7 @@ export class SyncServer {
 
     if (pathname === '/info') {
       const manifest = await this.generateManifest()
-      this.sendJson(res, 200, {
+      const body: InfoResponse = {
         success: true,
         server_info: {
           port: this.port,
@@ -286,7 +232,8 @@ export class SyncServer {
           total_size: this.calculateTotalSize(),
           file_count: manifest.length,
         },
-      })
+      }
+      this.sendJson(res, 200, body)
       return
     }
 
@@ -352,25 +299,7 @@ export class SyncServer {
 
   /** ← _generate_manifest：隐藏目录/隐藏文件/.tmp 跳过，路径归一为正斜杠；含流式 sha256（async） */
   async generateManifest(): Promise<ManifestEntry[]> {
-    const manifest: ManifestEntry[] = []
-    for (const { file, filePath } of walkFiles(this.dataPath, true)) {
-      if (file.startsWith('.') || file.endsWith('.tmp')) continue
-      const relativePath = relative(this.dataPath, filePath).replace(/\\/g, '/')
-      try {
-        const statInfo = statSync(filePath)
-        manifest.push({
-          path: relativePath,
-          size: statInfo.size,
-          mtime: statInfo.mtimeMs / 1000,
-          modified: new Date(statInfo.mtimeMs).toISOString(),
-          is_dir: false,
-          sha256: await sha256File(filePath),
-        })
-      } catch {
-        // Skip files that can't be accessed
-      }
-    }
-    return manifest
+    return buildManifest(this.dataPath)
   }
 
   /** ← _create_zip：fflate 打包（保持相对路径与 mtime，正斜杠分隔） */

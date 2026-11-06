@@ -28,11 +28,10 @@ import {
   readdirSync,
   renameSync,
   rmSync,
-  statSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs'
-import { createReadStream, createWriteStream } from 'node:fs'
+import { createWriteStream } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { Readable, Transform, type TransformCallback } from 'node:stream'
@@ -40,7 +39,7 @@ import { pipeline } from 'node:stream/promises'
 import { unzipSync } from 'fflate'
 import { isDirSync, realpathBestEffort } from '../atomicFs'
 import { errMsg, logError } from '../errorLog'
-import type { ManifestEntry } from './server'
+import { buildManifest, type InfoResponse, type ManifestEntry } from './protocol'
 
 export type FetchImpl = typeof fetch
 
@@ -274,59 +273,12 @@ export function readZipMtimes(buffer: Uint8Array): Map<string, number> {
 }
 
 // ---------------------------------------------------------------------------
-// 本地 manifest（← get_local_manifest，与 server 端同规则；含 sha256）
+// 本地 manifest（← get_local_manifest；规则见 ./protocol，与 server 端同一实现）
 // ---------------------------------------------------------------------------
 
-/** 流式计算文件 sha256（与服务端 sha256File 同实现，跨端摘要可比） */
-async function sha256File(filePath: string): Promise<string> {
-  const hash = createHash('sha256')
-  const stream = createReadStream(filePath)
-  for await (const chunk of stream) hash.update(chunk as Buffer)
-  return hash.digest('hex')
-}
-
+/** 本地 manifest（含 sha256）：协议规则只在 ./protocol，此处保留导出名与签名兼容调用方 */
 export async function generateLocalManifest(dataPath: string): Promise<ManifestEntry[]> {
-  const manifest: ManifestEntry[] = []
-  const stack: string[] = [dataPath]
-  while (stack.length > 0) {
-    const dir = stack.pop() as string
-    let entries: string[] = []
-    try {
-      entries = readdirSync(dir)
-    } catch {
-      continue
-    }
-    for (const entry of entries) {
-      if (entry.startsWith('.')) continue // 隐藏目录跳过（← dirs[:] = [not d.startswith('.')]）
-      const fullPath = join(dir, entry)
-      let isDir = false
-      try {
-        isDir = statSync(fullPath).isDirectory()
-      } catch {
-        continue
-      }
-      if (isDir) {
-        stack.push(fullPath)
-        continue
-      }
-      if (entry.startsWith('.') || entry.endsWith('.tmp')) continue
-      const relativePath = relative(dataPath, fullPath).replace(/\\/g, '/')
-      try {
-        const statInfo = statSync(fullPath)
-        manifest.push({
-          path: relativePath,
-          size: statInfo.size,
-          mtime: statInfo.mtimeMs / 1000,
-          modified: new Date(statInfo.mtimeMs).toISOString(),
-          is_dir: false,
-          sha256: await sha256File(fullPath),
-        })
-      } catch {
-        // Skip files that can't be accessed
-      }
-    }
-  }
-  return manifest
+  return buildManifest(dataPath)
 }
 
 // ---------------------------------------------------------------------------
@@ -422,16 +374,10 @@ export class SyncClient {
   }
 
   /** ← get_server_info */
-  async getServerInfo(signal?: AbortSignal): Promise<{
-    success: boolean
-    server_info: { port: number; host: string; running: boolean; total_size: number; file_count: number }
-  } | null> {
+  async getServerInfo(signal?: AbortSignal): Promise<InfoResponse | null> {
     try {
       const response = await this.request('info', { signal })
-      return (await response.json()) as {
-        success: boolean
-        server_info: { port: number; host: string; running: boolean; total_size: number; file_count: number }
-      }
+      return (await response.json()) as InfoResponse
     } catch (err) {
       logError(`[sync-client] 获取服务器信息失败: ${errMsg(err)}`)
       return null
