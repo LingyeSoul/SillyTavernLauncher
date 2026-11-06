@@ -1257,6 +1257,10 @@ function makeRepoOpsMock(overrides: Partial<StRepoOps> = {}): StRepoOps & {
       sentinel('currentCommit')
       return null
     },
+    originReleaseCommit: async () => {
+      sentinel('originReleaseCommit')
+      return null
+    },
     setRemote: async (...args) => {
       void args
       return sentinel('setRemote')

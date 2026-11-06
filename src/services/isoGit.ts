@@ -265,12 +265,14 @@ export interface StRepoOps {
   currentCommit(dir: string): Promise<string | null>
   setRemote(url: string, dir: string): Promise<RepoOpResult>
   /**
-   * DEVIATION（对设计 §8.2 的扩展）：origin/release 远端跟踪 ref 的 commit。
+   * origin/release 远端跟踪 ref 的 commit（对设计 §8.2 的扩展）。
    * checkForStUpdate 在 spawn 侧用 `git diff release..origin/release`（stLifecycle
    * 直查 runGit）判定差异；embedded 侧无 diff 命令，需等价读取远端 ref。
-   * 可选成员：spawn 路径不走本方法（SpawnGitOps 不实现）。
+   * 双实现共契约：IsoGitOps 读 refs/remotes/origin/release，SpawnGitOps 走
+   * `git rev-parse origin/release`。必选成员——新增适配器漏实现必须当场类型报错，
+   * 不得静默回落 null 被判成 check-failed。
    */
-  originReleaseCommit?(dir: string): Promise<string | null>
+  originReleaseCommit(dir: string): Promise<string | null>
 }
 
 // ---------------------------------------------------------------------------
@@ -330,11 +332,24 @@ export function synthesizePorcelain(matrix: StatusRow[]): string[] {
 /** 流式命令执行器（stLifecycle.executeCommand 的绑定形态：返回退出码，null=创建失败） */
 export type SpawnCommandExecutor = (command: string, workdir: string) => Promise<number | null>
 
+/** 输出捕获执行器（git.ts runGit 形状；灌入命令的 args 与 cwd 由本模块拼装）。
+ *  第三参**必选**：适配器必须显式交出 gitExecutable——否则 portable 模式会回落到
+ *  全局 git 解析、用错可执行文件，而可选参数会让这种漏传静默通过（本类缺陷靠
+ *  类型而非测试兜住）。 */
+export type SpawnGitRunner = (
+  args: string[],
+  cwd: string,
+  options: { gitExecutable: string },
+) => Promise<{ ok: boolean; exitCode: number | null; stdout: string; stderr: string }>
+
 export interface SpawnGitOpsOptions {
   /** git 可执行文件（portable env/cmd/git.exe 或系统 git） */
   gitExe: string
   /** 命令执行器（必须走 stLifecycle.executeCommand 以保持终端流式日志与命令串） */
   execCommand: SpawnCommandExecutor
+  /** 输出捕获执行器（git.ts runGit 形状）：spawn 侧需要读 stdout 的操作走它；
+   *  命令串/参数数组由本模块拼装，绝不经 shell 字符串 */
+  runGit: SpawnGitRunner
 }
 
 /**
@@ -343,7 +358,7 @@ export interface SpawnGitOpsOptions {
  * executeCommand 执行；D3 零回归红线由 tests/stLifecycle.test.ts 命令串断言焊死）。
  */
 export function createSpawnGitOps(options: SpawnGitOpsOptions): StRepoOps {
-  const { gitExe, execCommand } = options
+  const { gitExe, execCommand, runGit } = options
   /** 与 buildGitCloneCommand 同构（url 恒为 ST_REPO_URL，字节一致） */
   const cloneCommand = (url: string): string => `"${gitExe}" clone ${url} -b release`
   const pullCommand = (): string => `"${gitExe}" pull --rebase --autostash`
@@ -381,6 +396,17 @@ export function createSpawnGitOps(options: SpawnGitOpsOptions): StRepoOps {
     },
     async currentCommit() {
       return null
+    },
+    async originReleaseCommit(dir) {
+      const result = await runGit(['rev-parse', 'origin/release'], dir, { gitExecutable: gitExe })
+      if (!result.ok) {
+        logError(
+          `[isoGit] originReleaseCommit 失败（rev-parse origin/release）: ${dir} → exitCode=${result.exitCode}, stderr=${result.stderr.trim().slice(0, 300)}`,
+        )
+        return null
+      }
+      const commit = result.stdout.trim()
+      return commit.length > 0 ? commit : null
     },
     async setRemote() {
       return { ok: false, message: 'SpawnGitOps 不支持 setRemote（spawn 路径直用 git.ts）', exitCode: 1 }

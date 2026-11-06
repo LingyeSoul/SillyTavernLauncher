@@ -22,6 +22,7 @@ import {
   getStTagsEmbedded,
   synthesizePorcelain,
   type SpawnCommandExecutor,
+  type SpawnGitRunner,
 } from '../services/isoGit'
 import { runGit, getStTags } from '../services/git'
 import * as httpClient from '../services/httpClient'
@@ -261,7 +262,16 @@ describe('createSpawnGitOps（D3 命令串焊死）', () => {
       calls.push({ command, cwd })
       return exec(command, cwd)
     }
-    return { ops: createSpawnGitOps({ gitExe: 'C:/fake/git.exe', execCommand: wrapped }), calls }
+    return {
+      ops: createSpawnGitOps({
+        gitExe: 'C:/fake/git.exe',
+        execCommand: wrapped,
+        runGit: async () => {
+          throw new Error('本用例不应走 runGit')
+        },
+      }),
+      calls,
+    }
   }
 
   it('cloneRelease：与 buildGitCloneCommand 逐字节一致，cwd 为目标目录父级', async () => {
@@ -292,13 +302,16 @@ describe('createSpawnGitOps（D3 命令串焊死）', () => {
   })
 
   it('进程创建失败（exitCode=null）与退出码失败透传', async () => {
-    const nullOps = createSpawnGitOps({ gitExe: 'g', execCommand: async () => null })
+    const noRunner = async () => {
+      throw new Error('本用例不应走 runGit')
+    }
+    const nullOps = createSpawnGitOps({ gitExe: 'g', execCommand: async () => null, runGit: noRunner })
     expect(await nullOps.fetchOrigin(workDir)).toEqual({
       ok: false,
       message: '创建git进程失败',
       exitCode: null,
     })
-    const failOps = createSpawnGitOps({ gitExe: 'g', execCommand: async () => 128 })
+    const failOps = createSpawnGitOps({ gitExe: 'g', execCommand: async () => 128, runGit: noRunner })
     const result = await failOps.fetchOrigin(workDir)
     expect(result.ok).toBe(false)
     expect(result.exitCode).toBe(128)
@@ -665,6 +678,57 @@ describe('caProvider 默认接线（F6 生产契约：劫持网络下 TLS 回退
       expect(caSpy).toHaveBeenCalledTimes(1)
     } finally {
       caSpy.mockRestore()
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// SpawnGitOps.originReleaseCommit（真契约：拼装 `git rev-parse origin/release`，
+// spawn 侧读 stdout 必须走注入的 runGit；真实 git、无网络）
+// ---------------------------------------------------------------------------
+
+describe('createSpawnGitOps.originReleaseCommit（真实 git，无网络）', () => {
+  /** 测试脚手架：直接跑 git（不经过适配器契约） */
+  const git = (args: string[], cwd: string) => runGit(args, cwd, GIT)
+  /** 适配器注入：把契约强制要求的 gitExecutable 透传给 git.ts（漏传即类型不过） */
+  const adapterRun: SpawnGitRunner = (args, cwd, options) =>
+    runGit(args, cwd, { gitExecutable: options.gitExecutable })
+
+  it('返回 refs/remotes/origin/release 指向的 commit；无该 ref / 非仓库 → null', async () => {
+    // mkdtemp 自建台架：finally 全清，不污染仓库目录（也不复用 workDir 生命周期）
+    const repoDir = mkdtempSync(join(tmpdir(), 'stl-spawn-ops-'))
+    const emptyDir = mkdtempSync(join(tmpdir(), 'stl-spawn-ops-empty-'))
+    try {
+      expect((await git(['init', '-b', 'release'], repoDir)).ok).toBe(true)
+      expect((await git(['config', 'user.email', 'test@example.com'], repoDir)).ok).toBe(true)
+      expect((await git(['config', 'user.name', 'Test'], repoDir)).ok).toBe(true)
+      expect((await git(['config', 'commit.gpgsign', 'false'], repoDir)).ok).toBe(true)
+      writeFileSync(join(repoDir, 'a.txt'), 'v1\n', 'utf8')
+      expect((await git(['add', '.'], repoDir)).ok).toBe(true)
+      expect((await git(['commit', '-m', 'c1'], repoDir)).ok).toBe(true)
+
+      const ops = createSpawnGitOps({
+        gitExe: 'git',
+        execCommand: async () => {
+          throw new Error('本用例不应走 execCommand')
+        },
+        runGit: adapterRun,
+      })
+
+      // 仓库有效但尚无 origin/release → rev-parse 非零退出 → null
+      expect(await ops.originReleaseCommit(repoDir)).toBeNull()
+
+      const head = (await git(['rev-parse', 'HEAD'], repoDir)).stdout.trim()
+      expect(head).toMatch(/^[0-9a-f]{40}$/) // 真 git 产出的真 sha
+      // 手工写远端跟踪 ref（不 clone、不联网）
+      expect((await git(['update-ref', 'refs/remotes/origin/release', head], repoDir)).ok).toBe(true)
+      expect(await ops.originReleaseCommit(repoDir)).toBe(head)
+
+      // 非仓库目录（空临时目录）→ null
+      expect(await ops.originReleaseCommit(emptyDir)).toBeNull()
+    } finally {
+      rmSync(repoDir, { force: true, recursive: true })
+      rmSync(emptyDir, { force: true, recursive: true })
     }
   })
 })

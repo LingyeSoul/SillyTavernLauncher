@@ -597,6 +597,7 @@ export class StLifecycle {
         const proc = await this.executeCommand(command, workdir)
         return proc ? await this.waitProcess(proc) : null
       },
+      runGit: this.runGitFn,
     })
   }
 
@@ -1385,7 +1386,7 @@ export class StLifecycle {
         }
         this.log('正在检查release分支状态...')
         const localCommit = await ops.currentCommit(this.stDir)
-        const remoteCommit = (await ops.originReleaseCommit?.(this.stDir)) ?? null
+        const remoteCommit = await ops.originReleaseCommit(this.stDir)
         if (localCommit !== null && remoteCommit !== null && localCommit === remoteCommit) {
           return { status: 'up-to-date', message: '已是最新版本，正在启动SillyTavern...' }
         }
