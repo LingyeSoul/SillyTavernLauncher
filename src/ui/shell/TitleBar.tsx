@@ -82,7 +82,7 @@ export function TitleBar({ onCloseRequest, lanIp }: { onCloseRequest: () => void
               paddingLeft: 12,
               pointerEvents: 'none',
             }}>
-            <img src={LOGO_DATA_URL} style={{ width: 18, height: 18 }} />
+            <img src={LOGO_DATA_URL} testId="titlebar-logo" style={{ width: 18, height: 18 }} />
             <text style={{ fontSize: t.fs.caption, color: t.text.secondary, fontFamily: t.font.sans }}>
               {'SillyTavernLauncher'}
             </text>

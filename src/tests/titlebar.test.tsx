@@ -97,7 +97,11 @@ describe('TitleBar 布局与品牌', () => {
     expect(renderer().findByTestId('titlebar-brand')).toBeDefined()
     expect(renderer().findByText('SillyTavernLauncher')).toBeDefined()
     const brand = boundsOf('titlebar-brand')
-    expect(brand.x).toBe(12)
+    // 视觉不变量：logo 左缘落在 12px 内边距处。0.11 起 getElementBounds 返回
+    // 边框盒（padding 计入盒内，brand.x = 0）；0.9 返回内容盒（brand.x = 12）。
+    // 量 logo 而不是量容器，两个版本下都代表同一视觉事实。
+    const logoBounds = boundsOf('titlebar-logo')
+    expect(logoBounds.x).toBe(12)
     expect(brand.height).toBeGreaterThan(0)
   })
 

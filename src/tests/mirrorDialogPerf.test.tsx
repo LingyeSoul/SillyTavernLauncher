@@ -186,7 +186,13 @@ describe('镜像源对话框性能门禁①：列表窗口化', () => {
     expect(container, '列表外层容器应在树中').toBeDefined()
     const containerBounds = renderer.getElementBounds(container!.id)
     expect(containerBounds, '容器 bounds 可测').not.toBeNull()
-    const expected = Math.round(containerBounds!.width) - SCROLLBAR_TRACK_W
+    // 容器 style 的 borderWidth（1px 边框）在 0.11 起计入边框盒：列表可用内宽 =
+    // 容器宽 − 左右边框 − 滚动条轨道。0.9 的 bounds 是内容盒，旧公式未减边框
+    // （行盒会比容器内宽多 2px 溢出，0.11 修正为精确贴合）
+    const containerStyle = renderer.getElement(container!.id)?.style ?? {}
+    const borderWidth = Number(containerStyle.borderWidth ?? 0)
+    if (!Number.isFinite(borderWidth)) throw new Error('容器 borderWidth 不可解析')
+    const expected = Math.round(containerBounds!.width) - borderWidth * 2 - SCROLLBAR_TRACK_W
 
     const { MIRROR_SOURCES } = await import('../services/mirrors')
     const widths: number[] = []

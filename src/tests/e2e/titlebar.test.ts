@@ -65,8 +65,11 @@ describe('自绘标题栏', () => {
     expectPx(bar!.height, TITLEBAR_H - 1, '栏体高')
     expectPx(bar!.width, layout.windowW, '栏体宽')
 
-    // 品牌位在栏体左侧（侧栏品牌位移入处）
-    expectPx(brand!.x, 12, '品牌位左内缩')
+    // 品牌位在栏体左侧（侧栏品牌位移入处）：量 logo 左缘（0.11 起 bounds 为
+    // 边框盒，brand 容器 x = 0、paddingLeft 12 计入盒内；logo 才是视觉锚点）
+    const logo = (await app.getByTestId('titlebar-logo').bounds()) as Bounds | null
+    expect(logo, '品牌 logo 应有 bounds').toBeTruthy()
+    expectPx(logo!.x, 12, '品牌 logo 左内缩')
     expect(brand!.height).toBeGreaterThan(0)
 
     // 窗口按钮贴右缘：关闭占最右 46px，最小化紧邻其左；拖动区右缘 == 最小化左缘
