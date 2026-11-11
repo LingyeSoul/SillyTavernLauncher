@@ -16,6 +16,7 @@ import { createTestRoot } from '@gpuix/react/testing'
 import type { ReactElement, ReactNode } from 'react'
 import type { TestRenderer, TestRoot } from '@gpuix/react/testing'
 import { layout } from '../theme'
+import type { NetworkManager } from '../services/network'
 
 /**
  * windowControl 替身：只把 closeWindow 覆写为"投递成功"。ST 未运行时点击关闭按钮
@@ -25,6 +26,22 @@ import { layout } from '../theme'
 vi.mock('../services/windowControl', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../services/windowControl')>()
   return { ...actual, closeWindow: () => true }
+})
+
+/**
+ * network 替身：局域网 IP 固定值。标题栏展示用例不依赖宿主真实网卡
+ * （CI/离线机器枚举不到物理网卡时真实 getLocalIp 返回 null，用例会假失败）。
+ */
+vi.mock('../services/network', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/network')>()
+  const manager = {
+    invalidateCache: (): void => undefined,
+    getLocalIp: async (): Promise<string> => '192.168.42.17',
+  }
+  return {
+    ...actual,
+    getNetworkManager: (): NetworkManager => manager as unknown as NetworkManager,
+  }
 })
 
 let tempDir: string
@@ -127,6 +144,33 @@ describe('AppShell 视图切换与终端（smoke）', () => {
     // titlebar-brand 下，侧栏导航区不含它
     expect(renderer.findByTestId('titlebar-brand')).toBeDefined()
     expect(renderer.getAllText()).toContain('SillyTavernLauncher')
+  })
+
+  it('局域网模式 + ST 运行中：标题栏应用名后显示局域网 IP（任一条件关闭即隐藏）', async () => {
+    const { useSettings, useStState } = app
+    try {
+      useSettings.setState({ listen: true })
+      useStState.setState({ running: true })
+      await settle()
+      expect(renderer.findByTestId('titlebar-lan-ip')).toBeDefined()
+      expect(renderer.getAllText()).toContain('局域网 192.168.42.17')
+
+      // ST 停止 → 隐藏
+      useStState.setState({ running: false })
+      await settle()
+      expect(renderer.findByTestId('titlebar-lan-ip')).toBeUndefined()
+
+      // 局域网模式关闭（ST 仍运行）→ 同样隐藏
+      useStState.setState({ running: true })
+      useSettings.setState({ listen: false })
+      await settle()
+      expect(renderer.findByTestId('titlebar-lan-ip')).toBeUndefined()
+    } finally {
+      // 复原共享 store，避免污染后续用例（侧栏运行态/设置页开关）
+      useStState.setState({ running: false })
+      useSettings.setState({ listen: false })
+      await settle()
+    }
   })
 
   it('点击导航切换视图（terminal → settings → about）', async () => {

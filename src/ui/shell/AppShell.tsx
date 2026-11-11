@@ -12,7 +12,7 @@
  *   关闭入口，退出保护随之迁到那里，见 requestClose。
  * - 2s 轮询刷新 ST 运行状态（进程退出无回调，running 派生自进程计数）。
  */
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import type { ComponentType } from 'react'
 import { motion } from '@gpuix/react'
 import { EASE_OUT_QUAD, dur, layout } from '../../theme'
@@ -27,6 +27,8 @@ import { IconButton } from '../components/IconButton'
 import type { IconName } from '../components/icons'
 import { useUiState, VIEW_IDS, type ViewId } from '../../stores/uiState'
 import { useStState } from '../../stores/stState'
+import { useSettings } from '../../stores/settings'
+import { getNetworkManager } from '../../services/network'
 import { closeWindow, hideMainWindow } from '../../services/windowControl'
 import { isTrayActive } from '../../services/tray'
 import { TerminalView } from '../views/TerminalView'
@@ -60,12 +62,40 @@ export function AppShell() {
   const view = useUiState((s) => s.view)
   const setView = useUiState((s) => s.setView)
   const refresh = useStState((s) => s.refresh)
+  const running = useStState((s) => s.running)
+  // 局域网访问（config.yaml listen）与运行态共同决定标题栏是否展示局域网 IP
+  const lanMode = useSettings((s) => s.listen)
+  const [lanIp, setLanIp] = useState<string | null>(null)
 
   // 进程退出后复位运行状态（轮询；GPUIX 无进程退出回调）
   useEffect(() => {
     const id = setInterval(() => refresh(), 2000)
     return () => clearInterval(id)
   }, [refresh])
+
+  // 局域网 IP：仅在"启用局域网模式 + ST 运行中"时取（每次进入该状态都 invalidate
+  // 缓存重取——300s 缓存会把换网后的旧地址继续显示出来）；任一条关闭即清空。
+  useEffect(() => {
+    if (!running || !lanMode) {
+      setLanIp(null)
+      return
+    }
+    let cancelled = false
+    const manager = getNetworkManager()
+    manager.invalidateCache()
+    void manager.getLocalIp().then(
+      (ip) => {
+        if (!cancelled) setLanIp(ip)
+      },
+      (err: unknown) => {
+        if (!cancelled) setLanIp(null)
+        logError(`[AppShell] 获取局域网 IP 失败: ${errMsg(err)}`)
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [running, lanMode])
 
   const CurrentView = VIEWS[view]
 
@@ -82,7 +112,7 @@ export function AppShell() {
         selectionColor: t.selection.ember,
       }}>
       {/* 自绘标题栏（窗口铬层，36px）：不占内容区 644 预算，见 theme.ts layout.titlebarH */}
-      <TitleBar onCloseRequest={requestClose} />
+      <TitleBar onCloseRequest={requestClose} lanIp={lanIp} />
       <div style={{ display: 'flex', flexDirection: 'row', flexGrow: 1, minHeight: 0 }}>
         <Sidebar />
         {/* 右 1px border-subtle 分隔线（StyleDesc 无分边框色，用 1px div） */}
@@ -191,10 +221,9 @@ function Sidebar() {
           gap: 6,
         }}>
         <StStatusDot status={status} />
+        {/* 只保留运行状态：ST 名称文本已去掉（2026-11-11 用户要求），列包装仅作
+            flexGrow 占位把主题切换推到右缘 */}
         <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, minWidth: 0 }}>
-          <text style={{ fontSize: t.fs.caption, color: t.text.secondary, fontFamily: t.font.sans }}>
-            SillyTavern
-          </text>
           <Chip color={t.text.muted} testId="st-status-chip">
             {statusLabel}
           </Chip>

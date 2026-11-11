@@ -19,6 +19,8 @@
  * 语义由调用方经 `onCloseRequest` 注入（AppShell.requestClose：ST 运行中先确认再
  * 停止退出，未运行走 closeWindow 的 WM_CLOSE 原生链路）——本组件保持哑展示，不读
  * store，退出保护语义只此一处。非 win32/Bun 下窗口原语整体空操作。
+ * 局域网 IP 同样由调用方注入（`lanIp`：启用局域网模式且 ST 运行中才有值，派生逻辑
+ * 在 AppShell），组件只负责在应用名后展示。
  * 窗口 resizable:false（D4）故不设最大化——见 windowControl 模块头。
  */
 import { useGpuix } from '@gpuix/react'
@@ -31,7 +33,7 @@ import { beginWindowMove, continueWindowMove, endWindowMove, minimizeWindow } fr
 
 const BTN_ICON = 14
 
-export function TitleBar({ onCloseRequest }: { onCloseRequest: () => void }) {
+export function TitleBar({ onCloseRequest, lanIp }: { onCloseRequest: () => void; lanIp: string | null }) {
   const t = useTheme()
   const { renderer } = useGpuix()
 
@@ -84,6 +86,13 @@ export function TitleBar({ onCloseRequest }: { onCloseRequest: () => void }) {
             <text style={{ fontSize: t.fs.caption, color: t.text.secondary, fontFamily: t.font.sans }}>
               {'SillyTavernLauncher'}
             </text>
+            {/* 局域网访问地址：仅"启用局域网模式 + ST 运行中"时存在（AppShell 派生）。
+                单个模板字面量子节点——相邻字符串子节点会各生成一段文本节点（AGENTS 纪律） */}
+            {lanIp === null ? null : (
+              <text testId="titlebar-lan-ip" style={{ fontSize: t.fs.caption, color: t.text.muted, fontFamily: t.font.sans }}>
+                {`局域网 ${lanIp}`}
+              </text>
+            )}
           </div>
         </div>
         <TitleBarButton icon="minus" label="最小化" onClick={minimizeWindow} testId="titlebar-minimize" />

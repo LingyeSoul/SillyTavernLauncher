@@ -68,6 +68,7 @@ beforeEach(async () => {
       {/* 与 app.tsx 同构：栏体处于纵向根列中的顶部 */}
       <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%', backgroundColor: '#141618' }}>
         <TitleBar
+          lanIp={null}
           onCloseRequest={() => {
             calls.push('closeRequest')
           }}
@@ -113,6 +114,40 @@ describe('TitleBar 布局与品牌', () => {
     const drag = boundsOf('titlebar-drag')
     const min = boundsOf('titlebar-minimize')
     expect(drag.x + drag.width).toBe(min.x)
+  })
+})
+
+describe('TitleBar 局域网 IP 展示（启用局域网 + ST 运行中由 AppShell 注入）', () => {
+  it('lanIp 为 null：不渲染 IP 文本（条件未满足）', () => {
+    expect(renderer().findByTestId('titlebar-lan-ip')).toBeUndefined()
+    expect(renderer().getAllText().join('')).not.toContain('局域网')
+  })
+
+  it('lanIp 非空：应用名右侧同一行渲染"局域网 <IP>"，不侵占窗口按钮', async () => {
+    testRoot.root.render(
+      <ThemeProvider>
+        <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
+          <TitleBar
+            lanIp="192.168.42.17"
+            onCloseRequest={() => {
+              calls.push('closeRequest')
+            }}
+          />
+        </div>
+      </ThemeProvider>,
+    )
+    await settle()
+    const name = renderer().findByText('SillyTavernLauncher')
+    const ip = renderer().findByTestId('titlebar-lan-ip')
+    if (!name || !ip) throw new Error('应用名或局域网 IP 文本缺失')
+    const nameBounds = renderer().getElementBounds(name.id)
+    const ipBounds = renderer().getElementBounds(ip.id)
+    if (!nameBounds || !ipBounds) throw new Error('应用名/IP 文本无 bounds')
+    // 同一行、紧接应用名右侧
+    expect(ipBounds.y).toBe(nameBounds.y)
+    expect(ipBounds.x).toBeGreaterThanOrEqual(nameBounds.x + nameBounds.width)
+    // 仍完整落在最小化按钮左侧（不挤占窗口按钮区）
+    expect(ipBounds.x + ipBounds.width).toBeLessThan(boundsOf('titlebar-minimize').x)
   })
 })
 
