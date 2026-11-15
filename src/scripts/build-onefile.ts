@@ -30,6 +30,12 @@
  *   可靠落盘是 EULA 远端抓取缓存，网络抖动即误报（RCA 2026-09-20）。
  *   STL_SKIP_AGREEMENT_RECHECK=1 对齐 E2E 种子环境（首启 EULA 仍会后台抓
  *   远端协议，但不参与判定）。冒烟会在本机短暂弹出启动器窗口后强杀，与 E2E 一致
+ * - 完整性标签归一（Windows MIC，2026-11 用户报障）：构建工作区根目录若带 Low
+ *   完整性标签（沙箱/审计工具给工作区打继承标签的常见副作用），bun 新建的 exe
+ *   会继承它——进程按"用户与镜像标签的较低者"以 Low 运行，写中完整性的
+ *   config.json / SillyTavern settings.json 全部 EPERM，且 Low 进程无法提升
+ *   自身标签。故 dist/ 在建 exe 前先设 (OI)(CI)Medium（新产物不再继承 Low），
+ *   产物再显式设 Medium（当前 exe 立即生效）。设置失败即中止打包。
  *
  * DEVIATION: 子进程不经 services/runtime.ts——那是应用运行时纪律；本脚本与
  *   scripts/verify-*.ts 同构，直接调用 node:child_process 的 spawnSync（冒烟为
@@ -133,6 +139,32 @@ function run(cmd: string, args: string[], opts?: { cwd?: string; env?: Record<st
     cwd: opts?.cwd,
     env: opts?.env ? { ...process.env, ...opts.env } : process.env,
   }).status ?? 1
+}
+
+/**
+ * 目录完整性标签归一为 Medium（继承给未来创建的文件）。
+ * 必须在 bun 写 exe 之前执行：文件创建瞬间从目录 SACL 继承标签。
+ */
+function setInheritedMediumLabel(dir: string): void {
+  const status = run('icacls', [dir, '/setintegritylevel', '(OI)(CI)Medium'])
+  if (status !== 0) {
+    throw new Error(
+      `icacls 设置目录完整性失败（exit=${status}）：${dir}。` +
+        '当前终端需对该目录有 WRITE_OWNER（必要时以管理员身份运行）；' +
+        '否则产物会以 Low 完整性运行，无法写入中完整性的配置文件。',
+    )
+  }
+}
+
+/** 产物完整性标签归一为 Medium（当前 exe 立即生效，防目录继承被绕过） */
+function setMediumLabel(file: string): void {
+  const status = run('icacls', [file, '/setintegritylevel', 'Medium'])
+  if (status !== 0) {
+    throw new Error(
+      `icacls 设置产物完整性失败（exit=${status}）：${file}。` +
+        '产物将以 Low 完整性运行，写中完整性配置文件会 EPERM，打包中止。',
+    )
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -245,6 +277,9 @@ async function main(): Promise<void> {
   const exeName = `SillyTavernLauncher-${APP_VERSION}-win-x64.exe`
   const exePath = join(DIST_DIR, exeName)
   mkdirSync(DIST_DIR, { recursive: true })
+  // 先归一目录标签：bun 创建 exe 的瞬间会继承目录 SACL（Low 工作区根目录
+  // 是 2026-11 报障的源头，见文件头"完整性标签归一"）
+  setInheritedMediumLabel(DIST_DIR)
   console.log(`\n▶ bun build --compile → dist/${exeName}`)
   let buildExit: number
   try {
@@ -269,6 +304,8 @@ async function main(): Promise<void> {
     rmSync(BUILD_ENTRY_DIR, { recursive: true, force: true })
   }
   if (buildExit !== 0) throw new Error(`bun build 失败（exit=${buildExit}）`)
+  // 产物显式归一（目录继承之外的双保险；Low exe → Low 进程 → 写配置 EPERM）
+  setMediumLabel(exePath)
 
   // 产物验证
   const exe = readFileSync(exePath)

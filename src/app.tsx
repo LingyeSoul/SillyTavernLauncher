@@ -32,7 +32,17 @@ import { getConfigStore } from './services/configStore'
 import type { ConfigStore } from './services/configStore'
 import { createMirrorPingProbe, ensureMirrorSelection } from './services/mirrors'
 import { installCrashGuard } from './services/crashGuard'
-import { logError } from './services/errorLog'
+import { errMsg, logError } from './services/errorLog'
+import {
+  currentProcessIntegrityLevel,
+  formatLowIntegrityRemediation,
+} from './services/integrityLevel'
+import type { IntegrityLevel } from './services/integrityLevel'
+import {
+  formatRootAccessFailure,
+  probeLauncherRootAccess,
+} from './services/launcherRootAccess'
+import { MOVE_LAUNCHER_TITLE } from './services/launcherDirectoryGuide'
 import { stopAllProcessesSync } from './services/processManager'
 import { eulaDialogRequired, fetchAgreementDocument } from './services/agreement'
 import {
@@ -108,76 +118,156 @@ function ensureMirrorAtStartup(config: ConfigStore): Promise<void> {
   })()
 }
 
+/**
+ * 启动环境门禁（Windows）：
+ * - 完整性级别：Low/Untrusted 进程对中完整性对象的所有写入被
+ *   SYSTEM_MANDATORY_LABEL_NO_WRITE_UP 拒绝（config.json / logs / 酒馆数据全
+ *   EPERM）；
+ * - 运行目录 ACL：用 create → read → delete 真实探针验证（只读目录、安全软件
+ *   锁定、磁盘只读同样会让保存静默失败）。
+ * 两项失败都先弹“更换存放目录”指引并中止本轮启动流程——用户是电脑小白，
+ * 首屏不暴露 icacls（技术细节只进 errorLog）；继续跑欢迎/EULA/更新/自启动
+ * 只会连环失败。探测能力缺失（非 win32+Bun 宿主，如 vitest）不阻断启动，
+ * 错误已进 errorLog。
+ */
+interface StartupEnvironmentFailure {
+  title: string
+  message: string
+  detail: string
+  technicalDetail: string
+}
+
+async function detectStartupEnvironmentFailure(): Promise<StartupEnvironmentFailure | null> {
+  let level: IntegrityLevel = 'unknown'
+  try {
+    level = await currentProcessIntegrityLevel()
+  } catch (err) {
+    logError(`[startup] 完整性级别探测失败: ${errMsg(err)}`)
+  }
+  if (level === 'low' || level === 'untrusted') {
+    const remediation = formatLowIntegrityRemediation(level, process.cwd(), process.execPath)
+    return {
+      title: MOVE_LAUNCHER_TITLE,
+      message: remediation.message,
+      detail: remediation.detail,
+      technicalDetail: remediation.technicalDetail,
+    }
+  }
+  try {
+    probeLauncherRootAccess(process.cwd())
+  } catch (err) {
+    const failure = formatRootAccessFailure(process.cwd(), err)
+    return {
+      title: MOVE_LAUNCHER_TITLE,
+      message: failure.message,
+      detail: failure.detail,
+      technicalDetail: failure.technicalDetail,
+    }
+  }
+  return null
+}
+
+/** 单次求值：启动门禁与窗口隐藏决策共用同一结果，防错误对话框被藏进托盘 */
+let startupEnvironmentFailure: Promise<StartupEnvironmentFailure | null> | null = null
+
+function startupEnvironment(): Promise<StartupEnvironmentFailure | null> {
+  startupEnvironmentFailure ??= detectStartupEnvironmentFailure()
+  return startupEnvironmentFailure
+}
+
+async function startupEnvironmentGate(): Promise<boolean> {
+  const failure = await startupEnvironment()
+  if (failure === null) return true
+  logError(
+    `[startup] 启动环境检查未通过（${failure.title}）\n${failure.message}\n\n${failure.technicalDetail}`,
+  )
+  uiStateActions.openDialog({
+    kind: 'error',
+    title: failure.title,
+    message: failure.message,
+    detail: failure.detail,
+  })
+  return false
+}
+
 /** ← main.py check_first_launch 的启动对话框序列 */
 function StartupFlow() {
   useEffect(() => {
-    const config = getConfigStore()
-
-    // 0. 镜像源自愈（先于一切网络操作；autostart 时被 await，见步骤 4）
-    const mirrorReady = ensureMirrorAtStartup(config)
-
-    // 1. 首次运行 → 欢迎问答
-    if (config.get<boolean>('first_run', true)) {
-      uiStateActions.openDialog({ kind: 'welcome' })
-    }
-
-    // 2. 未同意协议 或 协议版本变化 → EULA（判定收敛在 agreement.eulaDialogRequired，
-    //    与静默启动的"本轮无交互"门共用同一口径；缓存日期 vs 已同意版本）
-    if (eulaDialogRequired(config)) {
-      uiStateActions.openDialog({ kind: 'eula' })
-    } else if (process.env.STL_SKIP_AGREEMENT_RECHECK !== '1') {
-      // 缓存门通过也要后台核对远端协议版本（Bug#4：原实现只在弹窗时刷新缓存，
-      // 远端更新后已同意用户永不再弹；语义对齐 main.py check_first_launch 步骤2）
-      // STL_SKIP_AGREEMENT_RECHECK=1 供 E2E 种子环境禁用（种子日期 2099-01-01 与远端不符）
-      void (async () => {
-        try {
-          const remote = await fetchAgreementDocument()
-          if (remote && remote.date !== config.get<string>('agreement_version', '')) {
-            uiStateActions.openDialog({ kind: 'eula' })
-          }
-        } catch (err) {
-          // 已同意用户的核对失败仅记日志（main.py 同样只在无缓存时才弹网络错误）
-          logError(`[startup] 后台核对协议版本失败: ${err instanceof Error ? err.message : String(err)}`)
-        }
-      })()
-    }
-
-    // 3. 自动检查启动器更新（← version_checker.run_check）
-    if (config.get<boolean>('checkupdate', true)) {
-      void (async () => {
-        try {
-          const current = normalizeVersion(APP_VERSION)
-          const result = await checkForUpdates({ currentVersion: current })
-          if (result.has_error || !result.has_update || result.latest_version === null) return
-          // 用户显式跳过的版本不再打扰（下个新版本恢复）；changelog 也免抓
-          const skipped = config.get<string>(SKIP_UPDATE_VERSION_KEY, '')
-          if (shouldSuppressUpdate(skipped, result.latest_version)) return
-          const changelog = await fetchChangelog({ currentVersion: current })
-          uiStateActions.openDialog({
-            kind: 'updateAvailable',
-            currentVersion: current,
-            latestVersion: result.latest_version,
-            changelog,
-            downloadUrl: UPDATE_PAGE_URL,
-          })
-        } catch (err) {
-          logError(`[startup] 检查更新失败: ${err instanceof Error ? err.message : String(err)}`)
-        }
-      })()
-    }
-
-    // 4. 自动启动酒馆（D1 新语义：主窗口正常显示；autostart_hidden 静默模式
-    //    只隐藏窗口，启动链路不变）
-    //    先等镜像选优落定：首次安装的 clone 要跑在选定镜像上（无选定则瞬间返回）
-    //    STL_SKIP_AUTOSTART=1 供取证脚本/E2E 种子禁用（防临时目录里真跑安装链路）
-    if (
-      config.get<boolean>('autostart', false) &&
-      process.env.STL_SKIP_AUTOSTART !== '1'
-    ) {
-      void mirrorReady.then(() => useStState.getState().startSt())
-    }
+    void (async () => {
+      if (!(await startupEnvironmentGate())) return
+      runStartupFlow(getConfigStore())
+    })().catch((err) => {
+      logError(`[startup] 启动流程异常: ${errMsg(err)}`)
+    })
   }, [])
   return null
+}
+
+/** 启动序列主体：启动环境门禁通过后由 StartupFlow 调用 */
+function runStartupFlow(config: ConfigStore): void {
+  // 0. 镜像源自愈（先于一切网络操作；autostart 时被 await，见步骤 4）
+  const mirrorReady = ensureMirrorAtStartup(config)
+
+  // 1. 首次运行 → 欢迎问答
+  if (config.get<boolean>('first_run', true)) {
+    uiStateActions.openDialog({ kind: 'welcome' })
+  }
+
+  // 2. 未同意协议 或 协议版本变化 → EULA（判定收敛在 agreement.eulaDialogRequired，
+  //    与静默启动的"本轮无交互"门共用同一口径；缓存日期 vs 已同意版本）
+  if (eulaDialogRequired(config)) {
+    uiStateActions.openDialog({ kind: 'eula' })
+  } else if (process.env.STL_SKIP_AGREEMENT_RECHECK !== '1') {
+    // 缓存门通过也要后台核对远端协议版本（Bug#4：原实现只在弹窗时刷新缓存，
+    // 远端更新后已同意用户永不再弹；语义对齐 main.py check_first_launch 步骤2）
+    // STL_SKIP_AGREEMENT_RECHECK=1 供 E2E 种子环境禁用（种子日期 2099-01-01 与远端不符）
+    void (async () => {
+      try {
+        const remote = await fetchAgreementDocument()
+        if (remote && remote.date !== config.get<string>('agreement_version', '')) {
+          uiStateActions.openDialog({ kind: 'eula' })
+        }
+      } catch (err) {
+        // 已同意用户的核对失败仅记日志（main.py 同样只在无缓存时才弹网络错误）
+        logError(`[startup] 后台核对协议版本失败: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    })()
+  }
+
+  // 3. 自动检查启动器更新（← version_checker.run_check）
+  if (config.get<boolean>('checkupdate', true)) {
+    void (async () => {
+      try {
+        const current = normalizeVersion(APP_VERSION)
+        const result = await checkForUpdates({ currentVersion: current })
+        if (result.has_error || !result.has_update || result.latest_version === null) return
+        // 用户显式跳过的版本不再打扰（下个新版本恢复）；changelog 也免抓
+        const skipped = config.get<string>(SKIP_UPDATE_VERSION_KEY, '')
+        if (shouldSuppressUpdate(skipped, result.latest_version)) return
+        const changelog = await fetchChangelog({ currentVersion: current })
+        uiStateActions.openDialog({
+          kind: 'updateAvailable',
+          currentVersion: current,
+          latestVersion: result.latest_version,
+          changelog,
+          downloadUrl: UPDATE_PAGE_URL,
+        })
+      } catch (err) {
+        logError(`[startup] 检查更新失败: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    })()
+  }
+
+  // 4. 自动启动酒馆（D1 新语义：主窗口正常显示；autostart_hidden 静默模式
+  //    只隐藏窗口，启动链路不变）
+  //    先等镜像选优落定：首次安装的 clone 要跑在选定镜像上（无选定则瞬间返回）
+  //    STL_SKIP_AUTOSTART=1 供取证脚本/E2E 种子禁用（防临时目录里真跑安装链路）
+  if (
+    config.get<boolean>('autostart', false) &&
+    process.env.STL_SKIP_AUTOSTART !== '1'
+  ) {
+    void mirrorReady.then(() => useStState.getState().startSt())
+  }
 }
 
 function App() {
@@ -281,7 +371,10 @@ void initWindowControl(WINDOW_OPTIONS.title)
 if (getConfigStore().get<boolean>('tray', false)) {
   void (async () => {
     const mounted = await applyTrayEnabled(true)
-    if (!mounted || !shouldHideAtStartup(getConfigStore())) return
+    // 启动环境检查失败（完整性/目录 ACL）会弹修复对话框：窗口必须保持可见，
+    // 不能按静默启动藏进托盘。共用单次求值的 startupEnvironment()，无竞态。
+    const environmentFailure = await startupEnvironment()
+    if (!mounted || environmentFailure !== null || !shouldHideAtStartup(getConfigStore())) return
     for (let attempt = 0; attempt < 10; attempt++) {
       if (hideMainWindow()) return
       await new Promise((resolve) => setTimeout(resolve, 100))
